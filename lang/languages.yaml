@@ -1,0 +1,19 @@
+# enable: 现在在使用的语言
+# default: 正在使用的语言中不包含的词汇，转而使用默认语言代替
+# languages.file: 语言文件名(相对于./lang/目录)
+# languages.display: 在语言选择列表中显示的标题
+# errorfield: 遇到无法解析的语言项后弹出的错误通知
+
+languages:
+  Simplified Chinese:
+    file: zh-SI.yaml
+    display: 简体中文
+  Traditional Chinese:
+    file: zh-TR.yaml
+    display: 繁體中文
+  English:
+    file: en.yaml
+    display: English
+enable: Simplified Chinese
+default: Simplified Chinese
+errorfield: "Description of field \"%s\""
