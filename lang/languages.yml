@@ -1,0 +1,15 @@
+# languages.file: 语言文件名(相对于./lang/目录)
+# languages.display: 在语言选择列表中显示的标题
+# errorfield: 遇到无法解析的语言项后弹出的错误通知
+
+languages:
+  Simplified Chinese:
+    file: zh-SI.yml
+    display: 简体中文
+  Traditional Chinese:
+    file: zh-TR.yml
+    display: 繁體中文
+  English:
+    file: en.yml
+    display: English
+errorfield: "Description of field \"%s\""

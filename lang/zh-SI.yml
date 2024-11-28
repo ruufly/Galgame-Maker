@@ -1,0 +1,38 @@
+newfile_empty: 新建空白项目
+newfile_template: 从模板新建项目
+newfile: 新建
+newfile_file: 新建文件
+open: 打开
+open_file: 打开项目
+save: 保存
+saveas: 另存为
+deletelist: 清除文件列表
+filelist: 最近打开的文件
+quit: 退出
+file: 文件
+undo: 撤销
+redo: 恢复
+copy: 复制
+cut: 剪切
+paste: 粘贴
+file_setting: 文件设置
+preferences: 首选项
+edit: 编辑
+material: 素材
+style: 样式
+logic: 逻辑
+compile: 编译
+workspace_setting: 工作区设置
+window: 窗口
+plugin_open: 启用插件
+plugin_manage: 插件管理
+plugin_about: 关于插件
+plugin: 插件
+about_about: 关于 Galgame Maker
+helpdoc: 帮助文档
+help: 帮助
+welcome: 欢迎
+at: "%s 位于 %s"
+saveornot: 是否保存此文件？
+cannotstart: "软件无法启动，原因是缺少 %s ，请尝试重新安装软件"
+unrecognized_type: 无法识别的文件类型

@@ -1,0 +1,38 @@
+newfile_empty: New empty project
+newfile_template: New project with template
+newfile: New
+newfile_file: New file
+open: Open
+open_file: Open file
+save: Save
+saveas: Save as
+deletelist: Clear list
+filelist: Recent files
+quit: Quit
+file: File
+undo: Undo
+redo: Redo
+copy: Copy
+cut: Cut
+paste: Paste
+file_setting: File setting
+preferences: Preferences
+edit: Edit
+material: Source material
+style: Style
+logic: Logic
+compile: Compile
+workspace_setting: Workspace Setting
+window: Window
+plugin_open: Enable plug-in
+plugin_manage: Manage plug-in
+plugin_about: About plug-in
+plugin: Plug-in
+about_about: About Galgame Maker
+helpdoc: Help document
+help: Help
+welcome: Welcome
+at: "%s At %s"
+saveornot: Do you want to save this file?
+cannotstart: "The software cannot be started because %s is missing. Please try to reinstall the software."
+unrecognized_type: Unrecognized file type

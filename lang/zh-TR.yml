@@ -1,0 +1,38 @@
+newfile_empty: 新建空白項目
+newfile_template: 從範本新建項目
+newfile: 新建
+newfile_file: 新建檔案
+open: 打開
+open_file: 打開項目
+save: 保存
+saveas: 另存為
+deletelist: 清除檔案清單
+filelist: 最近打開的檔案
+quit: 退出
+file: 檔案
+undo: 撤銷
+redo: 恢復
+copy: 複製
+cut: 剪切
+paste: 粘貼
+file_setting: 檔案設定
+preferences: 首選項
+edit: 編輯
+material: 素材
+style: 樣式
+logic: 邏輯
+compile: 編譯
+workspace_setting: 工作區設定
+window: 視窗
+plugin_open: 啟用挿件
+plugin_manage: 挿件管理
+plugin_about: 關於挿件
+plugin: 挿件
+about_about: 關於Galgame Maker
+helpdoc: 幫助文檔
+help: 幫助
+welcome: 歡迎
+at: “%s 位於 %s”
+saveornot: 是否保存此檔案？
+cannotstart: “軟件無法啟動，原因是缺少 %s ，請嘗試重新安裝軟件”
+unrecognized_type: 無法識別的檔案類型

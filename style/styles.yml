@@ -1,0 +1,6 @@
+# styles.file: 主题文件名(相对于./style/目录)
+# styles.display: 在列表中显示的标题
+styles:
+  default:
+    file: default.yml
+    display: 默认主题

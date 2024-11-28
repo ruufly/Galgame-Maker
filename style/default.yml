@@ -1,0 +1,33 @@
+
+# run_loading: 启动窗口
+run_loading:
+## bar_0: 进度条未刷新区域
+## bar_1: 进度条已刷新区域
+  bar_0: "#67A6E0"
+  bar_1: "#DB9AE0"
+
+# main_window: 主窗口基本配色
+main_window:
+## bg_main: 主框架
+## bg_menu: 菜单框架
+## bg_state: 状态栏
+  bg_main: "#1D1D1D"
+  bg_menu: "#313131"
+  bg_state: "#313131"
+## highlightbackground: 框架被光标聚焦时
+## highlightcolor: 同上
+  highlightbackground: "#383838"
+  highlightcolor: "#383838"
+## n_select_fg: 分页文字未被选中时
+## select_fg: 分页文字被选中时
+  n_select_fg: "#FAFAFA"
+  select_fg: "#1E90FF"
+
+# welcome_window 欢迎窗口
+welcome_window:
+## new_label_bg_enter: 项目被光标聚焦时
+## text_fg: 标题文字颜色
+## list_text_fg: 项目小字颜色
+  new_label_bg_enter: "#383838"
+  text_fg: "#DB9AE0"
+  list_text_fg: "#FAFAFA"

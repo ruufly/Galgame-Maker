@@ -6,10 +6,10 @@ import pickle
 import uuid
 import os, sys, zipfile
 from tkinter import messagebox, filedialog, ttk
-from lib.PIL import Image, ImageTk
-import lib.pyglet as pyglet
-import lib.windnd as windnd
-import lib.yaml as yaml
+from PIL import Image, ImageTk
+import pyglet
+import windnd
+import yaml
 import shutil
 
 # for i in ((lambda num: (print(i if i else '', end=' ' if i else '') for i in (lambda r: (print(i) for i in (lambda r, k: ([i for i in range(r, k)]))(1,r+1)))(num)))(10)): print(i if i else '', end=(lambda q: '\n' + str(ord(q)))('!') if i else (lambda q: q + str(ord(q)))(chr(ord('!'+i)) if i else '!'))
@@ -26,9 +26,29 @@ def get_yaml_data(yaml_file):
     data = yaml.load(file_data,Loader=yaml.FullLoader)
     return data
 
-languagesetup = get_yaml_data("lang\\languages.yaml")
-mainlang = get_yaml_data("lang\\" + languagesetup["languages"][languagesetup["enable"]]["file"])
-defaultlang = get_yaml_data("lang\\" + languagesetup["languages"][languagesetup["default"]]["file"])
+languagesetup = get_yaml_data("lang\\languages.yml")
+settings = get_yaml_data("settings.yml")
+mainlang = get_yaml_data("lang\\" + languagesetup["languages"][settings["language"]]["file"])
+defaultlang = get_yaml_data("lang\\" + languagesetup["languages"][settings["default_language"]]["file"])
+stylesetting = get_yaml_data("style\\styles.yml")
+thethemeset = get_yaml_data("style\\" + stylesetting["styles"][settings["theme"]]["file"])
+defthemeset = get_yaml_data("style\\" + stylesetting["styles"][settings["default_theme"]]["file"])
+
+
+themeset = {}
+
+def rep(rdic, indic, sdic):
+    for i in rdic:
+        if type(rdic[i]) == dict:
+            indic[i] = {}
+            rep(rdic[i],indic[i],sdic[i] if i in sdic else {})
+        else:
+            if i in sdic:
+                indic[i] = sdic[i]
+            else:
+                indic[i] = rdic[i]
+
+rep(defthemeset,themeset,thethemeset)
 
 def make_ngal(galfile,galname):
     path = '.\\%s' % galname
@@ -159,37 +179,73 @@ root.config(menu=menu)
 
 
 
-menuframe = tkinter.Label(root,bg="#313131",width=wdx,height=50,highlightbackground="#383838",highlightcolor="#383838",highlightthickness=1,image=_262626)
+menuframe = tkinter.Label(root,bg=themeset["main_window"]["bg_menu"],width=wdx,height=50,highlightbackground=themeset["main_window"]["highlightbackground"],highlightcolor=themeset["main_window"]["highlightcolor"],highlightthickness=1,image=_262626)
 
 
-materialgoinlabel = tkinter.Label(menuframe,bg="#313131",font=("Source Han Sans SC",12),text=getlang("material"),fg="#fafafa",cursor="hand2")
+materialgoinlabel = tkinter.Label(menuframe,bg=themeset["main_window"]["bg_menu"],font=("Source Han Sans SC",12),text=getlang("material"),fg=themeset["main_window"]["n_select_fg"],cursor="hand2")
 materialgoinlabel.place(x=wdx//2-100,y=8)
-stylegoinlabel = tkinter.Label(menuframe,bg="#313131",font=("Source Han Sans SC",12),text=getlang("style"),fg="#fafafa",cursor="hand2")
+stylegoinlabel = tkinter.Label(menuframe,bg=themeset["main_window"]["bg_menu"],font=("Source Han Sans SC",12),text=getlang("style"),fg=themeset["main_window"]["n_select_fg"],cursor="hand2")
 stylegoinlabel.place(x=wdx//2-50,y=8)
-logicgoinlabel = tkinter.Label(menuframe,bg="#313131",font=("Source Han Sans SC",12),text=getlang("logic"),fg="#fafafa",cursor="hand2")
+logicgoinlabel = tkinter.Label(menuframe,bg=themeset["main_window"]["bg_menu"],font=("Source Han Sans SC",12),text=getlang("logic"),fg=themeset["main_window"]["n_select_fg"],cursor="hand2")
 logicgoinlabel.place(x=wdx//2,y=8)
-compilegoinlabel = tkinter.Label(menuframe,bg="#313131",font=("Source Han Sans SC",12),text=getlang("compile"),fg="#fafafa",cursor="hand2")
+compilegoinlabel = tkinter.Label(menuframe,bg=themeset["main_window"]["bg_menu"],font=("Source Han Sans SC",12),text=getlang("compile"),fg=themeset["main_window"]["n_select_fg"],cursor="hand2")
 compilegoinlabel.place(x=wdx//2+50,y=8)
 
 menuframe.place(x=0,y=0)
 
-mainframe = tkinter.Frame(root,bg="#1d1d1d",width=wdx,height=wdy-20-65,highlightbackground="#383838",highlightcolor="#383838",highlightthickness=1)
+mainframe = tkinter.Frame(root,bg=themeset["main_window"]["bg_main"],width=wdx,height=wdy-20-70,highlightbackground=themeset["main_window"]["highlightbackground"],highlightcolor=themeset["main_window"]["highlightcolor"],highlightthickness=1)
 mainframe.place(x=0,y=50)
 
-mainframe = tkinter.Frame(root,bg="#313131",width=wdx,height=15,highlightbackground="#383838",highlightcolor="#383838",highlightthickness=1)
-mainframe.place(x=0,y=wdy-20-15)
+downframe = tkinter.Frame(root,bg=themeset["main_window"]["bg_state"],width=wdx,height=20,highlightbackground=themeset["main_window"]["highlightbackground"],highlightcolor=themeset["main_window"]["highlightcolor"],highlightthickness=1)
+downframe.place(x=0,y=wdy-20-20)
+
+materialframe = tkinter.Frame(mainframe,bg=themeset["main_window"]["bg_main"],highlightbackground=themeset["main_window"]["highlightbackground"],highlightcolor=themeset["main_window"]["highlightcolor"],highlightthickness=1)
+styleframe = tkinter.Frame(mainframe,bg=themeset["main_window"]["bg_main"],highlightbackground=themeset["main_window"]["highlightbackground"],highlightcolor=themeset["main_window"]["highlightcolor"],highlightthickness=1)
+logicframe = tkinter.Frame(mainframe,bg=themeset["main_window"]["bg_main"],highlightbackground=themeset["main_window"]["highlightbackground"],highlightcolor=themeset["main_window"]["highlightcolor"],highlightthickness=1)
+compileframe = tkinter.Frame(mainframe,bg=themeset["main_window"]["bg_main"],highlightbackground=themeset["main_window"]["highlightbackground"],highlightcolor=themeset["main_window"]["highlightcolor"],highlightthickness=1)
 
 def gotomaterial():
-    pass
+    materialframe.place(x=0,y=0,relx=1,rely=1)
+    styleframe.place_forget()
+    logicframe.place_forget()
+    compileframe.place_forget()
+    materialgoinlabel.configure(fg=themeset["main_window"]["select_fg"])
+    stylegoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    logicgoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    compilegoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
 
 def gotostyle():
-    pass
+    styleframe.place(x=0,y=0,relx=1,rely=1)
+    materialframe.place_forget()
+    logicframe.place_forget()
+    compileframe.place_forget()
+    materialgoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    stylegoinlabel.configure(fg=themeset["main_window"]["select_fg"])
+    logicgoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    compilegoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+
 
 def gotologic():
-    pass
+    logicframe.place(x=0,y=0,relx=1,rely=1)
+    styleframe.place_forget()
+    materialframe.place_forget()
+    compileframe.place_forget()
+    materialgoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    stylegoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    logicgoinlabel.configure(fg=themeset["main_window"]["select_fg"])
+    compilegoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+
 
 def gotocompile():
-    pass
+    compileframe.place(x=0,y=0,relx=1,rely=1)
+    styleframe.place_forget()
+    logicframe.place_forget()
+    materialframe.place_forget()
+    materialgoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    stylegoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    logicgoinlabel.configure(fg=themeset["main_window"]["n_select_fg"])
+    compilegoinlabel.configure(fg=themeset["main_window"]["select_fg"])
+
 
 materialgoinlabel.bind("<Button-1>",lambda event: gotomaterial())
 stylegoinlabel.bind("<Button-1>",lambda event: gotostyle())
@@ -272,10 +328,10 @@ welcomelabelphoto = ImageTk.PhotoImage(Image.open('data\\newfile.dat'))
 welcomelabel = tkinter.Label(welcome,image=welcomelabelphoto)
 welcomelabel.place(x=-2,y=-2)
 
-welcomelabel1 = tkinter.Label(welcome,text=getlang("newfile_file"),font=("Source Han Sans SC",12),fg="#db9ae0",bg="#262626")
+welcomelabel1 = tkinter.Label(welcome,text=getlang("newfile_file"),font=("Source Han Sans SC",12),fg=themeset["welcome_window"]["text_fg"],bg="#262626")
 welcomelabel1.place(x=60,y=190)
 
-welcomelabel1 = tkinter.Label(welcome,text=getlang("filelist"),font=("Source Han Sans SC",12),fg="#db9ae0",bg="#1f1f1f")
+welcomelabel1 = tkinter.Label(welcome,text=getlang("filelist"),font=("Source Han Sans SC",12),fg=themeset["welcome_window"]["text_fg"],bg="#1f1f1f")
 welcomelabel1.place(x=520,y=190)
 
 newlabel1 = tkinter.Label(welcome,bg="#262626",image=_262626)
@@ -287,7 +343,7 @@ cess__ = {newlabel1:[getlang("newfile_empty")],
           newlabel3:[getlang("open_file")]}
 
 def reinitc__(bg,code):
-    newlabel11 = tkinter.Label(code,bg=bg,font=("Source Han Sans SC",10),text=cess__[code][0],fg="#fafafa")
+    newlabel11 = tkinter.Label(code,bg=bg,font=("Source Han Sans SC",10),text=cess__[code][0],fg=themeset["welcome_window"]["list_text_fg"])
     newlabel11.place(x=5,y=5)
 
 newlabel1.place(x=184,y=259)
@@ -320,7 +376,7 @@ reinitc__("#262626",newlabel3)
 k = 0
 for i in thisfilefilefile:
     qwertyuiop = (getlang("at") % (i["filename"],i["position"]))
-    thisfilefilefilelabellabel = tkinter.Label(welcome,bg="#1f1f1f",font=("Source Han Sans SC",8),text=qwertyuiop if len(qwertyuiop) <= 50 else qwertyuiop[:47] + "...",fg="#fafafa",width=50,anchor="w",cursor="hand2")
+    thisfilefilefilelabellabel = tkinter.Label(welcome,bg="#1f1f1f",font=("Source Han Sans SC",8),text=qwertyuiop if len(qwertyuiop) <= 50 else qwertyuiop[:47] + "...",fg=themeset["welcome_window"]["list_text_fg"],width=50,anchor="w",cursor="hand2")
     thisfilefilefilelabellabel.place(x=505,y=261+k*22)
     k += 1
 
