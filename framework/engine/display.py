@@ -14,6 +14,185 @@ import pygame
 from framework.engine import log, ui
 
 
+# ======================================================================
+# 背景过渡效果 (Transition)
+# ======================================================================
+class Transition:
+    """背景过渡基类。子类实现 draw_bg (背景层) 与可选的 draw_overlay
+    (全屏覆盖层, 如 fade 的黑幕)。
+
+    插件可通过 display.register_transition(name, cls) 注册自定义过渡。
+    """
+
+    name = "base"
+    duration = 1.0
+
+    def __init__(self, old_surface, new_surface, target_size):
+        self.old = old_surface
+        self.new = new_surface
+        self.size = target_size
+        self.t = 0.0
+        self.done = False
+
+    def update(self, dt: float) -> None:
+        self.t += dt / self.duration
+        if self.t >= 1.0:
+            self.t = 1.0
+            self.done = True
+
+    def draw_bg(self, target) -> None:
+        target.blit(self.new, (0, 0))
+
+    def draw_overlay(self, target) -> None:
+        pass
+
+
+class FadeTransition(Transition):
+    """黑幕淡出 -> 切换 -> 淡入。黑幕只在背景层, 不影响立绘与文本。"""
+
+    name = "fade"
+    duration = 1.0
+
+    def __init__(self, old_surface, new_surface, target_size):
+        super().__init__(old_surface, new_surface, target_size)
+        self.overlay = pygame.Surface(target_size, pygame.SRCALPHA)
+        self.overlay.fill((0, 0, 0, 255))
+
+    def draw_bg(self, target):
+        if self.t < 0.5:
+            if self.old is not None:
+                target.blit(self.old, (0, 0))
+            a = int(255 * (self.t / 0.5))
+        else:
+            target.blit(self.new, (0, 0))
+            a = int(255 * (1.0 - (self.t - 0.5) / 0.5))
+        if a > 0:
+            ov = self.overlay.copy()
+            ov.set_alpha(min(255, a))
+            target.blit(ov, (0, 0))
+
+
+class DissolveTransition(Transition):
+    """交叉溶解: 新背景透明度从 0 叠加到旧背景上。"""
+
+    name = "dissolve"
+    duration = 0.8
+
+    def draw_bg(self, target):
+        if self.old is not None:
+            target.blit(self.old, (0, 0))
+        new = self.new.copy()
+        new.set_alpha(int(255 * min(1.0, self.t)))
+        target.blit(new, (0, 0))
+
+
+class BlindsTransition(Transition):
+    """垂直百叶窗: 条带逐条显现。"""
+
+    name = "blinds"
+    duration = 0.7
+    strips = 12
+
+    def draw_bg(self, target):
+        if self.old is not None:
+            target.blit(self.old, (0, 0))
+        w, h = self.new.get_size()
+        strip_w = w / self.strips
+        for i in range(self.strips):
+            x0 = int(i * strip_w)
+            x1 = int((i + 1) * strip_w)
+            progress = self.t * self.strips - i
+            a = int(255 * progress * 2)
+            if a <= 0:
+                continue
+            sub = self.new.subsurface((x0, 0, max(1, x1 - x0), h)).copy()
+            sub.set_alpha(min(255, a))
+            target.blit(sub, (x0, 0))
+
+
+class SlideTransition(Transition):
+    """新背景从右侧滑入。"""
+
+    name = "slide"
+    duration = 0.6
+
+    def draw_bg(self, target):
+        if self.old is not None:
+            target.blit(self.old, (0, 0))
+        w, h = self.new.get_size()
+        target.blit(self.new, (int(w * (1.0 - self.t)), 0))
+
+
+class CircleTransition(Transition):
+    """圆形从中心展开。"""
+
+    name = "circle"
+    duration = 0.7
+
+    def draw_bg(self, target):
+        if self.old is not None:
+            target.blit(self.old, (0, 0))
+        w, h = self.new.get_size()
+        radius = int(max(w, h) * 0.75 * self.t)
+        if radius <= 0:
+            return
+        mask = pygame.Surface((w, h), pygame.SRCALPHA)
+        pygame.draw.circle(mask, (255, 255, 255, 255),
+                           (w // 2, h // 2), radius)
+        # 先复制到带 alpha 的画布, 再按 mask 取 alpha (圆外透明)
+        new = pygame.Surface((w, h), pygame.SRCALPHA)
+        new.blit(self.new, (0, 0))
+        new.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+        target.blit(new, (0, 0))
+
+
+class PixelateTransition(Transition):
+    """马赛克: 新背景从大像素块逐渐变清晰, 同时溶解显现。"""
+
+    name = "pixelate"
+    duration = 0.8
+
+    def draw_bg(self, target):
+        if self.old is not None:
+            target.blit(self.old, (0, 0))
+        w, h = self.new.get_size()
+        block = max(2, int(24 * (1.0 - self.t)) + 1)
+        small = pygame.transform.smoothscale(
+            self.new, (max(1, w // block), max(1, h // block)))
+        big = pygame.transform.scale(small, (w, h))
+        big.set_alpha(int(255 * min(1.0, self.t)))
+        target.blit(big, (0, 0))
+
+
+class ZoomTransition(Transition):
+    """缩放淡入: 新背景从 60% 放大到全屏。"""
+
+    name = "zoom"
+    duration = 0.8
+
+    def draw_bg(self, target):
+        if self.old is not None:
+            target.blit(self.old, (0, 0))
+        w, h = self.new.get_size()
+        scale = 0.6 + 0.4 * self.t
+        sw, sh = max(1, int(w * scale)), max(1, int(h * scale))
+        scaled = pygame.transform.smoothscale(self.new, (sw, sh))
+        scaled.set_alpha(int(255 * min(1.0, self.t * 1.5)))
+        target.blit(scaled, ((w - sw) // 2, (h - sh) // 2))
+
+
+# 内置过渡注册表 (插件可向 display.transitions 追加)
+BUILTIN_TRANSITIONS = {
+    "fade": FadeTransition,
+    "dissolve": DissolveTransition,
+    "blinds": BlindsTransition,
+    "slide": SlideTransition,
+    "circle": CircleTransition,
+    "pixelate": PixelateTransition,
+    "zoom": ZoomTransition,
+}
+
+
 class _Sprite:
     __slots__ = (
         "id", "surface", "rect", "alpha", "target_alpha", "fade_speed",
@@ -54,9 +233,15 @@ class Display:
 
         # 背景
         self.bg_surface = None
+        self.bg_path = None
+        self.bg_id = None          # 脚本对象 id (weight 创建), None 表示直接 bg 指令
+        self.bg_scene = None       # 场景 id (scene 绑定背景), 否则 None
+        self.bg_pose = None        # 场景内背景名 (None 表示默认背景)
         self.bg_alpha = 255
         self.bg_fading = False
         self.bg_fade_speed = 0.0
+        self._transition = None       # 当前背景过渡 (Transition 实例)
+        self.transitions = dict(BUILTIN_TRANSITIONS)  # 过渡注册表
 
         # 立绘
         self.sprites = {}
@@ -91,6 +276,7 @@ class Display:
         # 通知条
         self.notice = None
         self.notice_ttl = 0.0
+        self.notice_pos = "top"       # top / top-left / top-right
 
         # 结束画面
         self.ending = False
@@ -160,22 +346,43 @@ class Display:
     # ==================================================================
     # 背景
     # ==================================================================
+    def register_transition(self, name: str, transition_cls) -> None:
+        """注册自定义背景过渡效果 (供插件使用)。
+
+        transition_cls 须为 Transition 子类 (实现 draw_bg, 可选 draw_overlay)。
+        """
+        self.transitions[name] = transition_cls
+        log.info(f"过渡效果已注册: {name}")
+
     def set_bg(self, path: str, effect: str = None) -> None:
+        """设置背景。
+
+        effect: None/"none" 直接切换; 否则按注册表找过渡效果
+                ("fade" / "dissolve" / "blinds" / 插件自定义)。
+        """
         img = self.load_image(path)
         if img is None:
             return
-        self.bg_surface = self._fit(img, mode="full")
-        if effect == "fade":
-            self.bg_alpha = 0
-            self.bg_fading = True
-            self.bg_fade_speed = 255.0 / self.FADE_DURATION
-        else:
+        new_surface = self._fit(img, mode="full")
+        self.bg_path = path
+        cls = self.transitions.get(effect) if effect else None
+        if cls is None:
+            # 直接切换 (含 effect="none")
+            self.bg_surface = new_surface
             self.bg_alpha = 255
             self.bg_fading = False
+            self._transition = None
+        else:
+            self._transition = cls(self.bg_surface, new_surface,
+                                   (self.width, self.height))
         self.engine.emit("bg_change", path=path, effect=effect)
 
     def clear_bg(self) -> None:
         self.bg_surface = None
+        self.bg_path = None
+        self.bg_id = None
+        self.bg_scene = None
+        self.bg_pose = None
         self.bg_alpha = 255
         self.bg_fading = False
 
@@ -184,20 +391,24 @@ class Display:
     # ==================================================================
     def show_sprite(self, sid: str, path: str = None, pos=None,
                     scale=None, mode=None, effect: str = None) -> bool:
-        """显示/创建立绘。path 为空且已存在时仅更新位置/效果。"""
-        if sid in self.sprites and path is None:
-            spr = self.sprites[sid]
+        """显示/创建立绘。
+
+        path 为空且对象已存在时仅更新位置/特效;
+        同 id 换图 (角色表情切换) 时保持原中心点, 图片原位替换。
+        """
+        old = self.sprites.get(sid)
+        if old is not None and path is None:
             if pos is not None:
-                w, h = spr.surface.get_size()
+                w, h = old.surface.get_size()
                 x, y = self._pos_to_xy(pos, w, h)
-                spr.rect = pygame.Rect(int(x), int(y), w, h)
-                spr.props["pos"] = pos
+                old.rect = pygame.Rect(int(x), int(y), w, h)
+                old.props["pos"] = pos
             if effect == "fade":
-                spr.alpha = 0
-                spr.target_alpha = 255
-                spr.fade_speed = 255.0 / self.FADE_DURATION
-            spr.visible = True
-            self.engine.emit("sprite_show", id=sid, path=spr.props.get("image"))
+                old.alpha = 0
+                old.target_alpha = 255
+                old.fade_speed = 255.0 / self.FADE_DURATION
+            old.visible = True
+            self.engine.emit("sprite_show", id=sid, path=old.props.get("image"))
             return True
         if path is None:
             log.warning(f"立绘 {sid} 不存在且未提供 image")
@@ -208,9 +419,14 @@ class Display:
             return False
         img = self._fit(img, mode=mode, scale=scale)
         w, h = img.get_size()
-        x, y = self._pos_to_xy(pos, w, h)
+        if old is not None and pos is None and scale is None and mode is None:
+            # 同 id 换图 (表情切换): 保持原中心点
+            x, y = old.rect.centerx - w // 2, old.rect.centery - h // 2
+        else:
+            x, y = self._pos_to_xy(pos, w, h)
         spr = _Sprite(sid, img, pygame.Rect(int(x), int(y), w, h),
-                      props={"image": path, "pos": pos, "scale": scale, "mode": mode})
+                      props={"image": path, "pos": pos, "scale": scale,
+                             "mode": mode, "pose": None})
         if effect == "fade":
             spr.alpha = 0
             spr.target_alpha = 255
@@ -238,20 +454,100 @@ class Display:
         self.sprite_order = []
 
     def sprite_state(self) -> list:
-        """导出立绘状态供存档。"""
+        """导出立绘状态供存档: 只存脚本 id / 运行时位置 / 透明度 / 立绘名,
+        不存图片路径 (路径以脚本中的对象定义为准)。"""
         out = []
         for sid in self.sprite_order:
             spr = self.sprites[sid]
             if spr.visible:
-                out.append({"id": sid, "props": dict(spr.props)})
+                out.append({"id": sid,
+                            "pos": spr.props.get("pos"),
+                            "alpha": spr.alpha,
+                            "pose": spr.props.get("pose")})
         return out
 
     def restore_sprites(self, state: list) -> None:
-        self.clear_sprites()
+        """从存档恢复立绘。存档只含 id/pose, 图片等属性从脚本对象注册表
+        (runtime.script_objects) 与角色表 (runtime.characters) 取回;
+        兼容旧格式 (直接存 image 路径)。"""
+        # 彻底重置立绘层, 保证 sprite_order 与 sprites 一致
+        self.sprites.clear()
+        self.sprite_order.clear()
+        objects = self.engine.runtime.script_objects
+        characters = self.engine.runtime.characters
         for item in state:
-            props = item.get("props", {})
-            self.show_sprite(item["id"], props.get("image"), props.get("pos"),
-                             props.get("scale"), props.get("mode"))
+            sid = item.get("id")
+            obj = objects.get(sid) if sid else None
+            pose = item.get("pose")
+            img = pos = None
+            scale = mode = None
+            if characters.get(sid) and pose:
+                # 角色立绘: 按立绘名恢复精确立绘
+                char = characters[sid]
+                img = char["sprites"].get(pose) or char.get("default")
+                pos = item.get("pos") or char.get("pos")
+                scale, mode = char.get("scale"), char.get("mode")
+            elif obj is not None:
+                img = obj.get("image")
+                pos = item.get("pos") or obj.get("pos")
+                scale, mode = obj.get("scale"), obj.get("mode")
+            elif item.get("image"):
+                # 旧存档兼容: 直接使用保存的路径
+                img, pos = item["image"], item.get("pos")
+            else:
+                log.warning(f"读档: 立绘 {sid!r} 不在脚本对象注册表中")
+                continue
+            self.show_sprite(sid, img, pos, scale, mode)
+            spr = self.sprites.get(sid)
+            if spr is None:
+                continue
+            if pose:
+                spr.props["pose"] = pose
+            spr.alpha = int(item.get("alpha", 255))
+            spr.surface.set_alpha(spr.alpha)
+            if spr.alpha < 255:
+                # 存档时若淡入未完成, 读档后继续淡入 (否则立绘会永久隐形)
+                spr.target_alpha = 255
+                spr.fade_speed = 255.0 / self.FADE_DURATION
+            else:
+                spr.fade_speed = 0.0
+
+    def restore_state(self, data: dict) -> None:
+        """从存档恢复视觉状态: 背景 / 立绘 / 正在显示的文本或选择支。"""
+        bg_id = data.get("bg_id")
+        bg_scene = data.get("bg_scene")
+        if bg_id:
+            obj = self.engine.runtime.script_objects.get(bg_id)
+            if obj and obj.get("image"):
+                self.set_bg(obj["image"])
+                self.bg_id = bg_id
+        elif bg_scene:
+            scenes = self.engine.runtime.scenes
+            scene = scenes.get(bg_scene)
+            pose = data.get("bg_pose")
+            img = None
+            if scene:
+                if pose and pose in scene["backgrounds"]:
+                    img = scene["backgrounds"][pose]
+                else:
+                    img = scene.get("default")
+            if img:
+                self.set_bg(img)
+                self.bg_scene = bg_scene
+                self.bg_pose = pose if (pose and scene and
+                                        pose in scene["backgrounds"]) else None
+        elif data.get("bg"):
+            self.set_bg(data["bg"])
+        else:
+            self.clear_bg()
+        self.restore_sprites(data.get("sprites", []))
+        self.clear_text()
+        self.choice_active = False
+        if data.get("blocked") == "text":
+            self.show_text(data.get("text", ""), data.get("speaker"))
+            self.reveal = len(self.full_text)   # 读档后文本完整显示
+        elif data.get("blocked") == "choice":
+            self.show_choices(data.get("choices", []) or [])
 
     # ==================================================================
     # 文本
@@ -322,9 +618,15 @@ class Display:
         self.shake_time = max(self.shake_time, duration)
         self.shake_mag = magnitude
 
-    def show_notice(self, text: str, seconds: float = 1.5) -> None:
+    def show_notice(self, text: str, seconds: float = 1.5,
+                    pos: str = "top") -> None:
+        """在屏幕顶部显示一条通知。
+
+        pos: "top" (顶部居中) / "top-left" / "top-right"
+        """
         self.notice = text
         self.notice_ttl = seconds
+        self.notice_pos = pos
 
     def show_ending(self) -> None:
         self.ending = True
@@ -336,6 +638,13 @@ class Display:
     # 帧更新
     # ==================================================================
     def update(self, dt: float) -> None:
+        # 背景过渡
+        if self._transition is not None:
+            self._transition.update(dt)
+            if self._transition.done:
+                self.bg_surface = self._transition.new
+                self.bg_alpha = 255
+                self._transition = None
         # 背景淡入
         if self.bg_fading and self.bg_alpha < 255:
             self.bg_alpha += self.bg_fade_speed * dt
@@ -386,7 +695,9 @@ class Display:
         buf.fill((0, 0, 0))
 
         # 背景
-        if self.bg_surface is not None:
+        if self._transition is not None:
+            self._transition.draw_bg(buf)
+        elif self.bg_surface is not None:
             if self.bg_alpha < 255:
                 tmp = self.bg_surface.copy()
                 tmp.set_alpha(int(self.bg_alpha))
@@ -415,6 +726,10 @@ class Display:
         # 通知
         if self.notice:
             self._draw_notice(buf)
+
+        # 过渡的全屏覆盖层 (fade 黑幕盖住全部内容)
+        if self._transition is not None:
+            self._transition.draw_overlay(buf)
 
         # 结束画面
         if self.ending:
@@ -487,6 +802,11 @@ class Display:
     def _draw_notice(self, buf) -> None:
         surf = self._font_notice.render(self.notice, True, (255, 255, 255))
         rect = pygame.Rect(0, 0, surf.get_width() + 40, surf.get_height() + 16)
-        rect.center = (self.width / 2, 48)
+        if self.notice_pos == "top-left":
+            rect.topleft = (12, 12)
+        elif self.notice_pos == "top-right":
+            rect.topright = (self.width - 12, 12)
+        else:
+            rect.center = (self.width / 2, 48)
         ui.panel(buf, rect, bg_color=(20, 20, 20, 210))
         ui.text(buf, self._font_notice, self.notice, center=rect.center)

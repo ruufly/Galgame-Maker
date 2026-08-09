@@ -51,7 +51,7 @@ def test_parser():
     check("存在 like_it 标签", "like_it" in script.labels)
     start = script.labels["start"]
     ops = [s.op for s in start]
-    check("start 块含 weight 创建", "weight" in ops)
+    check("start 块含 bg 指令", "bg" in ops, str(ops))
     check("start 块含 choice", "choice" in ops)
     choice = next(s for s in start if s.op == "choice")
     check("choice 有 3 个选项", len(choice.kwargs["options"]) == 3,
@@ -200,12 +200,7 @@ def test_scene_flow():
                            "image", "bg.png").replace("\\", "/")
     src = f'''
 start:
-    weight
-        image: "{img_abs}"
-        mode: full
-        effect: fade
-    -> bg1
-    show bg1
+    bg "{img_abs}"
     sprite girl
         image: "{img_abs}"
         pos: center
@@ -218,7 +213,7 @@ start:
     try:
         rt.load_script(path)
         rt.start()
-        check("weight -> 绑定 -> show 后背景已设置", d.bg_surface is not None)
+        check("bg 指令后背景已设置", d.bg_surface is not None)
         check("sprite 创建并显示", "girl" in d.sprites and d.sprites["girl"].visible)
         check("text 正常阻塞", rt.blocked == "text" and d.full_text == "done")
     finally:
@@ -307,14 +302,480 @@ def test_demo_run():
     rt.start()
     check("demo 停在第一句文本", rt.blocked == "text" and d.full_text != "")
     check("demo 背景已设置", d.bg_surface is not None)
-    check("demo 立绘已显示",
-          "girl" in d.sprites and d.sprites["girl"].visible)
+    check("demo 角色立绘已显示",
+          "producer" in d.sprites and d.sprites["producer"].visible)
     # 渲染一帧 (含富文本解析路径)
     engine.draw()
     check("demo 首帧绘制无异常", True)
     engine.quit()
     import pygame
     pygame.quit()
+
+
+def test_save_restore_state():
+    print("== 读档状态恢复 ==")
+    engine = GameEngine(640, 360, "test7")
+    d = engine.display
+    rt = engine.runtime
+    img = os.path.join(_ROOT, "test", "engine_demo", "materials",
+                       "image", "bg.png").replace("\\", "/")
+    src = f'''
+start:
+    set love = 5
+    bg "{img}"
+    sprite girl
+        image: "{img}"
+        pos: center
+    show girl
+    text "第一句"
+    text "第二句"
+'''
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_save_test.gal")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    try:
+        rt.load_script(path)
+        rt.start()
+        check("初始停在第一句", rt.blocked == "text" and d.full_text == "第一句")
+
+        # 存档后篡改现场
+        engine.save_game(0, silent=True)
+        rt.vars["love"] = 999
+        d.hide_sprite("girl")
+        d.clear_bg()
+        d.clear_text()
+        rt.blocked = None
+        rt.ip += 5  # 剧情位置漂移
+
+        engine.load_game(0)
+        check("变量恢复 love=5", rt.vars.get("love") == 5, str(rt.vars))
+        check("背景恢复", d.bg_surface is not None)
+        check("立绘恢复可见",
+              "girl" in d.sprites and d.sprites["girl"].visible)
+        check("text 阻塞恢复", rt.blocked == "text" and d.full_text == "第一句")
+        check("剧情位置恢复", rt.current_label == "start")
+
+        engine.on_click((320, 180))   # 完成打字
+        engine.on_click((320, 180))   # 推进
+        check("读档后剧情继续", d.full_text == "第二句")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+    # --- choice 阻塞恢复 ---
+    engine = GameEngine(640, 360, "test8")
+    d = engine.display
+    rt = engine.runtime
+    src2 = '''
+start:
+    choice:
+        "去 A" -> label_a
+        "去 B" -> label_b
+label_a:
+    set went = "a"
+    text "A 结局"
+label_b:
+    set went = "b"
+    text "B 结局"
+'''
+    path2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_save2_test.gal")
+    with open(path2, "w", encoding="utf-8") as f:
+        f.write(src2)
+    try:
+        rt.load_script(path2)
+        rt.start()
+        check("初始 choice 阻塞", rt.choice_active if hasattr(rt, "choice_active") else d.choice_active)
+        engine.save_game(1, silent=True)
+        d.choice_active = False
+        rt.blocked = None
+        engine.load_game(1)
+        check("choice 阻塞恢复", d.choice_active)
+        check("choice 选项恢复", len(d.choices) == 2 and d.choices[0][0] == "去 A")
+        engine.on_click(d.choice_rects[1].center)   # 选 "去 B"
+        check("读档后选择跳转正确", rt.vars.get("went") == "b", str(rt.vars))
+        check("选择后进入 label_b", rt.current_label == "label_b")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path2):
+            os.remove(path2)
+
+    # --- call 栈恢复 ---
+    engine = GameEngine(640, 360, "test9")
+    d = engine.display
+    rt = engine.runtime
+    src3 = '''
+start:
+    call sub
+    set after = 1
+    text "done"
+sub:
+    set inner = 1
+    text "sub text"
+    return
+'''
+    path3 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_save3_test.gal")
+    with open(path3, "w", encoding="utf-8") as f:
+        f.write(src3)
+    try:
+        rt.load_script(path3)
+        rt.start()
+        check("call 内 text 阻塞", rt.blocked == "text" and d.full_text == "sub text")
+        engine.save_game(2, silent=True)
+        rt.vars["inner"] = 0
+        engine.load_game(2)
+        check("call 栈恢复", len(rt.call_stack) == 1, str(rt.call_stack))
+        check("call 内标签恢复", rt.current_label == "sub")
+        check("call 内变量恢复", rt.vars.get("inner") == 1)
+        check("call 内 text 恢复", rt.blocked == "text" and d.full_text == "sub text")
+        engine.on_click((320, 180))   # 完成打字
+        engine.on_click((320, 180))   # 推进 -> return
+        check("恢复后 return 正常", rt.vars.get("after") == 1, str(rt.vars))
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path3):
+            os.remove(path3)
+
+
+def test_save_id_based():
+    """验证: 存档按脚本 id 存储 (不含图片路径) + 淡入中立绘读档后继续淡入。"""
+    print("== 存档按脚本 id ==")
+    engine = GameEngine(640, 360, "test10")
+    d = engine.display
+    rt = engine.runtime
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    try:
+        rt.load_script(demo)
+        rt.start()
+        # 对象注册表: producer (角色) + school (场景)
+        check("注册表含 producer/school",
+              "producer" in rt.script_objects and "school" in rt.script_objects,
+              str(list(rt.script_objects)))
+        check("角色注册表记录图片",
+              rt.script_objects["producer"].get("image")
+              == "materials/image/producer/producer1.png")
+        check("背景由场景驱动", d.bg_scene == "school" and d.bg_id is None,
+              f"scene={d.bg_scene} id={d.bg_id}")
+
+        engine.save_game(0, silent=True)
+        snap = engine.save.load(0)
+        sprites = snap.get("sprites", [])
+        check("存档不含图片路径", all("image" not in s for s in sprites),
+              str(sprites))
+        check("存档立绘含脚本 id", sprites[0]["id"] == "producer", str(sprites))
+        check("存档背景含场景 id", snap.get("bg_scene") == "school",
+              str(snap.get("bg_scene")))
+
+        # 篡改现场: 清空整个立绘层
+        d.sprites.clear()
+        d.sprite_order.clear()
+        engine.load_game(0)
+        spr = d.sprites.get("producer")
+        check("读档立绘可见", spr is not None and spr.visible)
+        check("绘制顺序恢复", d.sprite_order == ["producer"], str(d.sprite_order))
+        check("背景由场景 id 恢复",
+              d.bg_scene == "school" and d.bg_surface is not None,
+              f"scene={d.bg_scene}")
+
+        # 淡入恢复: 角色立绘默认完整显示, 手动模拟"淡入中"存档,
+        # 验证读档后继续淡入而非永久卡在半透明
+        check("立绘完整显示", spr.alpha == 255, f"alpha={spr.alpha}")
+        spr.alpha = 100
+        spr.surface.set_alpha(100)
+        engine.save_game(0, silent=True)
+        d.sprites.clear()
+        d.sprite_order.clear()
+        engine.load_game(0)
+        spr = d.sprites.get("producer")
+        check("读档后继续淡入", spr.fade_speed > 0, f"fade_speed={spr.fade_speed}")
+        for _ in range(30):
+            d.update(1 / 60)
+        check("淡入推进后 alpha 增长", spr.alpha > 100, f"alpha={spr.alpha}")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_characters():
+    print("== 角色系统 ==")
+    engine = GameEngine(640, 360, "test11")
+    d = engine.display
+    rt = engine.runtime
+    img1 = os.path.join(_ROOT, "test", "engine_demo", "materials", "image",
+                        "producer", "producer1.png").replace("\\", "/")
+    img2 = os.path.join(_ROOT, "test", "engine_demo", "materials", "image",
+                        "producer", "producer2.png").replace("\\", "/")
+    src = f'''
+char girl
+    name: "小美"
+    default: "{img1}"
+    normal: "{img1}"
+    happy: "{img2}"
+start:
+    show girl normal
+    say girl "你好"
+    nar "旁白来了"
+    say 旁白 "也是旁白"
+    show girl happy
+    text "结束"
+'''
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_char_test.gal")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    try:
+        rt.load_script(path)
+        # 静态注册 (无需执行到 char 语句)
+        check("角色静态注册", "girl" in rt.characters,
+              str(list(rt.characters)))
+        check("角色显示名", rt.characters["girl"]["name"] == "小美")
+        check("角色立绘表", len(rt.characters["girl"]["sprites"]) == 2)
+
+        rt.start()
+        spr = d.sprites.get("girl")
+        check("角色立绘显示", spr is not None and spr.visible)
+        check("默认立绘 pose", spr.props.get("pose") == "normal")
+        center1 = tuple(spr.rect.center)
+
+        # 台词分类: 角色台词 -> 名字框显示角色名
+        check("角色台词显示名", d.speaker == "小美", str(d.speaker))
+        engine.on_click((320, 180))   # 完成打字
+        engine.on_click((320, 180))   # 推进
+        check("nar 旁白无名字框", d.speaker is None and d.full_text == "旁白来了")
+        engine.on_click((320, 180))
+        engine.on_click((320, 180))
+        check("say 旁白 兼容", d.speaker is None and d.full_text == "也是旁白")
+
+        # 立绘切换: 换图保持中心点
+        engine.on_click((320, 180))
+        engine.on_click((320, 180))
+        spr = d.sprites.get("girl")
+        check("切换后 pose=happy", spr is not None and spr.props.get("pose") == "happy")
+        check("切换后中心点不变", tuple(spr.rect.center) == center1,
+              f"{spr.rect.center} vs {center1}")
+
+        # 存档/读档: pose 精确恢复
+        engine.save_game(0, silent=True)
+        d.sprites.clear()
+        d.sprite_order.clear()
+        engine.load_game(0)
+        spr = d.sprites.get("girl")
+        check("读档立绘恢复", spr is not None and spr.visible)
+        check("读档 pose 恢复", spr.props.get("pose") == "happy",
+              str(spr.props.get("pose")))
+        check("读档中心点保持", tuple(spr.rect.center) == center1)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+def test_scenes():
+    print("== 场景系统 ==")
+    engine = GameEngine(640, 360, "test12")
+    d = engine.display
+    rt = engine.runtime
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    try:
+        rt.load_script(demo)
+        check("场景静态注册", "school" in rt.scenes, str(list(rt.scenes)))
+        check("场景显示名", rt.scenes["school"]["name"] == "学校")
+        check("场景背景表", len(rt.scenes["school"]["backgrounds"]) == 2,
+              str(rt.scenes["school"]["backgrounds"]))
+
+        # 加载插件 (含场景通知插件)
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        rt.start()   # 与真实游戏流程一致 (存档点有有效标签位置)
+
+        from framework.engine.parser import Statement
+        # 场景切换: bg <场景id>
+        rt._cmd_bg(Statement(op="bg", args=["school"], line=0))
+        check("场景默认背景生效", d.bg_scene == "school"
+              and d.bg_surface is not None)
+        check("场景切换触发左上角通知",
+              d.notice is not None and "场景切换" in d.notice,
+              str(d.notice))
+        check("通知位置为左上角", d.notice_pos == "top-left",
+              str(d.notice_pos))
+
+        # 场景内背景切换: bg <场景id> <背景名>
+        rt._cmd_bg(Statement(op="bg", args=["school", "morning"], line=0))
+        check("场景内背景切换", d.bg_pose == "morning" and d.bg_scene == "school")
+
+        # 直接路径 bg 兼容
+        rt._cmd_bg(Statement(op="bg", args=["materials/image/bg.png"], line=0))
+        check("直接路径 bg 兼容", d.bg_scene is None and d.bg_id is None
+              and d.bg_surface is not None)
+
+        # 存档/读档: 场景背景精确恢复
+        rt._cmd_bg(Statement(op="bg", args=["school", "morning"], line=0))
+        engine.save_game(0, silent=True)
+        snap = engine.save.load(0)
+        check("存档场景 id", snap.get("bg_scene") == "school", str(snap.get("bg_scene")))
+        check("存档背景名", snap.get("bg_pose") == "morning", str(snap.get("bg_pose")))
+        d.bg_scene = None
+        d.bg_pose = None
+        d.bg_surface = None
+        engine.load_game(0)
+        check("读档场景恢复", d.bg_scene == "school" and d.bg_pose == "morning",
+              f"scene={d.bg_scene} pose={d.bg_pose}")
+        check("读档背景图恢复", d.bg_surface is not None)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_transitions():
+    print("== 背景过渡效果 ==")
+    engine = GameEngine(640, 360, "test13")
+    d = engine.display
+    rt = engine.runtime
+    img = os.path.join(_ROOT, "test", "engine_demo", "materials",
+                       "image", "bg.png").replace("\\", "/")
+    src = '''start:
+    bg "%s"
+    text "x"
+''' % img
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_trans_test.gal")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    try:
+        rt.load_script(path)
+        rt.start()
+        check("初始无过渡", d._transition is None)
+
+        # 内置过渡: 启动 -> 推进 -> 完成
+        for name in ("fade", "dissolve", "blinds", "slide", "circle",
+                     "pixelate", "zoom"):
+            d.set_bg(img, name)
+            check(f"{name} 过渡启动", d._transition is not None
+                  and d._transition.name == name)
+            for _ in range(200):
+                d.update(1 / 60)
+            check(f"{name} 过渡完成", d._transition is None
+                  and d.bg_surface is not None)
+
+        # 默认直接切换
+        d.set_bg(img)
+        check("默认直接切换", d._transition is None)
+
+        # 过渡期间立绘仍可绘制 (draw 不报错)
+        d.set_bg(img, "dissolve")
+        engine.draw()
+        check("过渡中绘制无异常", d._transition is not None)
+        for _ in range(150):
+            d.update(1 / 60)
+
+        # 插件注册的自定义过渡
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        check("插件过渡已注册", "wipe" in d.transitions)
+        d.set_bg(img, "wipe")
+        check("wipe 过渡启动", d._transition is not None
+              and d._transition.name == "wipe")
+        for _ in range(150):
+            d.update(1 / 60)
+        check("wipe 过渡完成", d._transition is None)
+
+        # 脚本指令解析: bg "路径" with 效果
+        from framework.engine.parser import Statement
+        rt._cmd_bg(Statement(op="bg", args=[img, "with", "dissolve"], line=0))
+        check("bg with 指令解析", d._transition is not None
+              and d._transition.name == "dissolve")
+        for _ in range(150):
+            d.update(1 / 60)
+
+        # 未知效果 -> 直接切换 + 无异常
+        d.set_bg(img, "nonexistent_effect")
+        check("未知效果回退直接切换", d._transition is None)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+    # --- 像素级验证 (红->蓝纯色图, 检查中间帧画面确实在过渡) ---
+    print("== 过渡像素验证 ==")
+    engine = GameEngine(640, 360, "test14")
+    from framework.engine.display import (Transition as TBase,
+                                          DissolveTransition, BlindsTransition,
+                                          FadeTransition)
+    W, H = 200, 100
+    red = pygame.Surface((W, H))
+    red.fill((255, 0, 0))
+    blue = pygame.Surface((W, H))
+    blue.fill((0, 0, 255))
+    try:
+        # dissolve 中间帧: 中心像素应为红蓝混合 (既非纯红也非纯蓝)
+        tr = DissolveTransition(red, blue, (W, H))
+        tr.update(0.5 * tr.duration)
+        target = pygame.Surface((W, H))
+        tr.draw_bg(target)
+        mid = target.get_at((W // 2, H // 2))[:3]
+        check("dissolve 中间帧混合", mid not in ((255, 0, 0), (0, 0, 255)),
+              str(mid))
+
+        # blinds 中间帧: 左边缘为新色, 中心附近为旧色 (条带进行中)
+        tr = BlindsTransition(red, blue, (W, H))
+        tr.update(0.5 * tr.duration)
+        target = pygame.Surface((W, H))
+        tr.draw_bg(target)
+        left = target.get_at((4, H // 2))[:3]
+        check("blinds 中间帧条带", left == (0, 0, 255), str(left))
+
+        # fade 中间帧: 背景层为黑色
+        tr = FadeTransition(red, blue, (W, H))
+        tr.update(0.5 * tr.duration)
+        target = pygame.Surface((W, H))
+        tr.draw_bg(target)
+        mid = target.get_at((W // 2, H // 2))[:3]
+        check("fade 中间帧黑幕", mid == (0, 0, 0), str(mid))
+        # fade 黑幕只在背景层: 不覆写 draw_overlay
+        check("fade 无全屏覆盖层",
+              FadeTransition.draw_overlay is TBase.draw_overlay)
+
+        # 立绘在过渡中不被 fade 黑幕遮挡: 画立绘到 buffer 再画 fade,
+        # 立绘像素应保持 (黑幕仅背景层)
+        tr = FadeTransition(red, blue, (W, H))
+        tr.update(0.5 * tr.duration)
+        target = pygame.Surface((W, H))
+        tr.draw_bg(target)
+        pygame.draw.rect(target, (0, 255, 0), (10, 10, 20, 20))  # 模拟立绘
+        px = target.get_at((20, 20))[:3]
+        check("立绘不被 fade 黑幕遮挡", px == (0, 255, 0), str(px))
+
+        # slide 中间帧: 左半旧色右半新色
+        tr = engine.display.transitions["slide"](red, blue, (W, H))
+        tr.update(0.5 * tr.duration)
+        target = pygame.Surface((W, H))
+        tr.draw_bg(target)
+        left = target.get_at((4, H // 2))[:3]
+        right = target.get_at((W - 4, H // 2))[:3]
+        check("slide 中间帧左右分色", left == (255, 0, 0) and right == (0, 0, 255),
+              f"l={left} r={right}")
+
+        # circle 中间帧: 中心新色边缘旧色
+        tr = engine.display.transitions["circle"](red, blue, (W, H))
+        tr.update(0.5 * tr.duration)
+        target = pygame.Surface((W, H))
+        tr.draw_bg(target)
+        center = target.get_at((W // 2, H // 2))[:3]
+        corner = target.get_at((4, 4))[:3]
+        check("circle 中间帧中心展开", center == (0, 0, 255) and corner == (255, 0, 0),
+              f"c={center} corner={corner}")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
 
 
 def test_plugins_and_save():
@@ -401,6 +862,36 @@ def main():
         test_demo_run()
     except Exception as exc:
         print(f"  [ERROR] demo 运行测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_save_restore_state()
+    except Exception as exc:
+        print(f"  [ERROR] 读档状态测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_save_id_based()
+    except Exception as exc:
+        print(f"  [ERROR] id 存档测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_characters()
+    except Exception as exc:
+        print(f"  [ERROR] 角色系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_scenes()
+    except Exception as exc:
+        print(f"  [ERROR] 场景系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_transitions()
+    except Exception as exc:
+        print(f"  [ERROR] 过渡效果测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

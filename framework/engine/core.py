@@ -284,7 +284,6 @@ class GameEngine:
     # ==================================================================
     def save_game(self, slot: int = 0, silent: bool = False) -> None:
         data = self.runtime.snapshot()
-        data["bg"] = None
         path = self.save.save(slot, data)
         if not silent:
             self.display.show_notice(f"已存档 (槽位 {slot})  按 F9 读档")
@@ -294,9 +293,15 @@ class GameEngine:
         if data is None:
             self.display.show_notice(f"槽位 {slot} 没有存档")
             return
+        # 恢复运行时 (变量/剧情位置/调用栈/阻塞状态)
         self.runtime.restore(data)
-        self.display.restore_sprites(data.get("sprites", []))
-        self.display.clear_text()
-        self.display.choice_active = False
+        # 恢复视觉 (背景/立绘/正在显示的文本或选择支)
+        self.display.restore_state(data)
+        # 恢复音乐
+        music = data.get("music")
+        if music:
+            self.audio.play_music(music)
+        else:
+            self.audio.stop_music()
         self.display.show_notice(f"已读档 (槽位 {slot})")
         self.runtime.advance()

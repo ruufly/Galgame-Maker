@@ -47,13 +47,10 @@ name: demo                      # 项目名 (可选)
 
 # 标签块 (脚本入口是 start:)
 start:
-    # 背景: weight 块 + `->` 绑定 id (effect: fade 淡入)
-    weight
-        image: "materials/bg.png"
-        mode: full
-        effect: fade
-    -> bg1
-    show bg1
+    # 背景: 统一走场景方案 (bg <场景id> [背景名], 或直接 bg "路径")
+    bg school
+    bg school morning
+    bg "materials/bg.png"            # 直接指定路径
 
     # 立绘: sprite 块 (pos: center/left/right/top/bottom 或 x,y)
     sprite girl
@@ -84,6 +81,31 @@ start:
     else:
         text "负好感"
     endif
+
+    # 角色系统
+    char producer                      # 角色定义 (可放脚本顶层, 静态注册)
+        name: "制作人"                  #   显示名 (台词名字框用)
+        default: "materials/char/producer/producer1.png"  # 默认立绘
+        normal: "materials/char/producer/producer1.png"   # 立绘名: 路径
+        happy: "materials/char/producer/producer2.png"
+    show producer normal               # 显示角色立绘 (默认居中)
+    show producer happy                # 切换立绘 (保持中心点原位替换)
+    hide producer
+    say producer "角色台词, 名字框显示'制作人'"   # 角色 id -> 显示名
+    nar "旁白台词, 无名字框"            # text 的别名
+    say 旁白 "也按旁白处理"            # 兼容写法
+
+    # 场景系统
+    scene school                       # 场景定义 (可放脚本顶层, 静态注册)
+        name: "学校"                    #   显示名
+        default: "materials/image/bg.png"   # 默认背景
+        morning: "materials/image/bg.png"   # 背景名: 路径
+    bg school                          # 切到场景默认背景 (触发 scene_change 事件)
+    bg school morning                  # 场景内切换背景
+    bg school with fade                # 背景过渡效果: fade 黑幕淡入淡出
+    bg school with dissolve            #   dissolve 交叉溶解
+    bg school with blinds              #   blinds 百叶窗
+    bg school with wipe                #   wipe 等插件自定义效果
 
     # 流程控制
     jump label_a                # 跳转
@@ -161,6 +183,7 @@ class MyPlugin(Plugin):
 | text_show / text_advance / text_complete | text, speaker |
 | choice_show / choice_made | choices / index, label, text |
 | bg_change | path, effect |
+| scene_change | id, name, background, pose |
 | sprite_show / sprite_hide | id, path |
 | var_set | name, value |
 | music_play / music_stop / sound_play | path, loop |
@@ -183,6 +206,42 @@ engine.set_var(name, value) / engine.get_var(name)
 engine.show_notice(text)
 engine.save_game(slot) / engine.load_game(slot)
 engine.resolve_path(rel)   # 相对脚本目录解析资源路径
+```
+
+### 背景过渡效果
+
+`bg ... with <效果>` 切换背景时播放过渡, 内置:
+
+| 效果 | 说明 |
+| --- | --- |
+| `fade` | 黑幕淡出→切换→淡入 (黑幕只在背景层, 不影响立绘/文本) |
+| `dissolve` | 交叉溶解 |
+| `blinds` | 垂直百叶窗 (12 条竖带逐条显现) |
+| `slide` | 新背景从右侧滑入 |
+| `circle` | 圆形从中心展开 |
+| `pixelate` | 马赛克: 大像素块逐渐变清晰 + 溶解 |
+| `zoom` | 缩放淡入 (60% → 100%) |
+
+未知效果名回退为直接切换。插件可注册自定义过渡
+(见 `framework/plugins/example_transition.py`):
+
+```python
+from framework.engine.display import Transition
+
+class WipeTransition(Transition):
+    name = "wipe"
+    duration = 0.8
+
+    def draw_bg(self, target):
+        if self.old is not None:
+            target.blit(self.old, (0, 0))
+        w, h = self.new.get_size()
+        x1 = int(w * min(1.0, self.t))
+        if x1 > 0:
+            target.blit(self.new.subsurface((0, 0, x1, h)), (0, 0))
+
+# 插件 on_load 中注册:
+#   self.engine.display.register_transition("wipe", WipeTransition)
 ```
 
 ### UI 绘制原语 (`engine.ui`)
@@ -210,5 +269,12 @@ engine.ui.dim_overlay(surface, alpha=150)                   # 全屏半透明遮
 
 * `.wid` 组件仅支持模板化兼容 (reg class + when run 块), 编辑器特有的
   `#id` 引用 / `general.page.height` 等组件树表达式不解析, 会警告跳过
+* `weight` 语法可解析但已不承担背景职责 (背景统一走 `scene`/`bg`),
+  旧脚本中 `weight ... -> id` + `show id` 会按"全屏立绘"显示并给出警告
 * 音频/图片找不到时仅告警, 不中断游戏
-* 存档只保存变量、当前标签位置与立绘状态; 调用栈不恢复 (从最近标签重开)
+* 存档完整保存变量、剧情位置 (标签+语句索引)、调用栈、正在显示的
+  文本/选择支、背景、立绘 (含透明度) 与音乐; 在 `sleep` 阻塞时存档,
+  读档不会恢复剩余等待时间
+* 存档中的背景/立绘以**脚本对象 id** 保存 (不存图片路径), 图片路径
+  以脚本中的 `weight`/`sprite` 定义为准 —— 日后重命名图片文件不会
+  破坏旧存档 (需同步修改脚本)

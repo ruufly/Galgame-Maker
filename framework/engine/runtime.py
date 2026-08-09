@@ -40,6 +40,8 @@ class Runtime:
         self.widgets_templates = {}   # name -> {parent, blocks}
         self.pending_create = None    # 等待 `-> id` 完成的对象
         self._created_objects = {}    # weight 创建的背景对象 (id -> obj)
+        self.characters = {}          # 角色表: id -> {name, sprites, ...}
+        self.scenes = {}              # 场景表: id -> {name, backgrounds, ...}
 
         # 内置指令表
         self._builtins = {
@@ -51,8 +53,14 @@ class Runtime:
             "weight": self._cmd_create,
             "sprite": self._cmd_create,
             "object": self._cmd_create,
+            "char": self._cmd_char,
+            "character": self._cmd_char,
+            "scene": self._cmd_scene,
+            "scenery": self._cmd_scene,
             "->": self._cmd_bind,
             "text": self._cmd_text,
+            "nar": self._cmd_text,
+            "narrate": self._cmd_text,
             "say": self._cmd_say,
             "choice": self._cmd_choice,
             "set": self._cmd_set,
@@ -85,12 +93,94 @@ class Runtime:
         self.labels = script.labels
         self.statements = script.statements
         self.ip = 0
+        # 对象注册表: 静态扫描脚本中的 weight/sprite/char 定义,
+        # id -> {kind, image, pos, scale, mode, effect}
+        # 存档只存 id, 图片路径以脚本为准 (改图片名不影响旧存档)
+        self.script_objects = self._scan_objects(script)
+        # 角色表 / 场景表 (静态注册, 无需执行到定义语句)
+        self._rebuild_characters()
+        self._rebuild_scenes()
         self.engine.emit("script_load", path=path, name=script.name)
-        log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个)")
+        log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
+                 f"对象 {len(self.script_objects)} 个, "
+                 f"角色 {len(self.characters)} 个, "
+                 f"场景 {len(self.scenes)} 个)")
         # widgets 模板
         if script.widgets_dir:
             self.load_widget_templates(
                 os.path.join(self.script_dir, script.widgets_dir))
+
+    # ------------------------------------------------------------------
+    def _scan_objects(self, script) -> dict:
+        """扫描脚本语句, 收集所有 weight/sprite/char 创建的对象定义。"""
+        objs = {}
+
+        def scan(stmts):
+            pending = None
+            for stmt in stmts:
+                if stmt.op == "weight":
+                    pending = {"kind": "weight", **stmt.kwargs}
+                elif stmt.op in ("sprite", "object") and stmt.args:
+                    objs[stmt.args[0]] = {"kind": stmt.op, **stmt.kwargs}
+                elif stmt.op in ("char", "character") and stmt.args:
+                    props = dict(stmt.kwargs)
+                    img = props.get("default") or (
+                        next(iter(props.values())) if props else None)
+                    objs[stmt.args[0]] = {"kind": "char", "image": img,
+                                          "props": props}
+                elif stmt.op in ("scene", "scenery") and stmt.args:
+                    props = dict(stmt.kwargs)
+                    img = props.get("default") or (
+                        next(iter(props.values())) if props else None)
+                    objs[stmt.args[0]] = {"kind": "scene", "image": img,
+                                          "props": props}
+                elif stmt.op == "->" and pending is not None:
+                    if stmt.args:
+                        objs[stmt.args[0]] = dict(pending)
+                    pending = None
+                # 递归扫描子块 (choice/if)
+                for cond, body in stmt.kwargs.get("branches", []):
+                    scan(body)
+                if stmt.kwargs.get("else"):
+                    scan(stmt.kwargs["else"])
+                if stmt.block:
+                    scan(stmt.block)
+
+        scan(script.statements)
+        for body in script.labels.values():
+            scan(body)
+        return objs
+
+    # ------------------------------------------------------------------
+    def _rebuild_characters(self) -> None:
+        """从对象注册表重建角色表 (静态注册 / 读档时调用)。"""
+        self.characters = {}
+        for cid, obj in self.script_objects.items():
+            if obj.get("kind") != "char":
+                continue
+            props = dict(obj.get("props", {}))
+            name = props.pop("name", cid)
+            default = props.pop("default", None)
+            pos = props.pop("pos", "center")
+            scale = props.pop("scale", None)
+            mode = props.pop("mode", None)
+            self.characters[cid] = {
+                "id": cid, "name": name, "sprites": props,
+                "default": default, "pos": pos, "scale": scale, "mode": mode,
+            }
+
+    # ------------------------------------------------------------------
+    def _rebuild_scenes(self) -> None:
+        """从对象注册表重建场景表 (静态注册 / 读档时调用)。"""
+        self.scenes = {}
+        for sid, obj in self.script_objects.items():
+            if obj.get("kind") != "scene":
+                continue
+            props = dict(obj.get("props", {}))
+            name = props.pop("name", sid)
+            default = props.pop("default", None)
+            self.scenes[sid] = {"id": sid, "name": name,
+                                "backgrounds": props, "default": default}
 
     # ------------------------------------------------------------------
     def load_widget_templates(self, directory: str) -> None:
@@ -249,22 +339,105 @@ class Runtime:
     # 内置指令
     # ==================================================================
     # -- 场景 -----------------------------------------------------------
-    def _cmd_bg(self, stmt):
-        path = self._interp(stmt.args[0]) if stmt.args else None
-        if not path:
-            log.warning(f"第{stmt.line}行: bg 缺少图片路径")
+    def _cmd_scene(self, stmt):
+        """注册场景: scene <id> + 属性块 (name/default/背景名: 路径)。"""
+        if not stmt.args:
             return None
-        effect = stmt.kwargs.get("effect")
-        self.engine.display.set_bg(path, effect)
+        sid = stmt.args[0]
+        props = dict(stmt.kwargs)
+        name = props.pop("name", sid)
+        default = props.pop("default", None)
+        self.scenes[sid] = {"id": sid, "name": name,
+                            "backgrounds": props, "default": default}
+        # 同步到对象注册表 (存档/读档用)
+        self.script_objects[sid] = {
+            "kind": "scene", "image": default or (
+                next(iter(props.values())) if props else None),
+            "props": dict(stmt.kwargs),
+        }
+        self.engine.emit("scene_register", id=sid, name=name)
+        log.info(f"场景已注册: {sid} ({name}), 背景 {len(props)} 张")
+        return None
+
+    def _cmd_bg(self, stmt):
+        """切换背景:
+            bg <场景id> [背景名] [with 效果] —— 场景绑定背景间切换
+            bg "路径" [with 效果]       —— 直接指定图片 (兼容)
+        效果: fade / dissolve / blinds / none / 插件注册的过渡
+        """
+        if not stmt.args:
+            return None
+        args = list(stmt.args)
+        effect = None
+        if "with" in args:
+            idx = args.index("with")
+            if idx + 1 < len(args):
+                effect = args[idx + 1]
+            args = args[:idx]
+        if not args:
+            return None
+        target = self._interp(args[0])
+        d = self.engine.display
+        if target in self.scenes:
+            scene = self.scenes[target]
+            pose = self._interp(args[1]) if len(args) > 1 else None
+            img = None
+            if pose and pose in scene["backgrounds"]:
+                img = scene["backgrounds"][pose]
+            elif pose:
+                log.warning(f"第{stmt.line}行: 场景 {target} 无背景 {pose!r}, "
+                            f"改用默认背景")
+                pose = None
+            if img is None:
+                img = scene.get("default")
+            if img:
+                d.set_bg(img, effect)
+                d.bg_scene = target
+                d.bg_pose = pose
+                d.bg_id = None
+                self.engine.emit("scene_change", id=target,
+                                 name=scene["name"], background=img, pose=pose)
+            return None
+        # 直接路径
+        d.set_bg(target, effect)
+        d.bg_scene = None
+        d.bg_pose = None
+        d.bg_id = None
+        self.engine.emit("bg_change", path=target, effect=effect)
+        return None
+
+    # -- 角色 -----------------------------------------------------------
+    def _cmd_char(self, stmt):
+        """注册角色: char <id> + 属性块 (name/default/立绘名: 路径)。"""
+        if not stmt.args:
+            return None
+        cid = stmt.args[0]
+        props = dict(stmt.kwargs)
+        name = props.pop("name", cid)
+        default = props.pop("default", None)
+        pos = props.pop("pos", "center")
+        scale = props.pop("scale", None)
+        mode = props.pop("mode", None)
+        self.characters[cid] = {
+            "id": cid, "name": name, "sprites": props,
+            "default": default, "pos": pos, "scale": scale, "mode": mode,
+        }
+        # 同步到对象注册表 (存档/读档用)
+        self.script_objects[cid] = {
+            "kind": "char", "image": default or (
+                next(iter(props.values())) if props else None),
+            "props": dict(stmt.kwargs),
+        }
+        self.engine.emit("character_register", id=cid, name=name)
+        log.info(f"角色已注册: {cid} ({name}), 立绘 {len(props)} 张")
         return None
 
     def _cmd_show(self, stmt):
         if not stmt.args:
             return None
         sid = stmt.args[0]
-        props = {}
-        # 支持 `show id at pos` / `show id with effect`
         args = stmt.args[1:]
+        props = {}
         pos = None
         if "at" in args:
             idx = args.index("at")
@@ -274,6 +447,28 @@ class Runtime:
             idx = args.index("with")
             if idx + 1 < len(args):
                 props["effect"] = args[idx + 1]
+        # 角色立绘: show <角色id> [立绘名] [at pos] [with effect]
+        if sid in self.characters:
+            char = self.characters[sid]
+            pose = None
+            for a in args:
+                if a not in ("at", "with") and pos is None and "effect" not in props:
+                    pose = a
+                    break
+            if pose is None:
+                pose = char.get("default")
+            img = char["sprites"].get(pose) or char.get("default")
+            if not img:
+                log.warning(f"第{stmt.line}行: 角色 {sid} 的立绘 {pose!r} 未定义")
+                return None
+            self.engine.display.show_sprite(
+                sid, img, pos or char.get("pos"), char.get("scale"),
+                char.get("mode"), props.get("effect"))
+            spr = self.engine.display.sprites.get(sid)
+            if spr is not None:
+                spr.props["pose"] = pose
+                spr.props["image"] = img
+            return None
         # 直接 show 已创建对象: 从 pending props 恢复
         if self.pending_create and self.pending_create.get("id") == sid:
             p = self.pending_create
@@ -286,10 +481,14 @@ class Runtime:
         if self.engine.display.sprites.get(sid):
             self.engine.display.show_sprite(sid, None, pos, effect=props.get("effect"))
             return None
-        # 纯对象 id (如 weight 创建的 bg 对象)
+        # 纯对象 id (weight 创建的全屏对象: 按全屏立绘显示, 兼容旧脚本)
         if sid in self._created_objects:
             obj = self._created_objects.pop(sid)
             self._apply_created(obj)
+            if obj.get("kind", "weight") == "weight" and obj.get("image"):
+                self.engine.display.show_sprite(
+                    sid, obj.get("image"), "center", mode="full",
+                    effect=obj.get("effect"))
             return None
         log.warning(f"第{stmt.line}行: show 的对象 {sid!r} 不存在")
         return None
@@ -338,17 +537,16 @@ class Runtime:
         self._apply_created({"kind": p.get("kind", "weight"), "id": ident, **p})
 
     def _apply_created(self, obj):
-        """应用 weight/sprite 创建结果。"""
+        """应用对象创建结果。背景一律走 scene/bg 指令;
+        weight 仅保留为"全屏图层对象" (兼容旧脚本, 不再设置背景)。"""
         kind = obj.get("kind", "weight")
         ident = obj.get("id")
         if not ident:
             return
         if kind == "weight":
             self._created_objects[ident] = obj
-            # weight = 背景对象: 立即设为背景
-            img_path = obj.get("image")
-            if img_path:
-                self.engine.display.set_bg(img_path, obj.get("effect"))
+            log.warning(f"对象 {ident}: weight 已不承担背景职责, "
+                        f"背景请改用 scene/bg 指令")
         else:
             self.engine.display.show_sprite(
                 ident, obj.get("image"), obj.get("pos"),
@@ -372,7 +570,13 @@ class Runtime:
         if not text:
             log.warning(f"第{stmt.line}行: say 内容为空")
             return None
-        self.engine.display.show_text(text, speaker)
+        # 台词分类: 角色 id -> 显示角色名; 旁白 -> 无名字框; 其他 -> 原样
+        display_speaker = None
+        if speaker in self.characters:
+            display_speaker = self.characters[speaker]["name"]
+        elif speaker and speaker != "旁白":
+            display_speaker = speaker
+        self.engine.display.show_text(text, display_speaker)
         self.blocked = "text"
         return BLOCK
 
@@ -576,22 +780,43 @@ class Runtime:
     # 存档快照
     # ==================================================================
     def snapshot(self) -> dict:
+        """导出运行时状态供存档。
+
+        对象以脚本 id 存储 (不存图片路径), 图片路径以脚本为准。
+        """
+        d = self.engine.display
         return {
             "vars": dict(self.vars),
             "label": self.current_label,
             "ip": self.ip,
             "script": os.path.basename(self.script_path) if self.script_path else None,
-            "bg": None,
-            "sprites": self.engine.display.sprite_state(),
+            # 调用栈: 每帧 (标签, 栈内 ip), 标签名可序列化
+            "call_stack": [(lbl, stk_ip)
+                           for (_stmts, stk_ip, lbl) in self.call_stack if lbl],
+            # 阻塞状态 (读档后恢复, 支持在文本/选择支处继续)
+            "blocked": self.blocked,
+            "text": d.full_text if self.blocked == "text" else None,
+            "speaker": d.speaker if self.blocked == "text" else None,
+            "choices": d.choices if self.blocked == "choice" else None,
+            # 视觉与音频 (背景/立绘存脚本 id, 路径以脚本为准)
+            "bg_id": d.bg_id,
+            "bg_scene": d.bg_scene,
+            "bg_pose": d.bg_pose,
+            "bg": d.bg_path if d.bg_id is None and d.bg_scene is None else None,
+            "sprites": d.sprite_state(),
+            "music": self.engine.audio.current_bgm,
         }
 
     def restore(self, data: dict) -> None:
+        """从存档恢复运行时状态。"""
         self.vars = dict(data.get("vars", {}))
         label = data.get("label")
         ip = data.get("ip", 0)
+        # 恢复调用栈
         self.call_stack = []
-        self.blocked = None
-        self.sleep_until = None
+        for lbl, stk_ip in data.get("call_stack", []):
+            if lbl in self.labels:
+                self.call_stack.append((self.labels[lbl], stk_ip, lbl))
         if label and label in self.labels:
             self.statements = self.labels[label]
             self.ip = int(ip)
@@ -602,3 +827,11 @@ class Runtime:
             self.current_label = "start"
         self.running = True
         self.ended = False
+        self.sleep_until = None
+        # 重建角色表/场景表 (定义可能位于存档点之前)
+        self._rebuild_characters()
+        self._rebuild_scenes()
+        # 阻塞状态: text / choice 恢复 (由 display.restore_state 配合显示),
+        # sleep 不恢复 (剩余等待时间无意义)
+        blocked = data.get("blocked")
+        self.blocked = blocked if blocked in ("text", "choice") else None
