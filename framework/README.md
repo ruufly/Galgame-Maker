@@ -35,6 +35,10 @@ window
     icon: "materials/image/icon.png"
     fps: 60
     fullscreen: false
+    confirm_quit: true                   # 退出时弹确认框 (关窗口/ESC/退出按钮)
+    confirm_quit_text: "确定要退出游戏吗？"
+    confirm_quit_yes: "退出"
+    confirm_quit_no: "继续游戏"
 ```
 
 引擎最小用法 (Python):
@@ -124,10 +128,25 @@ start:
     bg school with blinds              #   blinds 百叶窗
     bg school with wipe                #   wipe 等插件自定义效果
 
-    # 流程控制
+# 流程控制
     jump label_a                # 跳转
     call sub_routine            # 调用 (可 return)
     return
+
+# 标题画面 (放在 start 标签开头)
+    title
+        image: "materials/title.png"     # 可选: 标题图片 (显示在文字上方)
+        caption: "Galgame Maker"         # 标题文字 (支持富文本, 可留空)
+        title_x: center                  # 标题水平: center/left/right/数字
+        title_y: 210                     # 标题垂直中心 (像素)
+        start: game_start                # "开始游戏" -> 跳转标签 (必填)
+        start_text: "开始游戏"           # 自定义按钮文本
+        load: 0                          # 可选: 读取存档槽位
+        load_text: "读取存档"
+        quit: true                       # 可选: 退出按钮
+        quit_text: "退出游戏"
+        button_x: center                 # 按钮区水平锚点
+        button_y: 420                    # 按钮区垂直锚点
 
     # 音频 / 转场 / 存档 / 结束
     music "bgm.mp3"             # 循环播放

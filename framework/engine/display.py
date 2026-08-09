@@ -319,6 +319,22 @@ class Display:
         self.choice_rects = []
         self.hover_index = -1
 
+        # 标题画面
+        self.title_active = False
+        self.title_caption = ""
+        self.title_image = None    # 标题图片 surface (可选)
+        self.title_items = []      # [(label, action)], action: {"jump"|"load"|"quit"}
+        self.title_rects = []
+        self.title_anchor = (0, 0)  # 标题 (文字/图片) 中心点
+
+        # 确认对话框 (退出确认等)
+        self.confirm_active = False
+        self.confirm_text = ""
+        self.confirm_yes = "是"
+        self.confirm_no = "否"
+        self.confirm_panel = pygame.Rect(0, 0, 0, 0)
+        self.confirm_rects = []    # [是, 否]
+
         # 全局黑幕 (fadeout / fade)
         self.fade_alpha = 0.0
         self.fade_target = 0.0
@@ -749,6 +765,160 @@ class Display:
         return -1
 
     # ==================================================================
+    # 标题画面
+    # ==================================================================
+    def _resolve_title_x(self, token):
+        """解析标题/按钮的水平锚点: center/left/right/数字(像素)。"""
+        s = str(token or "center").strip().lower()
+        if s == "left":
+            return self.width * 0.25
+        if s == "right":
+            return self.width * 0.75
+        try:
+            return float(s)
+        except ValueError:
+            return self.width / 2
+
+    def _resolve_title_y(self, token, default_ratio=0.30):
+        """解析标题/按钮的垂直锚点: 数字(像素), 否则按比例。"""
+        try:
+            return float(token)
+        except (TypeError, ValueError):
+            return self.height * default_ratio
+
+    def show_title(self, caption: str, items, image: str = None,
+                   pos: dict = None) -> None:
+        """显示标题画面。
+
+        items: [(按钮文字, action)], action 为 {"jump": 标签} /
+               {"load": 槽位} / {"quit": True}
+        image: 标题图片路径 (可选, 显示在文字上方)
+        pos:   {"title_x", "title_y", "button_x", "button_y"}
+        """
+        pos = pos or {}
+        self.title_active = True
+        self.title_caption = caption
+        self.title_items = list(items)
+        self.title_image = self.load_image(image) if image else None
+        w, h = self.width, self.height
+        self.title_anchor = (
+            self._resolve_title_x(pos.get("title_x", "center")),
+            self._resolve_title_y(pos.get("title_y"), 0.30),
+        )
+        # 按钮区锚点 (默认居中, 纵坐标默认 52% 高度)
+        bx = self._resolve_title_x(pos.get("button_x", "center"))
+        by = self._resolve_title_y(pos.get("button_y"), 0.52)
+        n = len(items)
+        bw, bh = int(w * 0.36), 56
+        gap = 14
+        self.title_rects = [
+            pygame.Rect(int(bx - bw / 2), int(by + i * (bh + gap)), bw, bh)
+            for i in range(n)
+        ]
+        self.engine.emit("title_show", caption=caption,
+                         items=[t for t, _ in items])
+
+    def hit_title(self, pos) -> int:
+        if not self.title_active:
+            return -1
+        for idx, rect in enumerate(self.title_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return -1
+
+    def _draw_title(self, buf) -> None:
+        ui.dim_overlay(buf, 120)
+        tx, ty = self.title_anchor
+        w, h = self.width, self.height
+        # 标题图片 (等比缩放到宽度 70%)
+        text_y = ty
+        if self.title_image is not None:
+            img = self.title_image
+            max_w = int(w * 0.70)
+            if img.get_width() > max_w:
+                ratio = max_w / img.get_width()
+                img = pygame.transform.smoothscale(
+                    img, (max_w, int(img.get_height() * ratio)))
+            buf.blit(img, img.get_rect(center=(int(tx), int(ty))))
+            text_y = ty + img.get_height() / 2 + 18
+        # 标题文字 (支持富文本, 带投影; 与图片共存时显示在图片下方)
+        if self.title_caption:
+            runs = self._rich.parse(str(self.title_caption), base_size=56)
+            self._rich.draw_centered(buf, runs, int(tx) + 3, int(text_y) + 3)
+            self._rich.draw_centered(buf, runs, int(tx), int(text_y))
+        # 菜单按钮
+        mouse = pygame.mouse.get_pos()
+        for idx, (label, action) in enumerate(self.title_items):
+            rect = self.title_rects[idx]
+            hovered = rect.collidepoint(mouse)
+            ui.panel(buf, rect,
+                     bg_color=(60, 60, 90, 230) if hovered else (35, 35, 50, 220),
+                     border_color=(255, 220, 120) if hovered else (150, 150, 170),
+                     border_width=2, radius=6)
+            runs_b = self._rich.parse(str(label), base_size=28)
+            self._rich.draw_centered(buf, runs_b, rect.centerx,
+                                     rect.centery,
+                                     alpha=255 if hovered else 215)
+
+    # ==================================================================
+    # 确认对话框
+    # ==================================================================
+    def show_confirm(self, text: str, yes_text: str = "是",
+                     no_text: str = "否") -> None:
+        """显示确认对话框 (如退出确认), 阻塞交互直到选择。"""
+        self.confirm_active = True
+        self.confirm_text = text
+        self.confirm_yes = yes_text
+        self.confirm_no = no_text
+        w, h = self.width, self.height
+        pw, ph = int(w * 0.5), int(h * 0.30)
+        self.confirm_panel = pygame.Rect((w - pw) // 2, (h - ph) // 2, pw, ph)
+        bw, bh = int(pw * 0.30), 46
+        gap = 18
+        total = bw * 2 + gap
+        x0 = (w - total) // 2
+        y = self.confirm_panel.bottom - bh - 22
+        self.confirm_rects = [
+            pygame.Rect(x0, y, bw, bh),
+            pygame.Rect(x0 + bw + gap, y, bw, bh),
+        ]
+        self.engine.emit("confirm_show", text=text)
+
+    def hit_confirm(self, pos) -> int:
+        if not self.confirm_active:
+            return -1
+        for idx, rect in enumerate(self.confirm_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return -1
+
+    def _draw_confirm(self, buf) -> None:
+        ui.dim_overlay(buf, 170)
+        ui.panel(buf, self.confirm_panel,
+                 bg_color=(25, 25, 38, 245), border_color=(200, 200, 220),
+                 border_width=2, radius=10)
+        # 提示文本 (富文本, 居中换行)
+        runs = self._rich.parse(str(self.confirm_text), base_size=28)
+        pad = 24
+        self._rich.draw(buf, runs, self.confirm_panel.x + pad,
+                        self.confirm_panel.y + 30,
+                        self.confirm_panel.w - pad * 2, align="center")
+        # 是/否按钮
+        mouse = pygame.mouse.get_pos()
+        for idx, label in enumerate((self.confirm_yes, self.confirm_no)):
+            rect = self.confirm_rects[idx]
+            hovered = rect.collidepoint(mouse)
+            accent = (0, 170, 90) if idx == 0 else (170, 60, 60)
+            ui.panel(buf, rect,
+                     bg_color=(*accent, 235) if hovered else (*accent, 200),
+                     border_color=(255, 255, 255, 160) if hovered
+                     else (0, 0, 0, 120),
+                     border_width=2, radius=6)
+            runs_b = self._rich.parse(str(label), base_size=24)
+            self._rich.draw_centered(buf, runs_b, rect.centerx,
+                                     rect.centery)
+
+    # ==================================================================
     # 转场 / 震动 / 通知 / 结束
     # ==================================================================
     def start_fadeout(self, duration: float = None) -> None:
@@ -865,7 +1035,11 @@ class Display:
             black.set_alpha(int(min(255, self.fade_alpha)))
             buf.blit(black, (0, 0))
 
-        if self.choice_active:
+        if self.confirm_active:
+            self._draw_confirm(buf)
+        elif self.title_active:
+            self._draw_title(buf)
+        elif self.choice_active:
             self._draw_choices(buf)
         elif self.text_active:
             self._draw_textbox(buf)

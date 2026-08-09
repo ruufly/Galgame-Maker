@@ -83,6 +83,12 @@ class GameEngine:
         self.plugins_dir = plugins_dir
         self.autoload_plugins = autoload_plugins
 
+        # 退出确认 (window 配置, 脚本可自定义)
+        self.confirm_quit_enabled = False
+        self.confirm_quit_text = "确定要退出游戏吗？"
+        self.confirm_quit_yes = "退出"
+        self.confirm_quit_no = "继续游戏"
+
     # ==================================================================
     # 字体
     # ==================================================================
@@ -196,7 +202,7 @@ class GameEngine:
 
     def handle_event(self, event) -> None:
         if event.type == pygame.QUIT:
-            self.running = False
+            self.request_quit()   # 右上角关闭按钮 -> 退出确认
         elif event.type == pygame.KEYDOWN:
             self._handle_key(event.key)
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -210,14 +216,42 @@ class GameEngine:
         elif key == pygame.K_F9:
             self.load_game(0)
         elif key == pygame.K_ESCAPE:
-            self.running = False
+            self.request_quit()
 
     # ==================================================================
     # 点击推进逻辑
     # ==================================================================
     def on_click(self, pos) -> None:
-        """处理一次点击: 选项命中 -> 选择; 文本 -> 推进; 否则推进脚本。"""
+        """处理一次点击: 确认框 -> 标题菜单 -> 选择支 -> 文本 -> 推进。"""
         d = self.display
+        # 0) 确认对话框 (最高优先级)
+        if d.confirm_active:
+            idx = d.hit_confirm(pos)
+            if idx < 0:
+                return
+            d.confirm_active = False
+            self.emit("confirm_choice", index=idx)
+            if idx == 0:      # 是 -> 确认执行
+                self.quit()
+            return
+        # 1) 标题画面菜单
+        if d.title_active:
+            idx = d.hit_title(pos)
+            if idx < 0:
+                return
+            label, action = d.title_items[idx]
+            d.title_active = False
+            d.title_items = []
+            self.emit("title_choice", index=idx, label=label, action=action)
+            if "jump" in action:
+                self.runtime.release("title")
+                self.runtime._jump_to(action["jump"])
+                self.runtime.advance()
+            elif "load" in action:
+                self.load_game(int(action["load"]))
+            elif "quit" in action:
+                self.request_quit()
+            return
         # 1) 选项
         if d.choice_active:
             idx = d.hit_choice(pos)
@@ -291,6 +325,32 @@ class GameEngine:
     def show_notice(self, text: str, seconds: float = 1.5) -> None:
         """在屏幕顶部显示一条通知 (供插件调用)。"""
         self.display.show_notice(text, seconds)
+
+    # ==================================================================
+    # 退出确认
+    # ==================================================================
+    def apply_config(self, cfg: dict) -> None:
+        """应用脚本 window 配置中的运行时选项 (窗口已在构造时创建)。"""
+        if "confirm_quit" in cfg:
+            self.confirm_quit_enabled = str(cfg["confirm_quit"]).lower() in (
+                "true", "1", "yes", "on")
+        if "confirm_quit_text" in cfg:
+            self.confirm_quit_text = str(cfg["confirm_quit_text"])
+        if "confirm_quit_yes" in cfg:
+            self.confirm_quit_yes = str(cfg["confirm_quit_yes"])
+        if "confirm_quit_no" in cfg:
+            self.confirm_quit_no = str(cfg["confirm_quit_no"])
+        log.info(f"退出确认: {self.confirm_quit_enabled} "
+                 f"({self.confirm_quit_text!r})")
+
+    def request_quit(self) -> None:
+        """请求退出: 启用确认时弹对话框, 否则直接退出。"""
+        if self.confirm_quit_enabled and not self.display.confirm_active:
+            self.display.show_confirm(
+                self.confirm_quit_text, self.confirm_quit_yes,
+                self.confirm_quit_no)
+        else:
+            self.quit()
 
     # ==================================================================
     # 存档快捷方式

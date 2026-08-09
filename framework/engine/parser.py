@@ -266,9 +266,9 @@ class Parser:
         if op == "if" and rest and rest[-1] == ("sym", ":"):
             return self._parse_if(i, indent, lineno, content)
 
-        # ---- 对象创建: weight / sprite / object / char / scene / window + 属性块
+        # ---- 对象创建: weight / sprite / object / char / scene / window / title + 属性块
         if op in ("weight", "sprite", "object", "char", "character",
-                  "scene", "scenery", "window", "config"):
+                  "scene", "scenery", "window", "config", "title"):
             return self._parse_create(i, indent, lineno, content, op, rest)
 
         # ---- set: 保留字符串引号, 表达式部分重构 ----------------

@@ -72,6 +72,7 @@ def launch(gal_file: str) -> int:
     log.info(f"窗口配置: {width}x{height} fps={fps} title={title!r}"
              f" fullscreen={fullscreen}")
     engine = GameEngine(width, height, title, fps, fullscreen=fullscreen)
+    engine.apply_config(cfg)   # 运行时选项 (退出确认等)
     if icon:
         engine.script_dir = os.path.dirname(gal_file)
         engine.set_icon(icon)

@@ -65,6 +65,7 @@ class Runtime:
             "nar": self._cmd_text,
             "narrate": self._cmd_text,
             "say": self._cmd_say,
+            "title": self._cmd_title,
             "choice": self._cmd_choice,
             "set": self._cmd_set,
             "if": self._cmd_if,
@@ -702,6 +703,56 @@ class Runtime:
         return BLOCK
 
     # -- 选项 -----------------------------------------------------------
+    # -- 标题画面 -------------------------------------------------------
+    def _cmd_title(self, stmt):
+        """显示标题画面 (阻塞直到玩家选择)。
+
+        title
+            caption: "游戏标题"         # 标题文字 (支持富文本, 可留空)
+            image: "materials/title.png"  # 可选: 标题图片 (显示在文字上方)
+            title_x: center            # 标题水平位置: center/left/right/数字
+            title_y: 200               # 标题垂直中心 (像素)
+            start: game_start          # "开始游戏" -> 跳转标签 (必填)
+            start_text: "开始游戏"     # 可选: 自定义按钮文本
+            load: 0                    # 可选: 读取存档槽位
+            load_text: "读取存档"
+            quit: true                 # 可选: 退出按钮
+            quit_text: "退出游戏"
+            button_x: center           # 按钮区水平锚点
+            button_y: 400              # 按钮区垂直锚点 (第一个按钮中心)
+        """
+        props = dict(stmt.kwargs)
+        caption = str(props.get("caption") or props.get("title") or "")
+        image = props.get("image")
+        pos = {
+            "title_x": props.get("title_x", "center"),
+            "title_y": props.get("title_y"),
+            "button_x": props.get("button_x", "center"),
+            "button_y": props.get("button_y"),
+        }
+        items = []
+        start_label = props.get("start")
+        if start_label:
+            text = str(props.get("start_text") or "开始游戏")
+            items.append((text, {"jump": str(start_label)}))
+        if "load" in props:
+            try:
+                slot = int(props["load"])
+            except (TypeError, ValueError):
+                slot = 0
+                log.warning(f"第{stmt.line}行: title 的 load 槽位无效")
+            text = str(props.get("load_text") or "读取存档")
+            items.append((text, {"load": slot}))
+        if str(props.get("quit", "false")).lower() in ("true", "1", "yes", "on"):
+            text = str(props.get("quit_text") or "退出游戏")
+            items.append((text, {"quit": True}))
+        if not items:
+            log.warning(f"第{stmt.line}行: title 没有菜单项")
+            return None
+        self.engine.display.show_title(caption, items, image, pos)
+        self.blocked = "title"
+        return BLOCK
+
     def _cmd_choice(self, stmt):
         options = stmt.kwargs.get("options", [])
         # 选项文本支持变量插值

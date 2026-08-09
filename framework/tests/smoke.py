@@ -46,14 +46,17 @@ def test_parser():
     with open(script_path, "r", encoding="utf-8") as f:
         text = f.read()
     script = parse(text, script_path)
-    check("标签数量 == 5", len(script.labels) == 5, str(list(script.labels)))
+    check("标签数量 == 6", len(script.labels) == 6, str(list(script.labels)))
     check("存在 start 标签", "start" in script.labels)
-    check("存在 like_it 标签", "like_it" in script.labels)
+    check("存在 game_start 标签", "game_start" in script.labels)
     start = script.labels["start"]
     ops = [s.op for s in start]
+    check("start 块含 title 指令", "title" in ops, str(ops))
     check("start 块含 bg 指令", "bg" in ops, str(ops))
-    check("start 块含 choice", "choice" in ops)
-    choice = next(s for s in start if s.op == "choice")
+    game_start = script.labels["game_start"]
+    gops = [s.op for s in game_start]
+    check("game_start 含 choice", "choice" in gops)
+    choice = next(s for s in game_start if s.op == "choice")
     check("choice 有 3 个选项", len(choice.kwargs["options"]) == 3,
           str(choice.kwargs))
     after = script.labels["after_choice"]
@@ -300,6 +303,8 @@ def test_demo_run():
     demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
     rt.load_script(demo)
     rt.start()
+    check("demo 停在标题画面", rt.blocked == "title" and d.title_active)
+    engine.on_click(d.title_rects[0].center)   # 点击"开始游戏"
     check("demo 停在第一句文本", rt.blocked == "text" and d.full_text != "")
     check("demo 背景已设置", d.bg_surface is not None)
     check("demo 角色立绘已显示",
@@ -453,6 +458,8 @@ def test_save_id_based():
     try:
         rt.load_script(demo)
         rt.start()
+        check("demo 先显示标题", d.title_active)
+        engine.on_click(d.title_rects[0].center)   # 开始游戏 -> game_start
         # 对象注册表: producer (角色) + school (场景)
         check("注册表含 producer/school",
               "producer" in rt.script_objects and "school" in rt.script_objects,
@@ -925,6 +932,9 @@ def test_window_config():
           int(cfg.get("width")) == 1280 and int(cfg.get("height")) == 720)
     check("解析窗口图标", cfg.get("icon") == "materials/image/icon.png")
     check("解析 fps", int(cfg.get("fps")) == 60)
+    check("解析退出确认配置", str(cfg.get("confirm_quit")) == "true"
+          and "确定要退出游戏吗？" in str(cfg.get("confirm_quit_text")),
+          str(cfg.get("confirm_quit")))
 
     # 无 window 配置的脚本 -> 空 dict
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -946,6 +956,116 @@ def test_window_config():
     check("set_icon 无异常", True)
     engine.quit()
     import pygame
+    pygame.quit()
+
+
+def test_title_screen():
+    print("== 标题画面 ==")
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+
+    def fresh():
+        eng = GameEngine(640, 360, "title_test")
+        eng.runtime.load_script(demo)
+        eng.runtime.start()
+        return eng
+
+    try:
+        engine = fresh()
+        d = engine.display
+        check("标题画面激活", d.title_active)
+        check("标题文字富文本", d.title_caption == "{c=#ffcc00}欢迎光临{/c}",
+              str(d.title_caption))
+        check("标题图片加载", d.title_image is not None)
+        check("标题菜单 3 项", len(d.title_items) == 3, str(d.title_items))
+        check("开始按钮自定义文本", d.title_items[0][0] == "开始游戏",
+              str(d.title_items[0]))
+        check("标题位置自定义", d.title_anchor[1] == 210.0,
+              str(d.title_anchor))
+        check("按钮位置自定义", d.title_rects[0].y == 420,
+              str(d.title_rects[0]))
+        engine.draw()
+        check("标题绘制无异常", True)
+
+        # 点击"开始游戏" -> 跳转 game_start 进入剧情
+        engine.on_click(d.title_rects[0].center)
+        check("开始游戏跳转", engine.runtime.current_label == "game_start")
+        check("标题已关闭", not d.title_active)
+        check("进入剧情文本", engine.runtime.blocked == "text"
+              and d.full_text != "")
+        engine.save_game(0, silent=True)   # 在剧情处存档
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+        # 读档按钮: 从标题读档恢复剧情
+        engine = fresh()
+        d = engine.display
+        check("标题再次激活", d.title_active)
+        engine.on_click(d.title_rects[1].center)   # "读取存档"
+        check("读档按钮恢复剧情", engine.runtime.blocked == "text"
+              and d.full_text != "")
+        engine.quit()
+        pygame.quit()
+
+        # 退出按钮 -> 弹确认框
+        engine = fresh()
+        d = engine.display
+        engine.running = True
+        engine.apply_config({"confirm_quit": "true"})
+        engine.on_click(d.title_rects[2].center)   # "退出游戏"
+        check("标题退出弹确认框", d.confirm_active and engine.running is True)
+        engine.on_click(d.confirm_rects[0].center)  # 确认退出
+        check("确认后引擎关闭", engine.running is False)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_confirm_quit():
+    print("== 退出确认 ==")
+    import pygame
+    # 默认不启用: 直接退出
+    engine = GameEngine(640, 360, "test19")
+    engine.running = True
+    engine.request_quit()
+    check("默认无确认直接退出", engine.running is False)
+    engine.quit()
+    pygame.quit()
+
+    # 启用确认
+    engine = GameEngine(640, 360, "test20")
+    d = engine.display
+    engine.running = True
+    engine.apply_config({"confirm_quit": "true",
+                         "confirm_quit_text": "真的要走？",
+                         "confirm_quit_yes": "走",
+                         "confirm_quit_no": "留"})
+    engine.request_quit()
+    check("确认框弹出", d.confirm_active and engine.running is True)
+    check("确认文本自定义", d.confirm_text == "真的要走？")
+    check("确认按钮文本自定义",
+          d.confirm_yes == "走" and d.confirm_no == "留")
+    engine.draw()
+    check("确认框绘制无异常", True)
+    engine.on_click(d.confirm_rects[1].center)     # 点"否"
+    check("点否继续游戏", not d.confirm_active and engine.running is True)
+    engine.request_quit()
+    engine.on_click(d.confirm_rects[0].center)     # 点"是"
+    check("点是退出游戏", engine.running is False)
+    engine.quit()
+    pygame.quit()
+
+    # 右上角关闭按钮 (QUIT 事件) -> 确认框
+    engine = GameEngine(640, 360, "test21")
+    d = engine.display
+    engine.running = True
+    engine.apply_config({"confirm_quit": "true"})
+    engine.handle_event(pygame.event.Event(pygame.QUIT))
+    check("QUIT 事件弹确认", d.confirm_active and engine.running is True)
+    engine.on_click(d.confirm_rects[1].center)
+    check("QUIT 确认否后继续", engine.running is True)
+    engine.quit()
     pygame.quit()
 
 
@@ -1075,6 +1195,18 @@ def main():
         test_window_config()
     except Exception as exc:
         print(f"  [ERROR] 窗口配置测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_title_screen()
+    except Exception as exc:
+        print(f"  [ERROR] 标题画面测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_confirm_quit()
+    except Exception as exc:
+        print(f"  [ERROR] 退出确认测试异常: {exc}")
         import traceback
         traceback.print_exc()
 
