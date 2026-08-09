@@ -335,6 +335,18 @@ class Display:
         self.confirm_panel = pygame.Rect(0, 0, 0, 0)
         self.confirm_rects = []    # [是, 否]
 
+        # 系统菜单 (ESC 打开)
+        self.system_menu_active = False
+        self.system_menu_items = []   # [(text, action)]
+        self.system_menu_rects = []
+
+        # 存档槽位选择界面 (save/load)
+        self.slot_menu_active = False
+        self.slot_menu_mode = "load"  # "save" / "load"
+        self.slot_menu_slots = []     # [{slot, time, label, preview, empty}]
+        self.slot_menu_rects = []
+        self.slot_menu_back_rect = pygame.Rect(0, 0, 0, 0)
+
         # 全局黑幕 (fadeout / fade)
         self.fade_alpha = 0.0
         self.fade_target = 0.0
@@ -675,8 +687,17 @@ class Display:
                 spr.center = [float(item["cx"]), float(item["cy"])]
             spr._recalc()
 
+    def clear_fade(self) -> None:
+        """清除黑幕与未完成的背景过渡 (回标题/读档时调用)。"""
+        self.fade_alpha = 0.0
+        self.fade_target = 0.0
+        self._transition = None
+        self.ending = False
+        self.ending_timer = 0.0
+
     def restore_state(self, data: dict) -> None:
         """从存档恢复视觉状态: 背景 / 立绘 / 正在显示的文本或选择支。"""
+        self.clear_fade()   # 读档后不应残留黑幕/结束画面
         bg_id = data.get("bg_id")
         bg_scene = data.get("bg_scene")
         if bg_id:
@@ -892,6 +913,128 @@ class Display:
                 return idx
         return -1
 
+    # ==================================================================
+    # 系统菜单 (ESC) / 存档槽位选择
+    # ==================================================================
+    def show_system_menu(self, items) -> None:
+        """显示系统菜单 (游戏内 ESC)。items: [(文字, action), ...]"""
+        self.system_menu_active = True
+        self.system_menu_items = list(items)
+        w, h = self.width, self.height
+        n = len(items)
+        bw, bh = int(w * 0.34), 52
+        gap = 12
+        bx = (w - bw) // 2
+        total = n * bh + (n - 1) * gap
+        y0 = (h - total) // 2
+        self.system_menu_rects = [
+            pygame.Rect(bx, y0 + i * (bh + gap), bw, bh) for i in range(n)
+        ]
+
+    def hit_system_menu(self, pos) -> int:
+        if not self.system_menu_active:
+            return -1
+        for idx, rect in enumerate(self.system_menu_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return -1
+
+    def show_slot_menu(self, slots, mode: str = "load") -> None:
+        """显示存档槽位选择界面。slots: [{slot,time,label,preview,empty}]"""
+        self.slot_menu_active = True
+        self.slot_menu_mode = mode
+        self.slot_menu_slots = list(slots)
+        w, h = self.width, self.height
+        # 网格: 2 列 x N/2 行
+        cols = 2
+        rows = (len(slots) + 1) // 2
+        panel_w, panel_h = int(w * 0.72), int(h * 0.66)
+        px, py = (w - panel_w) // 2, int(h * 0.16)
+        gw, gh = int(panel_w * 0.42), int((panel_h - 80) / rows)
+        gap_x, gap_y = int(panel_w * 0.08), 10
+        x0 = px + int(panel_w * 0.045)
+        y0 = py + 46
+        self.slot_menu_rects = []
+        for i in range(len(slots)):
+            r, c = divmod(i, cols)
+            self.slot_menu_rects.append(
+                pygame.Rect(x0 + c * (gw + gap_x), y0 + r * (gh + gap_y),
+                            gw, gh))
+        self.slot_menu_back_rect = pygame.Rect(
+            px + panel_w - 110, py + panel_h - 44, 90, 34)
+
+    def hit_slot_menu(self, pos):
+        """返回 (槽位索引, "slot") / ("back",) / (None,)。"""
+        if not self.slot_menu_active:
+            return None
+        if self.slot_menu_back_rect.collidepoint(pos):
+            return "back"
+        for idx, rect in enumerate(self.slot_menu_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return None
+
+    def _draw_system_menu(self, buf) -> None:
+        ui.dim_overlay(buf, 150)
+        mouse = pygame.mouse.get_pos()
+        for idx, (label, action) in enumerate(self.system_menu_items):
+            rect = self.system_menu_rects[idx]
+            hovered = rect.collidepoint(mouse)
+            ui.panel(buf, rect,
+                     bg_color=(60, 60, 90, 230) if hovered else (35, 35, 50, 220),
+                     border_color=(255, 220, 120) if hovered else (150, 150, 170),
+                     border_width=2, radius=6)
+            runs = self._rich.parse(str(label), base_size=28)
+            self._rich.draw_centered(buf, runs, rect.centerx, rect.centery,
+                                     alpha=255 if hovered else 215)
+
+    def _draw_slot_menu(self, buf) -> None:
+        ui.dim_overlay(buf, 160)
+        w, h = self.width, self.height
+        panel_w, panel_h = int(w * 0.72), int(h * 0.66)
+        px, py = (w - panel_w) // 2, int(h * 0.16)
+        ui.panel(buf, (px, py, panel_w, panel_h),
+                 bg_color=(25, 25, 38, 245), border_color=(200, 200, 220),
+                 border_width=2, radius=10)
+        title = "选择存档" if self.slot_menu_mode == "save" else "选择读档"
+        runs_t = self._rich.parse(title, base_size=30)
+        self._rich.draw_centered(buf, runs_t, w // 2, py + 22)
+        # 槽位格子
+        mouse = pygame.mouse.get_pos()
+        for idx, info in enumerate(self.slot_menu_slots):
+            rect = self.slot_menu_rects[idx]
+            hovered = rect.collidepoint(mouse)
+            empty = info.get("empty")
+            ui.panel(buf, rect,
+                     bg_color=(55, 55, 75, 235) if hovered
+                     else (40, 40, 55, 220),
+                     border_color=(255, 220, 120) if hovered
+                     else (140, 140, 160),
+                     border_width=2, radius=8)
+            slot_no = info.get("slot", idx) + 1
+            if empty:
+                text1 = f"槽位 {slot_no}"
+                text2 = "（空存档）"
+                color = (150, 150, 160)
+            else:
+                text1 = f"槽位 {slot_no}   {info.get('time', '')}"
+                text2 = str(info.get("preview") or info.get("label") or "")
+                color = (235, 235, 240)
+            self._rich.draw(buf, self._rich.parse(text1, base_size=20),
+                            rect.x + 12, rect.y + 8, rect.w - 24)
+            self._rich.draw(buf, self._rich.parse(text2, base_size=18),
+                            rect.x + 12, rect.y + 34, rect.w - 24,
+                            max_lines=2)
+        # 返回按钮
+        back = self.slot_menu_back_rect
+        hovered = back.collidepoint(mouse)
+        ui.panel(buf, back,
+                 bg_color=(80, 60, 60, 235) if hovered else (60, 45, 45, 220),
+                 border_color=(255, 200, 140) if hovered else (160, 130, 120),
+                 border_width=2, radius=6)
+        runs_b = self._rich.parse("返回", base_size=20)
+        self._rich.draw_centered(buf, runs_b, back.centerx, back.centery)
+
     def _draw_confirm(self, buf) -> None:
         ui.dim_overlay(buf, 170)
         ui.panel(buf, self.confirm_panel,
@@ -1001,8 +1144,8 @@ class Display:
         if self.ending:
             self.ending_timer += dt
             if self.ending_timer >= 2.6:
-                pygame.event.post(pygame.event.Event(pygame.QUIT))
                 self.ending = False
+                self.engine.goto_title()   # 结束后回到标题画面
 
     # ==================================================================
     # 绘制
@@ -1037,6 +1180,10 @@ class Display:
 
         if self.confirm_active:
             self._draw_confirm(buf)
+        elif self.slot_menu_active:
+            self._draw_slot_menu(buf)
+        elif self.system_menu_active:
+            self._draw_system_menu(buf)
         elif self.title_active:
             self._draw_title(buf)
         elif self.choice_active:

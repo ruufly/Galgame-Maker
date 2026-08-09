@@ -363,6 +363,15 @@ start:
         engine.on_click((320, 180))   # 完成打字
         engine.on_click((320, 180))   # 推进
         check("读档后剧情继续", d.full_text == "第二句")
+
+        # 防御: fadeout 黑幕后存档读档, 黑幕应清除且剧情不跳标题
+        d.start_fadeout()
+        engine.save_game(0, silent=True)
+        engine.load_game(0)
+        check("读档后黑幕清除", d.fade_alpha == 0.0, str(d.fade_alpha))
+        check("读档后不进标题", not d.title_active)
+        check("读档后剧情位置正确", rt.current_label == "start"
+              and d.full_text == "第二句")
     finally:
         engine.quit()
         import pygame
@@ -997,11 +1006,21 @@ def test_title_screen():
         import pygame
         pygame.quit()
 
-        # 读档按钮: 从标题读档恢复剧情
+        # 读档按钮: 从标题打开槽位界面 -> 返回回标题 -> 再读档恢复剧情
         engine = fresh()
         d = engine.display
         check("标题再次激活", d.title_active)
         engine.on_click(d.title_rects[1].center)   # "读取存档"
+        check("打开读档槽位界面", d.slot_menu_active)
+        engine.on_click(d.slot_menu_back_rect.center)   # 返回
+        check("返回后回到标题画面", not d.slot_menu_active
+              and d.title_active)
+        # 再次进入并确认读档 (启用读档确认)
+        engine.apply_config({"confirm_load": "true"})
+        engine.on_click(d.title_rects[1].center)
+        engine.on_click(d.slot_menu_rects[0].center)   # 选槽位 1
+        check("读档确认框弹出", d.confirm_active)
+        engine.on_click(d.confirm_rects[0].center)     # 确认读档
         check("读档按钮恢复剧情", engine.runtime.blocked == "text"
               and d.full_text != "")
         engine.quit()
@@ -1067,6 +1086,84 @@ def test_confirm_quit():
     check("QUIT 确认否后继续", engine.running is True)
     engine.quit()
     pygame.quit()
+
+
+def test_system_menu():
+    print("== 系统菜单 / 多槽位存档 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test22")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        rt.start()
+        engine.on_click(d.title_rects[0].center)   # 开始游戏
+        # 游戏中按 ESC -> 系统菜单
+        engine.on_escape()
+        check("ESC 打开系统菜单", d.system_menu_active and engine.paused)
+        check("菜单 5 项", len(d.system_menu_items) == 5,
+              str([t for t, _ in d.system_menu_items]))
+        engine.draw()
+        check("菜单绘制无异常", True)
+        # 继续游戏
+        engine.on_click(d.system_menu_rects[0].center)
+        check("继续游戏关闭菜单", not d.system_menu_active
+              and not engine.paused)
+        # ESC -> 存档 -> 槽位界面
+        engine.on_escape()
+        engine.on_click(d.system_menu_rects[1].center)   # 存档
+        check("存档槽位界面", d.slot_menu_active
+              and d.slot_menu_mode == "save")
+        check("槽位列表 6 个", len(d.slot_menu_slots) == 6)
+        engine.on_click(d.slot_menu_rects[2].center)     # 存到槽位 3
+        check("保存到槽位 3", not d.slot_menu_active and not engine.paused)
+        check("槽位文件存在", engine.save._read_raw(2) is not None)
+
+        # ESC -> 读档 -> 槽位界面 -> 返回
+        engine.on_escape()
+        engine.on_click(d.system_menu_rects[2].center)   # 读取存档
+        check("读档槽位界面", d.slot_menu_active
+              and d.slot_menu_mode == "load")
+        check("槽位信息含时间", "time" in d.slot_menu_slots[2]
+              and d.slot_menu_slots[2]["time"], str(d.slot_menu_slots[2]))
+        engine.on_click(d.slot_menu_back_rect.center)    # 返回
+        check("返回系统菜单", d.slot_menu_active is False
+              and d.system_menu_active)
+
+        # 槽位界面读档恢复剧情
+        engine.on_click(d.system_menu_rects[2].center)
+        engine.on_click(d.slot_menu_rects[2].center)     # 读槽位 3
+        check("槽位读档恢复剧情", rt.blocked == "text" and d.full_text != ""
+              and not d.slot_menu_active and not engine.paused)
+
+        # 菜单"返回标题"
+        engine.on_escape()
+        engine.on_click(d.system_menu_rects[3].center)   # 返回标题
+        check("返回标题画面", d.title_active and not engine.paused)
+        check("标题菜单", len(d.title_items) == 3)
+
+        # 结束后回到标题: fadeout 黑幕后 ending, 黑幕应被清除
+        rt.call_stack = []
+        rt.blocked = None
+        rt.running = True
+        rt.ended = False
+        rt._jump_to("start")
+        rt.advance()          # 重新执行标题 (标题阻塞)
+        engine.on_click(d.title_rects[0].center)   # 开始
+        d.start_fadeout()     # 模拟 fadeout 黑幕
+        rt._cmd_ending(Statement(op="ending", line=0))
+        check("结束画面显示", d.ending)
+        for _ in range(200):
+            d.update(1 / 60)
+        check("结束后回到标题", d.title_active and not d.ending,
+              f"title={d.title_active} ending={d.ending}")
+        check("结束后黑幕清除", d.fade_alpha == 0.0, str(d.fade_alpha))
+        check("结束后背景恢复", d.bg_surface is not None)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
 
 
 def test_plugins_and_save():
@@ -1207,6 +1304,12 @@ def main():
         test_confirm_quit()
     except Exception as exc:
         print(f"  [ERROR] 退出确认测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_system_menu()
+    except Exception as exc:
+        print(f"  [ERROR] 系统菜单测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

@@ -47,6 +47,39 @@ class SaveManager:
             log.warning(f"读档失败 {path}: {exc}")
             return None
 
+    def _read_raw(self, slot: int) -> dict:
+        """直接读取槽位文件 (不发 load 事件, 供列表展示用)。"""
+        path = self._path(slot)
+        if not os.path.isfile(path):
+            return None
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+
+    def list_slots(self, count: int = 6) -> list:
+        """列出前 count 个槽位的信息, 供存档选择界面展示。
+
+        每项: {"slot": 索引, "time": 存档时间, "label": 所在标签,
+               "preview": 进度摘要, "empty": 是否空槽}
+        """
+        out = []
+        for slot in range(count):
+            data = self._read_raw(slot)
+            if data is None:
+                out.append({"slot": slot, "empty": True})
+                continue
+            preview = data.get("text") or data.get("label") or ""
+            out.append({
+                "slot": slot,
+                "time": data.get("_saved_at", ""),
+                "label": data.get("label") or "",
+                "preview": str(preview)[:24],
+                "empty": False,
+            })
+        return out
+
     def slots(self) -> list:
         d = os.path.join(self.engine.project_dir, "save")
         out = []

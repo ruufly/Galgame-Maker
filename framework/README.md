@@ -39,6 +39,10 @@ window
     confirm_quit_text: "确定要退出游戏吗？"
     confirm_quit_yes: "退出"
     confirm_quit_no: "继续游戏"
+    confirm_load: true                   # 读档前弹确认框
+    confirm_load_text: "确定要读取这个存档吗？"
+    confirm_load_yes: "读档"
+    confirm_load_no: "取消"
 ```
 
 引擎最小用法 (Python):
@@ -312,6 +316,9 @@ engine.ui.dim_overlay(surface, alpha=150)                   # 全屏半透明遮
   文本/选择支、背景 (场景 id + 背景名)、立绘 (id/立绘名/透明度/旋转
   角度/翻转/中心点) 与音乐; 在 `sleep` 阻塞时存档, 读档不会恢复
   剩余等待时间
+* 存档槽位: 6 个 (save/slot0-5.json), 由游戏内菜单 (ESC) 或标题画面的
+  "读取存档" 打开槽位选择界面; 槽位显示存档时间与进度摘要
+* 剧情结束 (`ending` 指令) 后自动回到标题画面; 菜单可随时"返回标题"
 * 存档中的背景/立绘以**脚本对象 id** 保存 (不存图片路径), 图片路径
   以脚本中的 `weight`/`sprite` 定义为准 —— 日后重命名图片文件不会
   破坏旧存档 (需同步修改脚本)
