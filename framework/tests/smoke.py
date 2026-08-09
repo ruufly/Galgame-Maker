@@ -812,10 +812,10 @@ start:
 
         # 动画移动
         d.move_sprite("girl", "right", 1.0)
-        check("移动动画启动", spr.anim is not None and spr.anim[0] == "move")
+        check("移动动画启动", spr.anim_move is not None)
         for _ in range(60):
             d.update(1 / 60)
-        check("移动动画完成", spr.anim is None)
+        check("移动动画完成", spr.anim_move is None)
         check("移动到右侧", spr.rect.center[0] > c0[0] + 100,
               str(spr.rect.center))
 
@@ -825,11 +825,23 @@ start:
         check("旋转后渲染面变化",
               spr.surface.get_size() != spr.base_surface.get_size())
         d.rotate_sprite("girl", 0, 1.0)
-        check("旋转动画启动", spr.anim is not None and spr.anim[0] == "rotate")
+        check("旋转动画启动", spr.anim_rotate is not None)
         for _ in range(60):
             d.update(1 / 60)
-        check("旋转动画归零", spr.anim is None and abs(spr.angle) < 0.5,
+        check("旋转动画归零", spr.anim_rotate is None and abs(spr.angle) < 0.5,
               str(spr.angle))
+
+        # 连续动画互不覆盖: move 与 rotate 并行, 均能完整执行
+        d.move_sprite("girl", "right", 1.0)
+        d.rotate_sprite("girl", 45, 1.0)
+        check("并行动画双槽启动",
+              spr.anim_move is not None and spr.anim_rotate is not None)
+        for _ in range(70):
+            d.update(1 / 60)
+        check("并行动画全部完成",
+              spr.anim_move is None and spr.anim_rotate is None)
+        check("并行移动到位", abs(spr.center[0] - 480) < 2, str(spr.center))
+        check("并行旋转到位", abs(spr.angle - 45) < 1.0, str(spr.angle))
 
         # 翻转
         d.flip_sprite("girl")
@@ -854,13 +866,24 @@ start:
                   f"{spr.center} vs {expect}")
         rt._cmd_move(Statement(op="move",
                                args=["girl", "to", "400,300", "1"], line=0))
-        check("move 数字坐标+时长", spr.anim is not None
-              and spr.anim[0] == "move" and spr.anim[4] == (400.0, 300.0),
-              str(spr.anim))
+        check("move 数字坐标+时长", spr.anim_move is not None
+              and spr.anim_move[4] == (400.0, 300.0),
+              str(spr.anim_move))
         rt._cmd_rotate(Statement(op="rotate", args=["girl", "45", "1"], line=0))
-        check("rotate 指令", spr.anim is not None and spr.anim[0] == "rotate")
+        check("rotate 指令", spr.anim_rotate is not None)
         for _ in range(60):
             d.update(1 / 60)
+
+        # 动画阻塞: duration>0 的动画播放期间脚本等待, 播完自动继续
+        rt._cmd_move(Statement(op="move", args=["girl", "to", "right", "1"],
+                               line=0))
+        check("动画阻塞脚本", rt.blocked == "anim")
+        for _ in range(70):
+            d.update(1 / 60)
+            rt.tick(1 / 60)
+        check("动画完成自动继续", rt.blocked is None and rt.advance is not None)
+        check("动画期间位置到位", abs(spr.center[0] - 480) < 2,
+              str(spr.center))
 
         # 存档包含变换状态
         d.rotate_sprite("girl", 90)
@@ -889,6 +912,41 @@ start:
         pygame.quit()
         if os.path.isfile(path):
             os.remove(path)
+
+
+def test_window_config():
+    print("== 窗口配置 ==")
+    from gamelauncher import extract_window_config
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    cfg = extract_window_config(demo)
+    check("解析窗口标题", cfg.get("title") == "Galgame Maker 引擎演示",
+          str(cfg))
+    check("解析窗口尺寸",
+          int(cfg.get("width")) == 1280 and int(cfg.get("height")) == 720)
+    check("解析窗口图标", cfg.get("icon") == "materials/image/icon.png")
+    check("解析 fps", int(cfg.get("fps")) == 60)
+
+    # 无 window 配置的脚本 -> 空 dict
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "_win_test.gal")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write('''start:
+    text "x"
+''')
+    cfg2 = extract_window_config(path)
+    check("无配置返回空", cfg2 == {}, str(cfg2))
+    os.remove(path)
+
+    # 自定义窗口参数 + 图标
+    engine = GameEngine(800, 600, "自定义标题", 30)
+    check("自定义窗口参数", engine.width == 800 and engine.height == 600
+          and engine.title == "自定义标题" and engine.fps == 30)
+    engine.script_dir = os.path.dirname(demo)
+    engine.set_icon("materials/image/icon.png")   # 不应抛异常
+    check("set_icon 无异常", True)
+    engine.quit()
+    import pygame
+    pygame.quit()
 
 
 def test_plugins_and_save():
@@ -1011,6 +1069,12 @@ def main():
         test_sprite_transform()
     except Exception as exc:
         print(f"  [ERROR] 立绘变换测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_window_config()
+    except Exception as exc:
+        print(f"  [ERROR] 窗口配置测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

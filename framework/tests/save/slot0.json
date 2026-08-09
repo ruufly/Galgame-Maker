@@ -4,8 +4,8 @@
   "ip": 2,
   "script": "_transform_test.gal",
   "call_stack": [],
-  "blocked": "text",
-  "text": "x",
+  "blocked": null,
+  "text": null,
   "speaker": null,
   "choices": null,
   "bg_id": null,
@@ -26,5 +26,5 @@
     }
   ],
   "music": null,
-  "_saved_at": "2026-08-09 21:53:33"
+  "_saved_at": "2026-08-09 22:09:31"
 }

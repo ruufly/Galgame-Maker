@@ -211,7 +211,7 @@ class _Sprite:
 
     __slots__ = ("id", "base_surface", "surface", "center", "angle",
                  "flip_h", "flip_v", "alpha", "target_alpha", "fade_speed",
-                 "visible", "props", "rect", "anim")
+                 "visible", "props", "rect", "anim_move", "anim_rotate")
 
     def __init__(self, sid, base_surface, center, props=None):
         self.id = sid
@@ -227,7 +227,8 @@ class _Sprite:
         self.visible = False
         self.props = props or {}
         self.rect = pygame.Rect(0, 0, 0, 0)
-        self.anim = None       # (kind, t, duration, start, target, ease)
+        self.anim_move = None    # [kind, t, duration, start, target, ease]
+        self.anim_rotate = None  # 同上 (move 与 rotate 并行, 同类互相覆盖)
         self._recalc()
 
     def _recalc(self):
@@ -250,22 +251,28 @@ class _Sprite:
                 self.alpha = self.target_alpha
                 self.fade_speed = 0.0
             self.surface.set_alpha(int(self.alpha))
-        # 动画 (move / rotate)  —— anim 为可变 list, t 需写回
-        if self.anim is not None:
-            kind, t, duration, start, target, ease = self.anim
-            self.anim[1] = t + dt
-            k = min(1.0, self.anim[1] / duration) if duration > 0 else 1.0
+        # 移动动画
+        if self.anim_move is not None:
+            kind, t, duration, start, target, ease = self.anim_move
+            self.anim_move[1] = t + dt
+            k = min(1.0, self.anim_move[1] / duration) if duration > 0 else 1.0
             e = _EASE_FUNCS.get(ease, _EASE_FUNCS["linear"])(k)
-            if kind == "move":
-                self.center[0] = start[0] + (target[0] - start[0]) * e
-                self.center[1] = start[1] + (target[1] - start[1]) * e
-                self.rect.center = (int(round(self.center[0])),
-                                    int(round(self.center[1])))
-            elif kind == "rotate":
-                self.angle = start + (target - start) * e
-                self._recalc()
+            self.center[0] = start[0] + (target[0] - start[0]) * e
+            self.center[1] = start[1] + (target[1] - start[1]) * e
+            self.rect.center = (int(round(self.center[0])),
+                                int(round(self.center[1])))
             if k >= 1.0:
-                self.anim = None
+                self.anim_move = None
+        # 旋转动画
+        if self.anim_rotate is not None:
+            kind, t, duration, start, target, ease = self.anim_rotate
+            self.anim_rotate[1] = t + dt
+            k = min(1.0, self.anim_rotate[1] / duration) if duration > 0 else 1.0
+            e = _EASE_FUNCS.get(ease, _EASE_FUNCS["linear"])(k)
+            self.angle = start + (target - start) * e
+            self._recalc()
+            if k >= 1.0:
+                self.anim_rotate = None
 
 
 class Display:
@@ -520,8 +527,8 @@ class Display:
             return False
         target = self._resolve_center(spr, pos)
         if duration and duration > 0:
-            spr.anim = ["move", 0.0, float(duration),
-                        (spr.center[0], spr.center[1]), target, ease]
+            spr.anim_move = ["move", 0.0, float(duration),
+                             (spr.center[0], spr.center[1]), target, ease]
         else:
             spr.center = [target[0], target[1]]
             spr.rect.center = (int(round(target[0])), int(round(target[1])))
@@ -538,7 +545,8 @@ class Display:
             return False
         angle = float(angle) % 360
         if duration and duration > 0:
-            spr.anim = ["rotate", 0.0, float(duration), spr.angle, angle, ease]
+            spr.anim_rotate = ["rotate", 0.0, float(duration), spr.angle,
+                               angle, ease]
         else:
             spr.angle = angle
             spr._recalc()

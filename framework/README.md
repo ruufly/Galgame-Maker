@@ -16,13 +16,25 @@ framework/
 
 ```powershell
 # 运行内置演示
-py -3.10 framework/run_demo.py
+py -3.10 gamelauncher.py
 
-# 运行自己的脚本
-py -3.10 framework/run_demo.py path/to/your.gal
+# 运行自己的脚本 (也支持直接把 .gal 文件拖到 gamelauncher.py 上)
+py -3.10 gamelauncher.py path/to/your.gal
 
 # 运行冒烟测试
 py -3.10 framework/tests/smoke.py
+```
+
+窗口配置写在脚本顶层, 启动器创建窗口前读取::
+
+```gal
+window
+    title: "我的游戏"
+    width: 1280
+    height: 720
+    icon: "materials/image/icon.png"
+    fps: 60
+    fullscreen: false
 ```
 
 引擎最小用法 (Python):

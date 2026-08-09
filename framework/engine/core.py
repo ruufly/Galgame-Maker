@@ -30,17 +30,20 @@ class GameEngine:
 
     def __init__(self, width: int = 1280, height: int = 720,
                  title: str = "Galgame Maker Engine", fps: int = 60,
-                 plugins_dir: str = None, autoload_plugins: bool = True) -> None:
+                 plugins_dir: str = None, autoload_plugins: bool = True,
+                 fullscreen: bool = False) -> None:
         self.width = width
         self.height = height
         self.title = title
         self.fps = fps
+        self.fullscreen = fullscreen
         self.project_dir = os.getcwd()
         self.script_dir = None
 
         pygame.init()
         try:
-            self.screen = pygame.display.set_mode((width, height))
+            flags = pygame.FULLSCREEN if fullscreen else 0
+            self.screen = pygame.display.set_mode((width, height), flags)
         except pygame.error as exc:
             log.error(f"无法创建窗口: {exc}")
             raise
@@ -130,6 +133,16 @@ class GameEngine:
             return path
         base = self.script_dir or self.project_dir
         return os.path.normpath(os.path.join(base, path))
+
+    def set_icon(self, path: str) -> None:
+        """设置窗口图标 (路径相对脚本所在目录)。"""
+        try:
+            real = self.resolve_path(path)
+            icon = pygame.image.load(real)
+            pygame.display.set_icon(icon)
+            log.info(f"窗口图标已设置: {real}")
+        except Exception as exc:
+            log.warning(f"设置窗口图标失败 {path}: {exc}")
 
     # ==================================================================
     # 事件 (统一在事件上下文里附带 engine 引用, 方便插件取用)

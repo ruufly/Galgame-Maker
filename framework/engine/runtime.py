@@ -82,6 +82,8 @@ class Runtime:
             "ending": self._cmd_ending,
             "quit": self._cmd_ending,
             "pass": self._cmd_pass,
+            "window": self._cmd_pass,
+            "config": self._cmd_pass,
         }
 
     # ==================================================================
@@ -331,11 +333,18 @@ class Runtime:
             self.blocked = None
 
     def tick(self, dt: float) -> None:
-        """每帧调用: 处理 sleep 计时。"""
+        """每帧调用: 处理 sleep 计时与动画阻塞。"""
         if self.blocked == "sleep" and self.sleep_until is not None:
             if time.time() >= self.sleep_until:
                 self.sleep_until = None
                 self.release("sleep")
+                self.advance()
+            return
+        if self.blocked == "anim":
+            # 所有立绘动画播放完毕 -> 解除阻塞继续脚本
+            if not any(spr.anim_move is not None or spr.anim_rotate is not None
+                       for spr in self.engine.display.sprites.values()):
+                self.release("anim")
                 self.advance()
 
     # ==================================================================
@@ -571,6 +580,10 @@ class Runtime:
             if idx + 1 < len(rest):
                 ease = rest[idx + 1]
         self.engine.display.move_sprite(sid, pos, duration, ease)
+        if duration and duration > 0:
+            # 动画播放期间阻塞脚本, 完成后自动继续
+            self.blocked = "anim"
+            return BLOCK
         return None
 
     def _cmd_rotate(self, stmt):
@@ -597,6 +610,10 @@ class Runtime:
             if idx + 1 < len(rest):
                 ease = rest[idx + 1]
         self.engine.display.rotate_sprite(sid, angle, duration, ease)
+        if duration and duration > 0:
+            # 动画播放期间阻塞脚本, 完成后自动继续
+            self.blocked = "anim"
+            return BLOCK
         return None
 
     def _cmd_flip(self, stmt):
