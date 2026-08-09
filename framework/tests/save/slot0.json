@@ -1,0 +1,12 @@
+{
+  "vars": {
+    "ok": 1,
+    "score": 42
+  },
+  "label": "after_choice",
+  "ip": 0,
+  "script": "_plug_test.gal",
+  "bg": null,
+  "sprites": [],
+  "_saved_at": "2026-08-09 19:08:51"
+}

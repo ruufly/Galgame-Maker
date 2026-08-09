@@ -1,0 +1,604 @@
+"""运行时: 脚本加载、语句执行、变量与分支、跳转/调用栈、存档恢复。
+
+执行模型::
+
+    Runtime 持有一个"当前语句列表 + 指令指针"(栈式)。
+    advance() 不断取下一条语句执行, 直到遇到阻塞语句
+    (text / choice / sleep) 或脚本结束。
+    阻塞解除后由引擎调用 release() 并继续 advance()。
+"""
+
+import os
+import re
+import time
+
+from framework.engine import log
+from framework.engine.parser import Statement, parse_file
+
+BLOCK = "block"
+
+
+class RuntimeError_(Exception):
+    pass
+
+
+class Runtime:
+    def __init__(self, engine) -> None:
+        self.engine = engine
+        self.vars = {}
+        self.labels = {}
+        self.statements = []          # 当前执行块
+        self.ip = 0
+        self.call_stack = []          # [(statements, ip, label)]
+        self.current_label = None
+        self.blocked = None           # None / "text" / "choice" / "sleep"
+        self.sleep_until = None
+        self.running = False
+        self.ended = False
+        self.script_path = None
+        self.script_dir = "."
+        self.widgets_templates = {}   # name -> {parent, blocks}
+        self.pending_create = None    # 等待 `-> id` 完成的对象
+        self._created_objects = {}    # weight 创建的背景对象 (id -> obj)
+
+        # 内置指令表
+        self._builtins = {
+            "bg": self._cmd_bg,
+            "show": self._cmd_show,
+            "hide": self._cmd_hide,
+            "withdraw": self._cmd_hide,
+            "clear": self._cmd_clear,
+            "weight": self._cmd_create,
+            "sprite": self._cmd_create,
+            "object": self._cmd_create,
+            "->": self._cmd_bind,
+            "text": self._cmd_text,
+            "say": self._cmd_say,
+            "choice": self._cmd_choice,
+            "set": self._cmd_set,
+            "if": self._cmd_if,
+            "jump": self._cmd_jump,
+            "call": self._cmd_call,
+            "return": self._cmd_return,
+            "sleep": self._cmd_sleep,
+            "music": self._cmd_music,
+            "sound": self._cmd_sound,
+            "stop": self._cmd_stop,
+            "fade": self._cmd_fade,
+            "fadeout": self._cmd_fadeout,
+            "save": self._cmd_save,
+            "load": self._cmd_load,
+            "ending": self._cmd_ending,
+            "quit": self._cmd_ending,
+            "pass": self._cmd_pass,
+        }
+
+    # ==================================================================
+    # 脚本加载
+    # ==================================================================
+    def load_script(self, path: str) -> None:
+        path = os.path.abspath(path)
+        self.script_path = path
+        self.script_dir = os.path.dirname(path)
+        self.engine.project_dir = self.script_dir
+        script = parse_file(path)
+        self.labels = script.labels
+        self.statements = script.statements
+        self.ip = 0
+        self.engine.emit("script_load", path=path, name=script.name)
+        log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个)")
+        # widgets 模板
+        if script.widgets_dir:
+            self.load_widget_templates(
+                os.path.join(self.script_dir, script.widgets_dir))
+
+    # ------------------------------------------------------------------
+    def load_widget_templates(self, directory: str) -> None:
+        if not os.path.isdir(directory):
+            log.warning(f"widgets 目录不存在: {directory}")
+            return
+        for name in sorted(os.listdir(directory)):
+            if not name.endswith(".wid"):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                with open(path, "r", encoding="utf-8-sig") as f:
+                    text = f.read()
+                tpl = self._parse_wid(text, name)
+                if tpl:
+                    self.widgets_templates[tpl["name"]] = tpl
+                    log.info(f"widget 模板已注册: {tpl['name']}")
+            except Exception as exc:
+                log.warning(f"widget 模板加载失败 {path}: {exc}")
+
+    def _parse_wid(self, text: str, filename: str):
+        """解析 .wid: 提取 reg class / @parent / 各事件块。
+
+        简化实现: 块内语句交给主解析器解析, 不支持的指令执行时会警告跳过。
+        """
+        tpl = {"name": None, "parent": None, "blocks": {}}
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        i = 0
+        current_block = None
+        body = []
+        while i < len(lines):
+            ln = lines[i]
+            m = re.match(r"^reg class (\w+)", ln)
+            if m:
+                tpl["name"] = m.group(1)
+                i += 1
+                continue
+            m = re.match(r"^@parent (.+)$", ln)
+            if m:
+                tpl["parent"] = m.group(1).strip()
+                i += 1
+                continue
+            m = re.match(r"^([\w ]+):$", ln)  # 块头
+            if m:
+                current_block = m.group(1).strip()
+                tpl["blocks"][current_block] = []
+                body = tpl["blocks"][current_block]
+                i += 1
+                continue
+            if current_block is not None:
+                # 逐行解析 (block 结构简单, 用主解析器逐行构造)
+                try:
+                    from framework.engine.parser import Parser
+                    p = Parser()
+                    p._preprocess(ln)
+                    if p.lines:
+                        stmt, _ = p._parse_statement(0, 0)
+                        if stmt is not None:
+                            body.append(stmt)
+                except Exception:
+                    pass
+            i += 1
+        if not tpl["name"]:
+            return None
+        return tpl
+
+    # ==================================================================
+    # 启动 / 推进
+    # ==================================================================
+    def start(self) -> None:
+        self.running = True
+        self.ended = False
+        self.blocked = None
+        if "start" in self.labels:
+            self._jump_to("start")
+        self.engine.emit("script_start")
+        self.advance()
+
+    def advance(self) -> None:
+        """执行语句直到阻塞或脚本结束。"""
+        while self.running and not self.ended:
+            if self.blocked:
+                return
+            if self.ip >= len(self.statements):
+                if self.call_stack:
+                    self._pop_block()
+                    continue
+                self._end_script()
+                return
+            stmt = self.statements[self.ip]
+            self.ip += 1
+            self.engine.emit("statement", stmt=stmt,
+                                    label=self.current_label)
+            result = self._dispatch(stmt)
+            if result == BLOCK:
+                return
+
+    def _dispatch(self, stmt: Statement):
+        handler = self._builtins.get(stmt.op)
+        if handler is not None:
+            return handler(stmt)
+        # 插件自定义指令
+        if self.engine.commands.has(stmt.op):
+            result = self.engine.commands.call(stmt.op, stmt)
+            return result if result == BLOCK else None
+        # 裸词: 尝试 widgets 模板实例化
+        if not stmt.args and not stmt.kwargs and stmt.op in self.widgets_templates:
+            self._instantiate_widget(stmt.op)
+            return None
+        log.warning(f"第{stmt.line}行: 未知指令 {stmt.op!r}, 已跳过")
+        return None
+
+    def _end_script(self) -> None:
+        self.ended = True
+        self.running = False
+        self.engine.emit("script_end")
+        log.info("脚本执行结束")
+
+    # ------------------------------------------------------------------
+    def _jump_to(self, label: str) -> None:
+        if label not in self.labels:
+            raise RuntimeError_(f"跳转到不存在的标签: {label!r}")
+        self.statements = self.labels[label]
+        self.ip = 0
+        self.current_label = label
+        self.engine.emit("label_enter", label=label)
+
+    def _push_block(self, statements, ip=None, label=None) -> None:
+        self.call_stack.append(
+            (self.statements, self.ip, self.current_label))
+        self.statements = statements
+        self.ip = ip or 0
+        self.current_label = label
+
+    def _pop_block(self) -> None:
+        if not self.call_stack:
+            return
+        self.statements, self.ip, self.current_label = self.call_stack.pop()
+
+    # ==================================================================
+    # 阻塞解除 (由引擎调用)
+    # ==================================================================
+    def release(self, kind: str) -> None:
+        if self.blocked == kind:
+            self.blocked = None
+
+    def tick(self, dt: float) -> None:
+        """每帧调用: 处理 sleep 计时。"""
+        if self.blocked == "sleep" and self.sleep_until is not None:
+            if time.time() >= self.sleep_until:
+                self.sleep_until = None
+                self.release("sleep")
+                self.advance()
+
+    # ==================================================================
+    # 内置指令
+    # ==================================================================
+    # -- 场景 -----------------------------------------------------------
+    def _cmd_bg(self, stmt):
+        path = self._interp(stmt.args[0]) if stmt.args else None
+        if not path:
+            log.warning(f"第{stmt.line}行: bg 缺少图片路径")
+            return None
+        effect = stmt.kwargs.get("effect")
+        self.engine.display.set_bg(path, effect)
+        return None
+
+    def _cmd_show(self, stmt):
+        if not stmt.args:
+            return None
+        sid = stmt.args[0]
+        props = {}
+        # 支持 `show id at pos` / `show id with effect`
+        args = stmt.args[1:]
+        pos = None
+        if "at" in args:
+            idx = args.index("at")
+            if idx + 1 < len(args):
+                pos = args[idx + 1]
+        if "with" in args:
+            idx = args.index("with")
+            if idx + 1 < len(args):
+                props["effect"] = args[idx + 1]
+        # 直接 show 已创建对象: 从 pending props 恢复
+        if self.pending_create and self.pending_create.get("id") == sid:
+            p = self.pending_create
+            self.pending_create = None
+            self.engine.display.show_sprite(
+                sid, p.get("image"), p.get("pos") or pos,
+                p.get("scale"), p.get("mode"), p.get("effect"))
+            return None
+        # 已有立绘: 仅移动/特效
+        if self.engine.display.sprites.get(sid):
+            self.engine.display.show_sprite(sid, None, pos, effect=props.get("effect"))
+            return None
+        # 纯对象 id (如 weight 创建的 bg 对象)
+        if sid in self._created_objects:
+            obj = self._created_objects.pop(sid)
+            self._apply_created(obj)
+            return None
+        log.warning(f"第{stmt.line}行: show 的对象 {sid!r} 不存在")
+        return None
+
+    def _cmd_hide(self, stmt):
+        if not stmt.args:
+            return None
+        sid = stmt.args[0]
+        if sid in self.engine.display.sprites:
+            self.engine.display.hide_sprite(sid)
+        else:
+            log.warning(f"第{stmt.line}行: hide 的对象 {sid!r} 不存在")
+        return None
+
+    def _cmd_clear(self, stmt):
+        self.engine.display.clear_sprites()
+        return None
+
+    # -- 对象创建 -------------------------------------------------------
+    def _cmd_create(self, stmt):
+        ident = stmt.args[0] if stmt.args else None
+        props = dict(stmt.kwargs)
+        if ident:
+            # 立即创建: sprite girl (属性块在 kwargs 中)
+            if stmt.op == "weight":
+                self._apply_created({"kind": "weight", "id": ident, **props})
+            else:
+                self.engine.display.show_sprite(
+                    ident, props.get("image"), props.get("pos"),
+                    props.get("scale"), props.get("mode"), props.get("effect"))
+        else:
+            # 等待 `-> id` 绑定 (weight 块)
+            self.pending_create = {"kind": stmt.op, **props}
+        return None
+
+    def _cmd_bind(self, stmt):
+        if not stmt.args:
+            self.pending_create = None
+            return None
+        ident = stmt.args[0]
+        if self.pending_create is None:
+            log.warning(f"第{stmt.line}行: -> {ident} 没有待绑定的对象")
+            return None
+        p = self.pending_create
+        self.pending_create = None
+        self._apply_created({"kind": p.get("kind", "weight"), "id": ident, **p})
+
+    def _apply_created(self, obj):
+        """应用 weight/sprite 创建结果。"""
+        kind = obj.get("kind", "weight")
+        ident = obj.get("id")
+        if not ident:
+            return
+        if kind == "weight":
+            self._created_objects[ident] = obj
+            # weight = 背景对象: 立即设为背景
+            img_path = obj.get("image")
+            if img_path:
+                self.engine.display.set_bg(img_path, obj.get("effect"))
+        else:
+            self.engine.display.show_sprite(
+                ident, obj.get("image"), obj.get("pos"),
+                obj.get("scale"), obj.get("mode"), obj.get("effect"))
+
+    # -- 文本 -----------------------------------------------------------
+    def _cmd_text(self, stmt):
+        text = self._interp(" ".join(stmt.args)) if stmt.args else ""
+        if not text:
+            log.warning(f"第{stmt.line}行: text 内容为空")
+            return None
+        self.engine.display.show_text(text)
+        self.blocked = "text"
+        return BLOCK
+
+    def _cmd_say(self, stmt):
+        if not stmt.args:
+            return None
+        speaker = self._interp(stmt.args[0])
+        text = self._interp(" ".join(stmt.args[1:])) if len(stmt.args) > 1 else ""
+        if not text:
+            log.warning(f"第{stmt.line}行: say 内容为空")
+            return None
+        self.engine.display.show_text(text, speaker)
+        self.blocked = "text"
+        return BLOCK
+
+    # -- 选项 -----------------------------------------------------------
+    def _cmd_choice(self, stmt):
+        options = stmt.kwargs.get("options", [])
+        # 选项文本支持变量插值
+        rendered = [(self._interp(t), lbl) for t, lbl in options]
+        self.engine.display.show_choices(rendered)
+        self.blocked = "choice"
+        return BLOCK
+
+    def choose(self, index: int, label: str) -> None:
+        """选项被点击后由引擎调用。"""
+        self.release("choice")
+        self.engine.display.clear_text()
+        if label:
+            try:
+                self._jump_to(label)
+            except RuntimeError_ as exc:
+                log.warning(str(exc))
+        self.advance()
+
+    # -- 变量与条件 -----------------------------------------------------
+    def _cmd_set(self, stmt):
+        if len(stmt.args) < 2:
+            log.warning(f"第{stmt.line}行: set 需要 变量 = 值")
+            return None
+        name = stmt.args[0]
+        expr = " ".join(stmt.args[1:])
+        expr = expr.lstrip("=").strip()
+        self.vars[name] = self.evaluate(expr)
+        self.engine.emit("var_set", name=name, value=self.vars[name])
+        return None
+
+    def _cmd_if(self, stmt):
+        branches = stmt.kwargs.get("branches", [])
+        else_body = stmt.kwargs.get("else")
+        for cond_expr, body in branches:
+            try:
+                if self.evaluate(cond_expr):
+                    self._push_block(body)
+                    return None
+            except RuntimeError_ as exc:
+                log.warning(f"第{stmt.line}行: 条件求值失败 {cond_expr!r}: {exc}")
+                return None
+        if else_body:
+            self._push_block(else_body)
+        return None
+
+    def evaluate(self, expr: str):
+        """安全求值 DSL 表达式。支持 $var 与裸变量名引用, 以及算术/比较/逻辑运算。
+
+        安全性: eval 使用空 __builtins__, 变量表只含游戏变量与常量,
+        无法调用任何函数或访问模块。
+        """
+        expr = expr.strip()
+        if not expr:
+            return None
+        # 字面量快捷路径
+        if expr in ("true", "True"):
+            return True
+        if expr in ("false", "False"):
+            return False
+        # 翻译 $var -> __vars__['var'] (裸变量名直接由命名空间解析)
+        translated = re.sub(
+            r"\$([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)",
+            r"__vars__['\1']", expr)
+        # 安全检查: 禁止函数调用与魔法属性
+        if re.search(r"[A-Za-z_\u4e00-\u9fff]\s*\(", translated):
+            raise RuntimeError_(f"表达式不允许函数调用: {expr!r}")
+        if re.search(r"\b__\w+__\b", translated):
+            raise RuntimeError_(f"表达式包含非法符号: {expr!r}")
+        ns = dict(self.vars)
+        ns["__vars__"] = self.vars
+        ns["true"] = ns["True"] = True
+        ns["false"] = ns["False"] = False
+        ns["None"] = None
+        try:
+            return eval(translated, {"__builtins__": {}}, ns)
+        except Exception as exc:
+            raise RuntimeError_(f"表达式求值失败 {expr!r}: {exc}")
+
+    # -- 流程控制 -------------------------------------------------------
+    def _cmd_jump(self, stmt):
+        if not stmt.args:
+            return None
+        label = self._interp(stmt.args[0])
+        self._jump_to(label)
+        return None
+
+    def _cmd_call(self, stmt):
+        if not stmt.args:
+            return None
+        label = self._interp(stmt.args[0])
+        if label not in self.labels:
+            raise RuntimeError_(f"call 到不存在的标签: {label!r}")
+        self._push_block(self.labels[label], 0, label)
+        self.engine.emit("label_enter", label=label)
+        return None
+
+    def _cmd_return(self, stmt):
+        self._pop_block()
+        return None
+
+    # -- 时间 / 音频 ----------------------------------------------------
+    def _cmd_sleep(self, stmt):
+        try:
+            sec = float(self._interp(stmt.args[0])) if stmt.args else 1.0
+        except (ValueError, IndexError):
+            sec = 1.0
+        self.sleep_until = time.time() + sec
+        self.blocked = "sleep"
+        return BLOCK
+
+    def _cmd_music(self, stmt):
+        if not stmt.args:
+            return None
+        path = self._interp(stmt.args[0])
+        loop = True
+        if "loop" in stmt.args:
+            loop = self._interp(stmt.args[stmt.args.index("loop") + 1]) != "0" \
+                if stmt.args.index("loop") + 1 < len(stmt.args) else True
+        self.engine.audio.play_music(path, loop)
+        return None
+
+    def _cmd_sound(self, stmt):
+        if not stmt.args:
+            return None
+        self.engine.audio.play_sound(self._interp(stmt.args[0]))
+        return None
+
+    def _cmd_stop(self, stmt):
+        self.engine.audio.stop_music()
+        return None
+
+    # -- 转场 -----------------------------------------------------------
+    def _cmd_fade(self, stmt):
+        self.engine.display.start_fadein()
+        return None
+
+    def _cmd_fadeout(self, stmt):
+        self.engine.display.start_fadeout()
+        return None
+
+    # -- 存档 -----------------------------------------------------------
+    def _cmd_save(self, stmt):
+        slot = 0
+        if stmt.args:
+            try:
+                slot = int(stmt.args[0])
+            except ValueError:
+                slot = 0
+        self.engine.save_game(slot, silent=False)
+        return None
+
+    def _cmd_load(self, stmt):
+        slot = 0
+        if stmt.args:
+            try:
+                slot = int(stmt.args[0])
+            except ValueError:
+                slot = 0
+        self.engine.load_game(slot)
+        return None
+
+    # -- 结束 -----------------------------------------------------------
+    def _cmd_ending(self, stmt):
+        self.engine.display.show_ending()
+        self.ended = True
+        self.running = False
+        self.engine.emit("script_end")
+        return None
+
+    def _cmd_pass(self, stmt):
+        return None
+
+    # -- widgets 模板实例化 ---------------------------------------------
+    def _instantiate_widget(self, name: str) -> None:
+        tpl = self.widgets_templates.get(name)
+        if not tpl:
+            return
+        body = tpl["blocks"].get("when run") or []
+        if body:
+            self._push_block(body)
+        else:
+            log.info(f"widget {name} 无 when run 块, 实例化空操作")
+
+    # ==================================================================
+    # 文本插值
+    # ==================================================================
+    def _interp(self, text: str) -> str:
+        """替换 $var 变量; $$ 转义为字面 $。"""
+        def repl(m):
+            return str(self.vars.get(m.group(1), ""))
+        text = text.replace("$$", "\x00")
+        text = re.sub(r"\$([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)", repl, text)
+        return text.replace("\x00", "$")
+
+    # ==================================================================
+    # 存档快照
+    # ==================================================================
+    def snapshot(self) -> dict:
+        return {
+            "vars": dict(self.vars),
+            "label": self.current_label,
+            "ip": self.ip,
+            "script": os.path.basename(self.script_path) if self.script_path else None,
+            "bg": None,
+            "sprites": self.engine.display.sprite_state(),
+        }
+
+    def restore(self, data: dict) -> None:
+        self.vars = dict(data.get("vars", {}))
+        label = data.get("label")
+        ip = data.get("ip", 0)
+        self.call_stack = []
+        self.blocked = None
+        self.sleep_until = None
+        if label and label in self.labels:
+            self.statements = self.labels[label]
+            self.ip = int(ip)
+            self.current_label = label
+        else:
+            self.statements = self.labels.get("start", [])
+            self.ip = 0
+            self.current_label = "start"
+        self.running = True
+        self.ended = False
