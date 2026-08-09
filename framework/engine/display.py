@@ -11,7 +11,7 @@ import random
 
 import pygame
 
-from framework.engine import log
+from framework.engine import log, ui
 
 
 class _Sprite:
@@ -50,6 +50,7 @@ class Display:
         self.width = width
         self.height = height
         self.buffer = pygame.Surface((width, height))
+        self._rich = engine.rich
 
         # 背景
         self.bg_surface = None
@@ -65,12 +66,14 @@ class Display:
         self.text_active = False
         self.speaker = None
         self.full_text = ""
+        self._runs = []
         self.reveal = 0.0
         self._font_size = 26
 
         # 选项
         self.choice_active = False
         self.choices = []          # [(text, label)]
+        self._choice_runs = []
         self.choice_rects = []
         self.hover_index = -1
 
@@ -257,6 +260,7 @@ class Display:
         self.text_active = True
         self.speaker = speaker
         self.full_text = text
+        self._runs = self._rich.parse(text, base_size=self._font_size)
         self.reveal = 0.0
         self.engine.emit("text_show", text=text, speaker=speaker)
 
@@ -279,6 +283,7 @@ class Display:
         """options: [(文本, 跳转标签), ...]"""
         self.choices = list(options)
         self.choice_rects = []
+        self._choice_runs = [self._rich.parse(t, base_size=28) for t, _ in options]
         self.choice_active = True
         self.hover_index = -1
         n = len(self.choices)
@@ -428,10 +433,9 @@ class Display:
         box_w = w - 24
         box_x = 12
 
-        panel = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
-        panel.fill((0, 0, 0, 185))
-        buf.blit(panel, (box_x, box_y))
-        pygame.draw.rect(buf, (255, 255, 255, 60), (box_x, box_y, box_w, box_h), 2)
+        ui.panel(buf, (box_x, box_y, box_w, box_h),
+                 bg_color=(0, 0, 0, 185), border_color=(255, 255, 255, 60),
+                 border_width=2)
 
         text_x = box_x + 24
         text_y = box_y + 24
@@ -442,50 +446,29 @@ class Display:
         name_h = 0
         if self.speaker:
             name_surf = self._font_speaker.render(self.speaker, True, (255, 210, 130))
-            name_bg = pygame.Surface((name_surf.get_width() + 24, name_surf.get_height() + 12), pygame.SRCALPHA)
-            name_bg.fill((120, 40, 40, 220))
-            buf.blit(name_bg, (text_x - 6, text_y - 14))
+            ui.panel(buf, (text_x - 6, text_y - 14,
+                           name_surf.get_width() + 24, name_surf.get_height() + 12),
+                     bg_color=(120, 40, 40, 220))
             buf.blit(name_surf, (text_x, text_y - 8))
             name_h = name_surf.get_height() + 8
 
-        # 打字机正文 (自动换行)
-        shown = self.full_text[: int(self.reveal)]
-        lines = self._wrap_text(shown, avail_w)
+        # 打字机正文 (富文本, 自动换行; reveal 按可见字符截断)
+        shown = self._rich.truncate(self._runs, int(self.reveal))
         line_h = self._font_text.get_linesize()
-        y = text_y + name_h
-        for line in lines[: max(1, avail_h // line_h)]:
-            surf = self._font_text.render(line, True, (245, 245, 245))
-            buf.blit(surf, (text_x, y))
-            y += line_h
+        self._rich.draw(buf, shown, text_x, text_y + name_h, avail_w,
+                        line_height=line_h,
+                        max_lines=max(1, avail_h // line_h))
 
         # 推进箭头
         if self.reveal >= len(self.full_text):
             t = pygame.time.get_ticks() / 500
             blink = 1 if int(t) % 2 == 0 else 0.35
-            arrow = self._font_text.render("▼", True, (255, 255, 255))
-            arrow.set_alpha(int(255 * blink))
-            buf.blit(arrow, (box_x + box_w - 34, box_y + box_h - 34))
-
-    def _wrap_text(self, text, max_width) -> list:
-        if not text:
-            return [""]
-        lines = []
-        cur = ""
-        for ch in text:
-            test = cur + ch
-            if self._font_text.size(test)[0] > max_width and cur:
-                lines.append(cur)
-                cur = ch
-            else:
-                cur = test
-        if cur:
-            lines.append(cur)
-        return lines
+            ui.text(buf, self._font_text, "▼", color=(255, 255, 255),
+                    pos=(box_x + box_w - 34, box_y + box_h - 34),
+                    alpha=255 * blink)
 
     def _draw_choices(self, buf) -> None:
-        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 150))
-        buf.blit(overlay, (0, 0))
+        ui.dim_overlay(buf, 150)
         mouse = pygame.mouse.get_pos()
         self.hover_index = -1
         for idx, (text, label) in enumerate(self.choices):
@@ -493,20 +476,17 @@ class Display:
             hovered = rect.collidepoint(mouse)
             if hovered:
                 self.hover_index = idx
-            bg = (70, 70, 85, 230) if hovered else (40, 40, 48, 220)
-            panel = pygame.Surface(rect.size, pygame.SRCALPHA)
-            panel.fill(bg)
-            buf.blit(panel, rect.topleft)
-            pygame.draw.rect(buf, (255, 220, 120) if hovered else (150, 150, 160),
-                             rect, 2)
-            surf = self._font_choice.render(text, True,
-                                            (255, 255, 255) if hovered else (220, 220, 225))
-            buf.blit(surf, surf.get_rect(center=rect.center))
+            ui.panel(buf, rect,
+                     bg_color=(70, 70, 85, 230) if hovered else (40, 40, 48, 220),
+                     border_color=(255, 220, 120) if hovered else (150, 150, 160),
+                     border_width=2)
+            runs = self._choice_runs[idx]
+            self._rich.draw_centered(buf, runs, rect.centerx, rect.centery,
+                                     alpha=255 if hovered else 210)
 
     def _draw_notice(self, buf) -> None:
         surf = self._font_notice.render(self.notice, True, (255, 255, 255))
-        bg = pygame.Surface((surf.get_width() + 40, surf.get_height() + 16), pygame.SRCALPHA)
-        bg.fill((20, 20, 20, 210))
-        rect = bg.get_rect(center=(self.width / 2, 48))
-        buf.blit(bg, rect.topleft)
-        buf.blit(surf, surf.get_rect(center=(rect.centerx, rect.centery)))
+        rect = pygame.Rect(0, 0, surf.get_width() + 40, surf.get_height() + 16)
+        rect.center = (self.width / 2, 48)
+        ui.panel(buf, rect, bg_color=(20, 20, 20, 210))
+        ui.text(buf, self._font_notice, self.notice, center=rect.center)

@@ -229,6 +229,94 @@ start:
             os.remove(path)
 
 
+def test_rich():
+    print("== 富文本与公式 ==")
+    import pygame  # 函数内先导入, 避免局部作用域遮蔽
+    engine = GameEngine(640, 360, "test5")
+    r = engine.rich
+
+    # 标记解析
+    runs = r.parse("你好{c=#ff0000}红{/c}{b}粗{/b}{m}x^2{/m}!")
+    texts = [x.text for x in runs]
+    check("标记解析分段", texts == ["你好", "红", "粗", "x^2", "!"], str(texts))
+    check("颜色标记", runs[1].color == (255, 0, 0), str(runs[1].color))
+    check("加粗标记", runs[2].bold is True)
+    check("公式标记", runs[3].math is True)
+    check("颜色名解析", r.parse("{c=red}R{/c}")[0].color == (255, 0, 0))
+
+    # 公式内花括号不被误解析
+    runs2 = r.parse("{m}\\frac{1}{2}{/m}")
+    check("公式内花括号原样", runs2[0].math and runs2[0].text == r"\frac{1}{2}",
+          repr(runs2[0].text))
+
+    # 未知标记按字面
+    runs3 = r.parse("a{xxx}b")
+    check("未知标记字面输出", "".join(x.text for x in runs3) == "a{xxx}b")
+
+    # 截断 (打字机)
+    t = r.truncate(runs, 2)
+    check("截断到 2 字符", t[0].text == "你好", str([x.text for x in t]))
+    t2 = r.truncate(runs, 3)
+    check("截断跨 run", t2[-1].text == "红")
+
+    # 渲染不报错
+    surf = pygame.Surface((600, 400))
+    r.draw(surf, runs, 10, 20, 500)
+    r.draw_centered(surf, r.parse("选项{c=#00ff00}A{/c}"), 300, 200)
+    check("富文本绘制无异常", True)
+
+    # 像素级居中断言 (文字包围盒中心应落在目标点)
+    import numpy as np
+    check_surf = pygame.Surface((120, 120))
+    check_surf.fill((0, 0, 0))
+    r.draw_centered(check_surf, r.parse("中"), 60, 60)
+    arr = pygame.surfarray.array3d(check_surf)          # (w, h, 3)
+    ys, xs = np.nonzero(arr.sum(axis=2) > 0)
+    if len(ys):
+        cy_center = (float(ys.min()) + float(ys.max())) / 2
+        cx_center = (float(xs.min()) + float(xs.max())) / 2
+        check("draw_centered 垂直居中", abs(cy_center - 60) <= 1.5,
+              f"cy={cy_center:.1f}")
+        # 水平: 字形自带左右 bearing, ±4px 内属正常渲染偏差
+        check("draw_centered 水平居中", abs(cx_center - 60) <= 4.0,
+              f"cx={cx_center:.1f}")
+    else:
+        check("draw_centered 像素可见", False, "未渲染出文字")
+
+    # LaTeX 渲染
+    if r.math.available:
+        res = r.math.render(r"x^2 + \frac{1}{2}", 20, (255, 255, 255))
+        check("LaTeX 渲染出图", res is not None and res[0].get_width() > 10)
+        check("LaTeX 基线合理", res is not None and 0 < res[1] and res[2] >= 0)
+        res2 = r.math.render(r"\int_0^1 x^2\,dx = \frac{1}{3}", 26, (255, 200, 0))
+        check("LaTeX 复杂公式", res2 is not None and res2[0].get_width() > 10)
+    else:
+        print("  [SKIP] matplotlib 未安装, 跳过 LaTeX 测试")
+
+    engine.quit()
+    pygame.quit()
+
+
+def test_demo_run():
+    print("== demo.gal 实际运行 ==")
+    engine = GameEngine(640, 360, "test6")
+    d = engine.display
+    rt = engine.runtime
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    rt.load_script(demo)
+    rt.start()
+    check("demo 停在第一句文本", rt.blocked == "text" and d.full_text != "")
+    check("demo 背景已设置", d.bg_surface is not None)
+    check("demo 立绘已显示",
+          "girl" in d.sprites and d.sprites["girl"].visible)
+    # 渲染一帧 (含富文本解析路径)
+    engine.draw()
+    check("demo 首帧绘制无异常", True)
+    engine.quit()
+    import pygame
+    pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -301,6 +389,18 @@ def main():
         test_scene_flow()
     except Exception as exc:
         print(f"  [ERROR] 场景测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_rich()
+    except Exception as exc:
+        print(f"  [ERROR] 富文本测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_demo_run()
+    except Exception as exc:
+        print(f"  [ERROR] demo 运行测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

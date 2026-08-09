@@ -15,7 +15,7 @@ import os
 
 import pygame
 
-from framework.engine import log
+from framework.engine import log, ui as ui_module
 from framework.engine.audio import Audio
 from framework.engine.display import Display
 from framework.engine.runtime import Runtime
@@ -49,6 +49,9 @@ class GameEngine:
         self.clock = pygame.time.Clock()
         self.running = False
 
+        # UI 绘制原语 (panel/text/wrap_text/multiline_text/dim_overlay)
+        self.ui = ui_module
+
         # 字体缓存 (需在 Display 之前初始化, Display 构造会取字体)
         self._font_cache = {}
         self._font_path = self._find_font()
@@ -60,6 +63,11 @@ class GameEngine:
         self.commands = CommandRegistry(self)
         self.plugins = PluginManager(self)
         self.audio = Audio(self)
+
+        # 富文本渲染器 (标记解析 + 行内样式 + LaTeX 公式), 需在 Display 之前
+        from framework.engine.rich import RichTextRenderer
+        self.rich = RichTextRenderer(self)
+
         self.display = Display(self, width, height)
         self.save = SaveManager(self)
         self.runtime = Runtime(self)
@@ -89,10 +97,15 @@ class GameEngine:
                 return path
         return None
 
-    def get_font(self, size: int):
-        """按字号获取 pygame 字体 (带缓存)。"""
-        if size in self._font_cache:
-            return self._font_cache[size]
+    def get_font(self, size: int, family: str = "default",
+                 bold: bool = False, italic: bool = False):
+        """按 (字号, 字体族, 粗体, 斜体) 获取 pygame 字体 (带缓存)。
+
+        同一字号的不同样式使用独立 Font 对象, 避免样式状态互相污染。
+        """
+        key = (family, size, bold, italic)
+        if key in self._font_cache:
+            return self._font_cache[key]
         font = None
         if self._font_path:
             try:
@@ -101,7 +114,11 @@ class GameEngine:
                 font = None
         if font is None:
             font = pygame.font.SysFont("microsoftyahei,simhei,arial", size)
-        self._font_cache[size] = font
+        if bold:
+            font.set_bold(True)
+        if italic:
+            font.set_italic(True)
+        self._font_cache[key] = font
         return font
 
     # ==================================================================

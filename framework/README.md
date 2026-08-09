@@ -177,12 +177,34 @@ engine.runtime      # vars / evaluate / jump / _interp...
 engine.events       # 事件总线 (on/emit)
 engine.commands     # 指令注册表 (register/has/call)
 engine.plugins      # 插件管理器
+engine.ui           # UI 绘制原语 (见下)
 engine.say(speaker, text)
 engine.set_var(name, value) / engine.get_var(name)
 engine.show_notice(text)
 engine.save_game(slot) / engine.load_game(slot)
 engine.resolve_path(rel)   # 相对脚本目录解析资源路径
 ```
+
+### UI 绘制原语 (`engine.ui`)
+
+"画一个框、往里填内容"的高频操作已封装, 引擎内部与插件共用:
+
+```python
+from pygame import Rect
+
+engine.ui.panel(surface, Rect(10, 10, 200, 60),            # 半透明面板+边框+圆角
+                bg_color=(0, 0, 0, 185),
+                border_color=(255, 255, 255, 80), border_width=2, radius=8)
+
+engine.ui.text(surface, font, "文字", center=(100, 40))     # 文字 (pos/center/alpha)
+engine.ui.wrap_text(font, "长文本", max_width=180)          # 逐字符换行 -> [行]
+engine.ui.multiline_text(surface, font, "多行文本", 20, 20,  # 自动换行绘制
+                         max_width=180, max_lines=3)
+engine.ui.dim_overlay(surface, alpha=150)                   # 全屏半透明遮罩
+```
+
+插件在 `draw_overlay` 事件里可以直接用这些原语叠加 HUD / 调试信息,
+不必再自造轮子。
 
 ## 已知限制
 
