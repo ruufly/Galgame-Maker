@@ -91,6 +91,11 @@ start:
     show producer normal               # 显示角色立绘 (默认居中)
     show producer happy                # 切换立绘 (保持中心点原位替换)
     hide producer
+    move producer to left 1            # 立绘位移: 瞬间 (无时长) 或缓动动画
+    move producer to 400,300 2 ease in_out   # 目标中心坐标 + 时长 + 缓动
+    rotate producer 90 1               # 旋转 (逆时针为正; 带时长=旋转动画)
+    flip producer                      # 水平翻转 (再次调用恢复)
+    flip producer vertical             # 垂直翻转
     say producer "角色台词, 名字框显示'制作人'"   # 角色 id -> 显示名
     nar "旁白台词, 无名字框"            # text 的别名
     say 旁白 "也按旁白处理"            # 兼容写法
@@ -273,8 +278,9 @@ engine.ui.dim_overlay(surface, alpha=150)                   # 全屏半透明遮
   旧脚本中 `weight ... -> id` + `show id` 会按"全屏立绘"显示并给出警告
 * 音频/图片找不到时仅告警, 不中断游戏
 * 存档完整保存变量、剧情位置 (标签+语句索引)、调用栈、正在显示的
-  文本/选择支、背景、立绘 (含透明度) 与音乐; 在 `sleep` 阻塞时存档,
-  读档不会恢复剩余等待时间
+  文本/选择支、背景 (场景 id + 背景名)、立绘 (id/立绘名/透明度/旋转
+  角度/翻转/中心点) 与音乐; 在 `sleep` 阻塞时存档, 读档不会恢复
+  剩余等待时间
 * 存档中的背景/立绘以**脚本对象 id** 保存 (不存图片路径), 图片路径
   以脚本中的 `weight`/`sprite` 定义为准 —— 日后重命名图片文件不会
   破坏旧存档 (需同步修改脚本)

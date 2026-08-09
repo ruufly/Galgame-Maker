@@ -50,6 +50,9 @@ class Runtime:
             "hide": self._cmd_hide,
             "withdraw": self._cmd_hide,
             "clear": self._cmd_clear,
+            "move": self._cmd_move,
+            "rotate": self._cmd_rotate,
+            "flip": self._cmd_flip,
             "weight": self._cmd_create,
             "sprite": self._cmd_create,
             "object": self._cmd_create,
@@ -505,6 +508,107 @@ class Runtime:
 
     def _cmd_clear(self, stmt):
         self.engine.display.clear_sprites()
+        return None
+
+    # -- 立绘变换 -------------------------------------------------------
+    def _extract_coords(self, tokens):
+        """从 token 序列开头提取坐标, 返回 (pos或None, 消费的token数)。
+
+        支持: ["640,360"] / ["640,", "360"] / ["640", "360"]。
+        非数字 token (如 left) 时返回 (None, 0)。
+        """
+        nums = []
+        consumed = 0
+        for tok in tokens:
+            s = str(tok).replace("(", "").replace(")", "")
+            parts = [p.strip() for p in s.split(",") if p.strip()]
+            if not parts:
+                break
+            got = []
+            for p in parts:
+                try:
+                    got.append(float(p))
+                except ValueError:
+                    got = None
+                    break
+            if got is None:
+                break
+            nums.extend(got)
+            consumed += 1
+            if len(nums) >= 2:
+                break
+        if len(nums) >= 2:
+            return (nums[0], nums[1]), consumed
+        return None, 0
+
+    def _cmd_move(self, stmt):
+        """move <id> to <pos> [duration] [ease 缓动]
+
+        pos: center/left/right/top/bottom 或坐标 (支持 640,360 / 640, 360 / 640 360)
+        例: move girl to left / move girl to 640,360 / move girl to 400,300 2 ease in_out
+        """
+        if len(stmt.args) < 2:
+            log.warning(f"第{stmt.line}行: move 需要 move <id> to <位置>")
+            return None
+        sid = stmt.args[0]
+        tokens = stmt.args[2:] if stmt.args[1] == "to" else stmt.args[1:]
+        if not tokens:
+            return None
+        pos, consumed = self._extract_coords(tokens)
+        if pos is None:
+            pos = tokens[0]
+            consumed = 1
+        rest = tokens[consumed:]
+        duration = 0.0
+        ease = "linear"
+        if rest:
+            try:
+                duration = float(rest[0])
+            except ValueError:
+                pass
+        if "ease" in rest:
+            idx = rest.index("ease")
+            if idx + 1 < len(rest):
+                ease = rest[idx + 1]
+        self.engine.display.move_sprite(sid, pos, duration, ease)
+        return None
+
+    def _cmd_rotate(self, stmt):
+        """rotate <id> <角度> [duration] [ease 缓动] (逆时针为正)"""
+        if len(stmt.args) < 2:
+            log.warning(f"第{stmt.line}行: rotate 需要 rotate <id> <角度>")
+            return None
+        sid = stmt.args[0]
+        try:
+            angle = float(stmt.args[1])
+        except ValueError:
+            log.warning(f"第{stmt.line}行: rotate 角度无效: {stmt.args[1]!r}")
+            return None
+        duration = 0.0
+        ease = "linear"
+        rest = stmt.args[2:]
+        if rest:
+            try:
+                duration = float(rest[0])
+            except ValueError:
+                pass
+        if "ease" in rest:
+            idx = rest.index("ease")
+            if idx + 1 < len(rest):
+                ease = rest[idx + 1]
+        self.engine.display.rotate_sprite(sid, angle, duration, ease)
+        return None
+
+    def _cmd_flip(self, stmt):
+        """flip <id> [horizontal|vertical] (默认水平翻转, 再次调用恢复)"""
+        if not stmt.args:
+            return None
+        sid = stmt.args[0]
+        axis = stmt.args[1] if len(stmt.args) > 1 else "horizontal"
+        if axis == "vertical":
+            self.engine.display.flip_sprite(sid, horizontal=False, vertical=True)
+        else:
+            self.engine.display.flip_sprite(sid, horizontal=True)
         return None
 
     # -- 对象创建 -------------------------------------------------------

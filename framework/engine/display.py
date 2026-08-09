@@ -193,29 +193,79 @@ BUILTIN_TRANSITIONS = {
 }
 
 
-class _Sprite:
-    __slots__ = (
-        "id", "surface", "rect", "alpha", "target_alpha", "fade_speed",
-        "visible", "props",
-    )
+# 缓动函数 (动画插值)
+_EASE_FUNCS = {
+    "linear": lambda t: t,
+    "in": lambda t: t * t,
+    "out": lambda t: 1 - (1 - t) ** 3,
+    "in_out": lambda t: t * t * (3 - 2 * t),
+}
 
-    def __init__(self, sid, surface, rect, props=None):
+
+class _Sprite:
+    """立绘精灵。
+
+    位置真相源是 center (浮点, 动画平滑); 旋转/翻转作用于 base_surface,
+    渲染面 surface 由 _recalc 生成, rect 始终以 center 为锚点。
+    """
+
+    __slots__ = ("id", "base_surface", "surface", "center", "angle",
+                 "flip_h", "flip_v", "alpha", "target_alpha", "fade_speed",
+                 "visible", "props", "rect", "anim")
+
+    def __init__(self, sid, base_surface, center, props=None):
         self.id = sid
-        self.surface = surface
-        self.rect = rect
+        self.base_surface = base_surface
+        self.surface = base_surface
+        self.center = [float(center[0]), float(center[1])]
+        self.angle = 0.0
+        self.flip_h = False
+        self.flip_v = False
         self.alpha = 255
         self.target_alpha = 255
-        self.fade_speed = 0.0      # alpha/秒, >0 表示淡入中
+        self.fade_speed = 0.0
         self.visible = False
         self.props = props or {}
+        self.rect = pygame.Rect(0, 0, 0, 0)
+        self.anim = None       # (kind, t, duration, start, target, ease)
+        self._recalc()
+
+    def _recalc(self):
+        """重新生成渲染面 (旋转/翻转), 并按中心点重算 rect。"""
+        surf = self.base_surface
+        if self.angle:
+            surf = pygame.transform.rotate(surf, self.angle)
+        if self.flip_h or self.flip_v:
+            surf = pygame.transform.flip(surf, self.flip_h, self.flip_v)
+        self.surface = surf
+        self.surface.set_alpha(int(self.alpha))
+        self.rect = surf.get_rect(center=(int(round(self.center[0])),
+                                          int(round(self.center[1]))))
 
     def update(self, dt):
+        # 淡入
         if self.fade_speed > 0 and self.alpha < self.target_alpha:
             self.alpha += self.fade_speed * dt
             if self.alpha >= self.target_alpha:
                 self.alpha = self.target_alpha
                 self.fade_speed = 0.0
             self.surface.set_alpha(int(self.alpha))
+        # 动画 (move / rotate)  —— anim 为可变 list, t 需写回
+        if self.anim is not None:
+            kind, t, duration, start, target, ease = self.anim
+            self.anim[1] = t + dt
+            k = min(1.0, self.anim[1] / duration) if duration > 0 else 1.0
+            e = _EASE_FUNCS.get(ease, _EASE_FUNCS["linear"])(k)
+            if kind == "move":
+                self.center[0] = start[0] + (target[0] - start[0]) * e
+                self.center[1] = start[1] + (target[1] - start[1]) * e
+                self.rect.center = (int(round(self.center[0])),
+                                    int(round(self.center[1])))
+            elif kind == "rotate":
+                self.angle = start + (target - start) * e
+                self._recalc()
+            if k >= 1.0:
+                self.anim = None
 
 
 class Display:
@@ -343,6 +393,25 @@ class Display:
             return w / 2 - img_w / 2, h * 0.8 - img_h / 2
         return w / 2 - img_w / 2, h / 2 - img_h / 2
 
+    def _resolve_center(self, spr, pos):
+        """把 pos 参数解析成立绘中心点坐标 (窗口坐标, 数字坐标为直接值)。"""
+        w, h = self.width, self.height
+        if isinstance(pos, (list, tuple)) and len(pos) == 2:
+            try:
+                return float(pos[0]), float(pos[1])
+            except (TypeError, ValueError):
+                pass
+        p = str(pos or "center").lower()
+        if p == "left":
+            return w * 0.25, h / 2
+        if p == "right":
+            return w * 0.75, h / 2
+        if p == "top":
+            return w / 2, h * 0.2
+        if p == "bottom":
+            return w / 2, h * 0.8
+        return w / 2, h / 2
+
     # ==================================================================
     # 背景
     # ==================================================================
@@ -399,9 +468,9 @@ class Display:
         old = self.sprites.get(sid)
         if old is not None and path is None:
             if pos is not None:
-                w, h = old.surface.get_size()
-                x, y = self._pos_to_xy(pos, w, h)
-                old.rect = pygame.Rect(int(x), int(y), w, h)
+                cx, cy = self._resolve_center(old, pos)
+                old.center = [cx, cy]
+                old.rect.center = (int(round(cx)), int(round(cy)))
                 old.props["pos"] = pos
             if effect == "fade":
                 old.alpha = 0
@@ -420,11 +489,12 @@ class Display:
         img = self._fit(img, mode=mode, scale=scale)
         w, h = img.get_size()
         if old is not None and pos is None and scale is None and mode is None:
-            # 同 id 换图 (表情切换): 保持原中心点
-            x, y = old.rect.centerx - w // 2, old.rect.centery - h // 2
+            # 同 id 换图 (角色表情切换): 保持原中心点
+            cx, cy = old.center
         else:
             x, y = self._pos_to_xy(pos, w, h)
-        spr = _Sprite(sid, img, pygame.Rect(int(x), int(y), w, h),
+            cx, cy = x + w / 2.0, y + h / 2.0
+        spr = _Sprite(sid, img, (cx, cy),
                       props={"image": path, "pos": pos, "scale": scale,
                              "mode": mode, "pose": None})
         if effect == "fade":
@@ -436,6 +506,60 @@ class Display:
         self.sprites[sid] = spr
         spr.visible = True
         self.engine.emit("sprite_show", id=sid, path=path)
+        return True
+
+    # ==================================================================
+    # 立绘变换: 位移 / 旋转 / 翻转
+    # ==================================================================
+    def move_sprite(self, sid: str, pos, duration: float = 0.0,
+                    ease: str = "linear") -> bool:
+        """移动立绘到目标位置。duration>0 时为缓动动画。"""
+        spr = self.sprites.get(sid)
+        if spr is None:
+            log.warning(f"move: 立绘 {sid} 不存在")
+            return False
+        target = self._resolve_center(spr, pos)
+        if duration and duration > 0:
+            spr.anim = ["move", 0.0, float(duration),
+                        (spr.center[0], spr.center[1]), target, ease]
+        else:
+            spr.center = [target[0], target[1]]
+            spr.rect.center = (int(round(target[0])), int(round(target[1])))
+        spr.props["pos"] = pos
+        self.engine.emit("sprite_move", id=sid, pos=target, duration=duration)
+        return True
+
+    def rotate_sprite(self, sid: str, angle: float,
+                      duration: float = 0.0, ease: str = "linear") -> bool:
+        """旋转立绘到指定角度 (pygame 惯例, 逆时针为正)。"""
+        spr = self.sprites.get(sid)
+        if spr is None:
+            log.warning(f"rotate: 立绘 {sid} 不存在")
+            return False
+        angle = float(angle) % 360
+        if duration and duration > 0:
+            spr.anim = ["rotate", 0.0, float(duration), spr.angle, angle, ease]
+        else:
+            spr.angle = angle
+            spr._recalc()
+        self.engine.emit("sprite_rotate", id=sid, angle=angle,
+                         duration=duration)
+        return True
+
+    def flip_sprite(self, sid: str, horizontal: bool = True,
+                    vertical: bool = False) -> bool:
+        """翻转立绘 (默认水平; 再次调用可恢复)。"""
+        spr = self.sprites.get(sid)
+        if spr is None:
+            log.warning(f"flip: 立绘 {sid} 不存在")
+            return False
+        if horizontal:
+            spr.flip_h = not spr.flip_h
+        if vertical:
+            spr.flip_v = not spr.flip_v
+        spr._recalc()
+        self.engine.emit("sprite_flip", id=sid, horizontal=horizontal,
+                         vertical=vertical)
         return True
 
     def hide_sprite(self, sid: str) -> bool:
@@ -454,16 +578,23 @@ class Display:
         self.sprite_order = []
 
     def sprite_state(self) -> list:
-        """导出立绘状态供存档: 只存脚本 id / 运行时位置 / 透明度 / 立绘名,
-        不存图片路径 (路径以脚本中的对象定义为准)。"""
+        """导出立绘状态供存档: 只存脚本 id / 位置 / 透明度 / 立绘名 /
+        旋转 / 翻转 / 中心点, 不存图片路径 (路径以脚本中的对象定义为准)。"""
         out = []
         for sid in self.sprite_order:
             spr = self.sprites[sid]
             if spr.visible:
-                out.append({"id": sid,
-                            "pos": spr.props.get("pos"),
-                            "alpha": spr.alpha,
-                            "pose": spr.props.get("pose")})
+                out.append({
+                    "id": sid,
+                    "pos": spr.props.get("pos"),
+                    "alpha": spr.alpha,
+                    "pose": spr.props.get("pose"),
+                    "angle": spr.angle,
+                    "flip_h": spr.flip_h,
+                    "flip_v": spr.flip_v,
+                    "cx": spr.center[0],
+                    "cy": spr.center[1],
+                })
         return out
 
     def restore_sprites(self, state: list) -> None:
@@ -511,6 +642,14 @@ class Display:
                 spr.fade_speed = 255.0 / self.FADE_DURATION
             else:
                 spr.fade_speed = 0.0
+            # 恢复变换状态: 旋转 / 翻转 / 中心点
+            if "angle" in item or "flip_h" in item or "flip_v" in item:
+                spr.angle = float(item.get("angle", 0.0))
+                spr.flip_h = bool(item.get("flip_h", False))
+                spr.flip_v = bool(item.get("flip_v", False))
+            if "cx" in item:
+                spr.center = [float(item["cx"]), float(item["cy"])]
+            spr._recalc()
 
     def restore_state(self, data: dict) -> None:
         """从存档恢复视觉状态: 背景 / 立绘 / 正在显示的文本或选择支。"""

@@ -778,6 +778,119 @@ def test_transitions():
         pygame.quit()
 
 
+def test_sprite_transform():
+    print("== 立绘变换 ==")
+    engine = GameEngine(640, 360, "test15")
+    d = engine.display
+    rt = engine.runtime
+    img = os.path.join(_ROOT, "test", "engine_demo", "materials", "image",
+                       "producer", "producer1.png").replace("\\", "/")
+    src = f'''
+char girl
+    name: "小美"
+    default: "{img}"
+    normal: "{img}"
+start:
+    show girl normal
+    text "x"
+'''
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "_transform_test.gal")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    from framework.engine.parser import Statement
+    try:
+        rt.load_script(path)
+        rt.start()
+        spr = d.sprites["girl"]
+        c0 = tuple(spr.rect.center)
+
+        # 瞬间移动
+        d.move_sprite("girl", "left")
+        c1 = spr.rect.center
+        check("瞬间移动到位", c1[0] < c0[0] - 100, f"{c0}->{c1}")
+
+        # 动画移动
+        d.move_sprite("girl", "right", 1.0)
+        check("移动动画启动", spr.anim is not None and spr.anim[0] == "move")
+        for _ in range(60):
+            d.update(1 / 60)
+        check("移动动画完成", spr.anim is None)
+        check("移动到右侧", spr.rect.center[0] > c0[0] + 100,
+              str(spr.rect.center))
+
+        # 旋转 (瞬间 + 动画)
+        d.rotate_sprite("girl", 90)
+        check("旋转角度", spr.angle == 90)
+        check("旋转后渲染面变化",
+              spr.surface.get_size() != spr.base_surface.get_size())
+        d.rotate_sprite("girl", 0, 1.0)
+        check("旋转动画启动", spr.anim is not None and spr.anim[0] == "rotate")
+        for _ in range(60):
+            d.update(1 / 60)
+        check("旋转动画归零", spr.anim is None and abs(spr.angle) < 0.5,
+              str(spr.angle))
+
+        # 翻转
+        d.flip_sprite("girl")
+        check("水平翻转", spr.flip_h is True)
+        d.flip_sprite("girl")
+        check("再次翻转恢复", spr.flip_h is False)
+
+        # DSL 指令
+        rt._cmd_move(Statement(op="move", args=["girl", "to", "left"], line=0))
+        check("move 指令执行", abs(spr.rect.center[0] - 160) < 2,
+              str(spr.rect.center))
+        # 坐标写法: 单 token / 带空格 / 两 token / 括号
+        for label, args, expect in [
+            ("坐标 640,360", ["girl", "to", "640,360"], (640.0, 360.0)),
+            ("坐标 640, 360", ["girl", "to", "640,", "360"], (640.0, 360.0)),
+            ("坐标 400 300", ["girl", "to", "400", "300"], (400.0, 300.0)),
+            ("坐标 (300,200)", ["girl", "to", "(300,200)"], (300.0, 200.0)),
+        ]:
+            rt._cmd_move(Statement(op="move", args=args, line=0))
+            check(f"move {label} 到位", abs(spr.center[0] - expect[0]) < 2
+                  and abs(spr.center[1] - expect[1]) < 2,
+                  f"{spr.center} vs {expect}")
+        rt._cmd_move(Statement(op="move",
+                               args=["girl", "to", "400,300", "1"], line=0))
+        check("move 数字坐标+时长", spr.anim is not None
+              and spr.anim[0] == "move" and spr.anim[4] == (400.0, 300.0),
+              str(spr.anim))
+        rt._cmd_rotate(Statement(op="rotate", args=["girl", "45", "1"], line=0))
+        check("rotate 指令", spr.anim is not None and spr.anim[0] == "rotate")
+        for _ in range(60):
+            d.update(1 / 60)
+
+        # 存档包含变换状态
+        d.rotate_sprite("girl", 90)
+        d.flip_sprite("girl")
+        d.move_sprite("girl", "right")
+        engine.save_game(0, silent=True)
+        snap = engine.save.load(0)
+        s0 = snap["sprites"][0]
+        check("存档含旋转", s0.get("angle") == 90, str(s0.get("angle")))
+        check("存档含翻转", s0.get("flip_h") is True, str(s0.get("flip_h")))
+        check("存档含中心点", abs(s0.get("cx", 0) - 480) < 2, str(s0.get("cx")))
+
+        # 读档恢复全部变换
+        spr.angle = 0
+        spr.flip_h = False
+        spr.center = [10.0, 10.0]
+        spr._recalc()
+        engine.load_game(0)
+        spr = d.sprites["girl"]
+        check("读档恢复旋转", spr.angle == 90, str(spr.angle))
+        check("读档恢复翻转", spr.flip_h is True)
+        check("读档恢复位置", abs(spr.center[0] - 480) < 2, str(spr.center))
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -892,6 +1005,12 @@ def main():
         test_transitions()
     except Exception as exc:
         print(f"  [ERROR] 过渡效果测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_sprite_transform()
+    except Exception as exc:
+        print(f"  [ERROR] 立绘变换测试异常: {exc}")
         import traceback
         traceback.print_exc()
 
