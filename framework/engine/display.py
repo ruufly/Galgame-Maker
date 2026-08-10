@@ -1030,20 +1030,56 @@ class Display:
         """设置 selection 全局样式覆盖 (供 selection_style 脚本语句/插件)。"""
         self.selection_style_overrides.update(style_dict)
 
+    def show_title(self, caption, items, image=None, pos=None):
+        """显示标题画面 (selection 的标题专用实例)。
+
+        items: [(text, action, cfg), ...] 或 [(text, action), ...]
+        pos:   {"title_x", "title_y", "button_x", "button_y",
+                "button_stretch", "button_text"}
+        """
+        pos = pos or {}
+        self.title_active = True
+        self.title_caption = caption
+        self.title_items = list(items)
+        style = {
+            "caption_x": pos.get("title_x", "center"),
+            "caption_y": pos.get("title_y"),
+            "anchor_x": pos.get("button_x", "center"),
+            "anchor_y": pos.get("button_y"),
+        }
+        for bool_key in ("button_stretch", "button_text"):
+            if bool_key in pos:
+                style[bool_key] = str(pos[bool_key]).lower() in (
+                    "true", "1", "yes", "on")
+        self.show_selection(items, caption, image, style)
+        self.title_anchor = self.selection_anchor
+        self.title_image = self.selection_image
+        self.engine.emit("title_show", caption=caption,
+                         items=[t for t, *_ in items])
+
+    def hit_title(self, pos) -> int:
+        return self.hit_selection(pos) if self.title_active else -1
+
     def show_selection(self, items, caption: str = "", image: str = None,
                        style: dict = None) -> None:
         """通用选择列表: 一组按钮 + 可选标题 (文字/图片)。
 
-        items: [(按钮文字, action_dict)], action_dict 含 "type" 键
-               (由 engine.run_action 分发, 插件可注册自定义类型)。
-        style: 外观/布局参数 (覆盖 DEFAULT_SELECTION_STYLE 与全局覆盖)。
-        anchor_y 支持 "center" (整体垂直居中)。
+        items 元素: (text, action_dict) 或 (text, action_dict, cfg)。
+        cfg: 每按键独立配置 {width, height, image, image_focus,
+             stretch, text_visible, ...} (覆盖全局 style)。
         """
         st = dict(DEFAULT_SELECTION_STYLE)
         st.update(self.selection_style_overrides)   # 脚本全局覆盖
         st.update(style or {})
         self.selection_style = st
-        self.selection_items = list(items)
+        # 规范化 items: [(text, action, cfg)]
+        norm = []
+        for item in items:
+            if len(item) >= 3:
+                norm.append((item[0], item[1], item[2] or {}))
+            else:
+                norm.append((item[0], item[1], {}))
+        self.selection_items = norm
         self.selection_caption = caption or ""
         self.selection_image = self.load_image(image) if image else None
         self.selection_active = True
@@ -1052,28 +1088,33 @@ class Display:
             self._resolve_title_x(st.get("caption_x", "center")),
             self._resolve_title_y(st.get("caption_y"), 0.30),
         )
-        # 按钮区
-        n = len(items)
-        bw = int(st.get("width") or w * st["width_ratio"])
-        bh = st["height"]
-        gap = st["gap"]
+        # 按钮区: 每项可独立尺寸 (高度可变, 纵向排列)
+        n = len(norm)
         bx = self._resolve_title_x(st.get("anchor_x", "center"))
         by = st.get("anchor_y")
+        gap = st["gap"]
         if str(by).lower() == "center":
-            # 整体垂直居中 (按钮组中心 = 窗口中心); by 语义为第一个按钮顶部
-            total = n * bh + (n - 1) * gap
+            # 先算总高 (按各项高度)
+            total = sum(int(cfg.get("height") or st["height"])
+                        for _, _, cfg in norm)
+            total += (n - 1) * gap
             by = (self.height - total) / 2
         else:
             by = self._resolve_title_y(by, 0.52)
-        self.selection_rects = [
-            pygame.Rect(int(bx - bw / 2), int(by + i * (bh + gap)), bw, bh)
-            for i in range(n)
-        ]
+        rects = []
+        y = by
+        for text, action, cfg in norm:
+            bw = int(cfg.get("width") or st.get("width")
+                     or w * st["width_ratio"])
+            bh = int(cfg.get("height") or st["height"])
+            rects.append(pygame.Rect(int(bx - bw / 2), int(y), bw, bh))
+            y += bh + gap
+        self.selection_rects = rects
         # 兼容旧字段 (标题画面/系统菜单)
         self.title_rects = self.selection_rects
         self.system_menu_rects = self.selection_rects
         self.engine.emit("selection_show", caption=caption,
-                         items=[t for t, _ in items])
+                         items=[t for t, _, _ in norm])
 
     def hit_selection(self, pos) -> int:
         if not self.selection_active:
@@ -1111,23 +1152,27 @@ class Display:
                                     base_size=st.get("caption_size", 56))
             self._rich.draw_centered(buf, runs, int(tx) + 3, int(text_y) + 3)
             self._rich.draw_centered(buf, runs, int(tx), int(text_y))
-        # 按钮
+        # 按钮 (每按键可独立配置)
         mouse = pygame.mouse.get_pos()
-        for idx, (label, action) in enumerate(self.selection_items):
+        for idx, (label, action, cfg) in enumerate(self.selection_items):
             rect = self.selection_rects[idx]
             hovered = rect.collidepoint(mouse)
-            # 标题画面用 title_button 主题图 (常自带文字, 可不拉伸不写字),
-            # ESC 菜单用 menu_button 主题图 (通常为无字按钮)
             # 标题画面用 title_buttons 主题图 (多按钮图组, 按索引取),
-            # ESC 菜单用 menu_buttons 主题图
+            # ESC 菜单用 menu_buttons 主题图; cfg 的 image 优先
             theme_comp = ("title_buttons" if self.title_active
                           else "menu_buttons")
-            img = (self._theme(theme_comp, "focus" if hovered
-                               else "default", index=idx)
-                   or self._ui_image(st.get("button_image_hover") if hovered
-                                     else st.get("button_image")))
+            cfg_img = cfg.get("image_focus") if hovered else cfg.get("image")
+            if cfg_img:
+                img = self._ui_image(cfg_img)
+            else:
+                img = (self._theme(theme_comp, "focus" if hovered
+                                   else "default", index=idx)
+                       or self._ui_image(st.get("button_image_hover")
+                                         if hovered
+                                         else st.get("button_image")))
+            stretch = cfg.get("stretch", st.get("button_stretch", True))
             if img is not None:
-                if st.get("button_stretch", True):
+                if stretch:
                     buf.blit(ui.nine_slice(img, rect), rect.topleft)
                 else:
                     # 原尺寸居中 (按钮图自带文字时)
@@ -1139,7 +1184,7 @@ class Display:
                          border_color=st["button_border_hover"] if hovered
                          else st["button_border"],
                          border_width=2, radius=st.get("button_radius", 6))
-            if st.get("button_text", True):
+            if cfg.get("text_visible", st.get("button_text", True)):
                 runs_b = self._rich.parse(
                     str(label), base_size=st.get("text_size", 28),
                     base_color=st.get("text_color_hover") if hovered
@@ -1149,151 +1194,6 @@ class Display:
                                          alpha=255 if hovered
                                          else st.get("unhover_alpha", 215))
 
-    # ==================================================================
-    # 标题画面 (基于通用 selection)
-    # ==================================================================
-    def show_title(self, caption: str, items, image: str = None,
-                   pos: dict = None) -> None:
-        """显示标题画面 (selection 的标题专用实例)。
-
-        items: [(按钮文字, action_dict)]
-        pos:   {"title_x", "title_y", "button_x", "button_y"}
-        """
-        pos = pos or {}
-        self.title_active = True
-        self.title_caption = caption
-        self.title_items = list(items)
-        style = {
-            "caption_x": pos.get("title_x", "center"),
-            "caption_y": pos.get("title_y"),
-            "anchor_x": pos.get("button_x", "center"),
-            "anchor_y": pos.get("button_y"),
-        }
-        # title 块可覆盖按钮行为 (图片自带文字时关掉文案与拉伸)
-        for bool_key in ("button_stretch", "button_text"):
-            if bool_key in pos:
-                style[bool_key] = str(pos[bool_key]).lower() in (
-                    "true", "1", "yes", "on")
-        self.show_selection(items, caption, image, style)
-        self.title_anchor = self.selection_anchor
-        self.title_image = self.selection_image
-        self.engine.emit("title_show", caption=caption,
-                         items=[t for t, _ in items])
-
-    def hit_title(self, pos) -> int:
-        return self.hit_selection(pos) if self.title_active else -1
-
-    # ==================================================================
-    # 确认对话框
-    # ==================================================================
-    def show_confirm(self, text: str, yes_text: str = "是",
-                     no_text: str = "否") -> None:
-        """显示确认对话框 (如退出确认), 阻塞交互直到选择。"""
-        self.confirm_active = True
-        self.confirm_text = text
-        self.confirm_yes = yes_text
-        self.confirm_no = no_text
-        w, h = self.width, self.height
-        pw, ph = int(w * 0.5), int(h * 0.30)
-        self.confirm_panel = pygame.Rect((w - pw) // 2, (h - ph) // 2, pw, ph)
-        bw, bh = int(pw * 0.30), 46
-        gap = 18
-        total = bw * 2 + gap
-        x0 = (w - total) // 2
-        y = self.confirm_panel.bottom - bh - 22
-        self.confirm_rects = [
-            pygame.Rect(x0, y, bw, bh),
-            pygame.Rect(x0 + bw + gap, y, bw, bh),
-        ]
-        self.engine.emit("confirm_show", text=text)
-
-    def hit_confirm(self, pos) -> int:
-        if not self.confirm_active:
-            return -1
-        for idx, rect in enumerate(self.confirm_rects):
-            if rect.collidepoint(pos):
-                return idx
-        return -1
-
-    # ==================================================================
-    # 错误弹窗
-    # ==================================================================
-    def show_error(self, info: dict) -> None:
-        """显示运行时错误弹窗 (ErrorHandler 快照)。"""
-        self.error_active = True
-        self.error_info = info
-        w, h = self.width, self.height
-        pw, ph = int(w * 0.72), int(h * 0.60)
-        self.error_panel = pygame.Rect((w - pw) // 2, (h - ph) // 2, pw, ph)
-        bw, bh = int(pw * 0.26), 44
-        gap = 16
-        total = bw * 3 + gap * 2
-        x0 = self.error_panel.centerx - total // 2
-        y = self.error_panel.bottom - bh - 20
-        self.error_rects = [
-            pygame.Rect(x0 + i * (bw + gap), y, bw, bh) for i in range(3)
-        ]
-        self.engine.emit("error_show", text=info.get("text"))
-
-    def hit_error(self, pos) -> int:
-        if not self.error_active:
-            return -1
-        for idx, rect in enumerate(self.error_rects):
-            if rect.collidepoint(pos):
-                return idx
-        return -1
-
-    def _draw_error(self, buf) -> None:
-        ui.dim_overlay(buf, 175)
-        dlg_img = (self._theme("slot_panel")
-                   or self._ui_image(
-                       self.selection_style_overrides.get("dialog_image")))
-        self._panel_or_image(buf, self.error_panel, dlg_img,
-                             bg_color=(40, 15, 15, 248),
-                             border_color=(255, 90, 90),
-                             border_width=3, radius=10)
-        pw = self.error_panel.w
-        pad = 26
-        # 标题
-        runs_t = self._rich.parse("{c=#ff6060}⚠ 运行时错误{/c}",
-                                  base_size=30)
-        self._rich.draw(buf, runs_t, self.error_panel.x + pad,
-                        self.error_panel.y + 18, pw - pad * 2)
-        # 错误摘要 (截断)
-        text = str(self.error_info.get("text", "未知错误"))
-        if len(text) > 400:
-            text = text[:400] + " ……"
-        runs = self._rich.parse(text, base_size=20)
-        self._rich.draw(buf, runs, self.error_panel.x + pad,
-                        self.error_panel.y + 62, pw - pad * 2,
-                        max_lines=8)
-        # 日志提示
-        file_hint = (f"完整报错已写入: {self.error_info.get('file')}"
-                     if self.error_info.get("file") else "")
-        runs_h = self._rich.parse(file_hint, base_size=16,
-                                  base_color=(200, 180, 160))
-        self._rich.draw(buf, runs_h, self.error_panel.x + pad,
-                        self.error_panel.y + self.error_panel.h - 78,
-                        pw - pad * 2, max_lines=2)
-        # 按钮
-        mouse = pygame.mouse.get_pos()
-        labels = ("继续游戏", "复制错误", "退出游戏")
-        for idx, label in enumerate(labels):
-            rect = self.error_rects[idx]
-            hovered = rect.collidepoint(mouse)
-            accent = ((0, 150, 90), (120, 110, 40), (170, 50, 50))[idx]
-            self._panel_or_image(
-                buf, rect, None,
-                bg_color=(*accent, 250) if hovered else (*accent, 205),
-                border_color=(255, 255, 255, 200) if hovered
-                else (0, 0, 0, 120), border_width=2, radius=6)
-            runs_b = self._rich.parse(label, base_size=20)
-            self._rich.draw_centered(buf, runs_b, rect.centerx,
-                                     rect.centery)
-
-    # ==================================================================
-    # 系统菜单 (ESC) / 存档槽位选择
-    # ==================================================================
     def show_system_menu(self, items) -> None:
         """显示系统菜单 (游戏内 ESC, selection 的菜单专用实例)。
 
@@ -1312,9 +1212,8 @@ class Display:
         self.slot_menu_mode = mode
         self.slot_menu_slots = list(slots)
         w, h = self.width, self.height
-        # 网格: 2 列 x N/2 行
         cols = 2
-        rows = (len(slots) + 1) // 2
+        rows = max(1, (len(slots) + 1) // 2)
         panel_w, panel_h = int(w * 0.72), int(h * 0.66)
         px, py = (w - panel_w) // 2, int(h * 0.16)
         gw, gh = int(panel_w * 0.42), int((panel_h - 80) / rows)
@@ -1331,7 +1230,7 @@ class Display:
             px + panel_w - 110, py + panel_h - 44, 90, 34)
 
     def hit_slot_menu(self, pos):
-        """返回 (槽位索引, "slot") / ("back",) / (None,)。"""
+        """返回槽位索引 / "back" / None。"""
         if not self.slot_menu_active:
             return None
         if self.slot_menu_back_rect.collidepoint(pos):
@@ -1394,6 +1293,60 @@ class Display:
         runs_b = self._rich.parse("返回", base_size=20)
         self._rich.draw_centered(buf, runs_b, back.centerx, back.centery)
 
+    def show_confirm(self, text: str, yes_text: str = "是",
+                     no_text: str = "否") -> None:
+        """显示确认对话框 (如退出确认), 阻塞交互直到选择。"""
+        self.confirm_active = True
+        self.confirm_text = text
+        self.confirm_yes = yes_text
+        self.confirm_no = no_text
+        w, h = self.width, self.height
+        pw, ph = int(w * 0.5), int(h * 0.30)
+        self.confirm_panel = pygame.Rect((w - pw) // 2, (h - ph) // 2, pw, ph)
+        bw, bh = int(pw * 0.30), 46
+        gap = 18
+        total = bw * 2 + gap
+        x0 = (w - total) // 2
+        y = self.confirm_panel.bottom - bh - 22
+        self.confirm_rects = [
+            pygame.Rect(x0, y, bw, bh),
+            pygame.Rect(x0 + bw + gap, y, bw, bh),
+        ]
+        self.engine.emit("confirm_show", text=text)
+
+    def hit_confirm(self, pos) -> int:
+        if not self.confirm_active:
+            return -1
+        for idx, rect in enumerate(self.confirm_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return -1
+
+    def show_error(self, info: dict) -> None:
+        """显示运行时错误弹窗 (ErrorHandler 快照)。"""
+        self.error_active = True
+        self.error_info = info
+        w, h = self.width, self.height
+        pw, ph = int(w * 0.72), int(h * 0.60)
+        self.error_panel = pygame.Rect((w - pw) // 2, (h - ph) // 2, pw, ph)
+        bw, bh = int(pw * 0.26), 44
+        gap = 16
+        total = bw * 3 + gap * 2
+        x0 = self.error_panel.centerx - total // 2
+        y = self.error_panel.bottom - bh - 20
+        self.error_rects = [
+            pygame.Rect(x0 + i * (bw + gap), y, bw, bh) for i in range(3)
+        ]
+        self.engine.emit("error_show", text=info.get("text"))
+
+    def hit_error(self, pos) -> int:
+        if not self.error_active:
+            return -1
+        for idx, rect in enumerate(self.error_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return -1
+
     def _draw_confirm(self, buf) -> None:
         ui.dim_overlay(buf, 170)
         dlg_img = (self._theme("confirm_panel")
@@ -1434,6 +1387,49 @@ class Display:
     # ==================================================================
     # 转场 / 震动 / 通知 / 结束
     # ==================================================================
+    def _draw_error(self, buf) -> None:
+        ui.dim_overlay(buf, 175)
+        dlg_img = self._ui_image(
+            self.selection_style_overrides.get("dialog_image"))
+        self._panel_or_image(buf, self.error_panel, dlg_img,
+                             bg_color=(40, 15, 15, 248),
+                             border_color=(255, 90, 90),
+                             border_width=3, radius=10)
+        pw = self.error_panel.w
+        pad = 26
+        runs_t = self._rich.parse("{c=#ff6060}⚠ 运行时错误{/c}",
+                                  base_size=30)
+        self._rich.draw(buf, runs_t, self.error_panel.x + pad,
+                        self.error_panel.y + 18, pw - pad * 2)
+        text = str(self.error_info.get("text", "未知错误"))
+        if len(text) > 400:
+            text = text[:400] + " ……"
+        runs = self._rich.parse(text, base_size=20)
+        self._rich.draw(buf, runs, self.error_panel.x + pad,
+                        self.error_panel.y + 62, pw - pad * 2,
+                        max_lines=8)
+        file_hint = (f"完整报错已写入: {self.error_info.get('file')}"
+                     if self.error_info.get("file") else "")
+        runs_h = self._rich.parse(file_hint, base_size=16,
+                                  base_color=(200, 180, 160))
+        self._rich.draw(buf, runs_h, self.error_panel.x + pad,
+                        self.error_panel.y + self.error_panel.h - 78,
+                        pw - pad * 2, max_lines=2)
+        mouse = pygame.mouse.get_pos()
+        labels = ("继续游戏", "复制错误", "退出游戏")
+        for idx, label in enumerate(labels):
+            rect = self.error_rects[idx]
+            hovered = rect.collidepoint(mouse)
+            accent = ((0, 150, 90), (120, 110, 40), (170, 50, 50))[idx]
+            self._panel_or_image(
+                buf, rect, None,
+                bg_color=(*accent, 250) if hovered else (*accent, 205),
+                border_color=(255, 255, 255, 200) if hovered
+                else (0, 0, 0, 120), border_width=2, radius=6)
+            runs_b = self._rich.parse(label, base_size=20)
+            self._rich.draw_centered(buf, runs_b, rect.centerx,
+                                     rect.centery)
+
     def start_fadeout(self, duration: float = None) -> None:
         dur = duration or self.FADE_DURATION
         self.fade_target = 255.0

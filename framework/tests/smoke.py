@@ -982,7 +982,7 @@ def test_title_screen():
         engine = fresh()
         d = engine.display
         check("标题画面激活", d.title_active)
-        check("标题文字富文本", d.title_caption == "{c=#ffcc00}欢迎光临{/c}",
+        check("标题无副标题(已注释)", d.title_caption == "",
               str(d.title_caption))
         check("标题图片加载", d.title_image is not None)
         check("标题菜单 3 项", len(d.title_items) == 3, str(d.title_items))
@@ -990,7 +990,7 @@ def test_title_screen():
               str(d.title_items[0]))
         check("标题位置自定义", d.title_anchor[1] == 210.0,
               str(d.title_anchor))
-        check("按钮位置自定义", d.title_rects[0].y == 420,
+        check("按钮位置自定义", d.title_rects[0].y == 340,
               str(d.title_rects[0]))
         engine.draw()
         check("标题绘制无异常", True)
@@ -1103,7 +1103,7 @@ def test_system_menu():
         engine.on_escape()
         check("ESC 打开系统菜单", d.system_menu_active and engine.paused)
         check("菜单 5 项", len(d.system_menu_items) == 5,
-              str([t for t, _ in d.system_menu_items]))
+              str([t for t, _, _ in d.system_menu_items]))
         engine.draw()
         check("菜单绘制无异常", True)
         # 继续游戏
@@ -1471,17 +1471,13 @@ def test_dialogs():
         engine.on_click(d.confirm_rects[0].center)   # 确认返回
         check("确认后回标题", d.title_active and not d.confirm_active)
 
-        # ESC 菜单文案自定义
-        engine.apply_config({"menu_save": "保存进度",
-                             "menu_title": "回到主菜单",
-                             "menu_quit": "结束游戏"})
-        engine.on_escape()                              # 标题 ESC -> 退出确认
-        engine.on_click(d.confirm_rects[1].center)      # 否 -> 留在标题
+        # ESC 菜单由 menu system 块定义 (menu_texts 仅用于无块定义时的回退)
         engine.on_click(d.title_rects[0].center)        # 开始游戏
         engine.on_escape()                              # ESC -> 菜单
-        texts = [t for t, _ in d.selection_items]
-        check("菜单文案自定义", texts == ["继续游戏", "保存进度", "读取存档",
-                                      "回到主菜单", "结束游戏"], str(texts))
+        texts = [t for t, _, _ in d.selection_items]
+        check("ESC 菜单用命名菜单文案",
+              texts == ["继续游戏", "存档", "读取存档", "返回标题", "退出游戏"],
+              str(texts))
         engine.on_click(d.selection_rects[0].center)   # 继续
     finally:
         engine.quit()
@@ -1891,12 +1887,12 @@ def test_ui_advanced():
         ov = d.selection_style_overrides
         check("selection 深色文字", ov.get("text_color") == (58, 58, 78),
               str(ov.get("text_color")))
-        # title 透传: 按钮图自带文字 -> 隐藏文案 + 不拉伸
+        # title 透传: 按钮图自带文字 -> 隐藏文案 + 不拉伸 (来自 menu 块 cfg)
         rt.start()
         check("标题按钮隐藏文字",
-              d.selection_style.get("button_text") is False)
+              d.selection_items[0][2].get("text_visible") is False)
         check("标题按钮不拉伸",
-              d.selection_style.get("button_stretch") is False)
+              d.selection_items[0][2].get("stretch") is False)
         check("标题按钮文字色配置",
               d.selection_style.get("text_color") == (58, 58, 78))
         engine.draw()
@@ -1932,6 +1928,72 @@ def test_ui_advanced():
               str(spr.surface.get_size()))
     finally:
         engine.quit()
+        pygame.quit()
+
+
+def test_menu_block():
+    print("== 命名菜单 (menu 块) ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test41")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        check("菜单静态注册", "title" in rt.menus, str(list(rt.menus)))
+        items = rt.menus["title"]
+        check("菜单 3 按键", len(items) == 3, str([i["name"] for i in items]))
+        check("按键动作解析",
+              items[0]["action"] == {"type": "start", "label": "game_start"}
+              and items[1]["action"] == {"type": "slot_menu", "mode": "load"}
+              and items[2]["action"] == {"type": "quit"},
+              str([i["action"] for i in items]))
+        check("按键精细配置",
+              items[0]["cfg"]["width"] == 262
+              and items[0]["cfg"]["height"] == 98
+              and items[0]["cfg"]["stretch"] is False
+              and items[0]["cfg"]["text_visible"] is False
+              and "image" in items[0]["cfg"]
+              and "image_focus" in items[0]["cfg"],
+              str(items[0]["cfg"]))
+
+        # title 使用命名菜单
+        rt.start()
+        check("标题用菜单项", len(d.selection_items) == 3
+              and d.selection_items[0][0] == "开始游戏")
+        check("按键独立尺寸", d.selection_rects[0].height == 98
+              and d.selection_rects[1].height == 98,
+              str(d.selection_rects[0]))
+        engine.draw()
+        check("菜单绘制无异常", True)
+        # 点击开始 -> 动作执行
+        engine.on_click(d.selection_rects[0].center)
+        check("菜单动作执行", rt.current_label == "game_start"
+              and not d.title_active)
+
+        # 自定义动作 (插件 explode) 经 menu action 触发
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        rt._cmd_menu(Statement(op="menu", args=["m"], block=[
+            Statement(op="btn", kwargs={
+                "text": "震动", "action": "explode duration=0.3"}, line=0),
+        ], line=0))
+        d.show_selection(rt._menu_items("m"))
+        engine.on_click(d.selection_rects[0].center)
+        check("自定义动作经菜单触发", d.shake_time > 0)
+
+        # ESC 系统菜单由 menu system 块覆盖
+        engine.open_system_menu()
+        check("ESC 菜单用命名菜单",
+              d.system_menu_active and len(d.selection_items) == 5
+              and d.selection_items[0][0] == "继续游戏"
+              and d.selection_items[0][2].get("width") == 240,
+              str([t for t, _, _ in d.selection_items]))
+        engine.on_click(d.selection_rects[1].center)   # 存档 -> 槽位界面
+        check("ESC 菜单动作执行", d.slot_menu_active
+              and d.slot_menu_mode == "save")
+    finally:
+        engine.quit()
+        import pygame
         pygame.quit()
 
 
@@ -2145,6 +2207,12 @@ def main():
         test_ui_advanced()
     except Exception as exc:
         print(f"  [ERROR] UI 高级配置测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_menu_block()
+    except Exception as exc:
+        print(f"  [ERROR] 菜单块测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

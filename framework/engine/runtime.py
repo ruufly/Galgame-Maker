@@ -44,6 +44,7 @@ class Runtime:
         self.scenes = {}              # 场景表: id -> {name, backgrounds, ...}
         self.styles = {}              # 样式表: name -> {属性: 值}
         self.current_style_name = None
+        self.menus = {}               # 菜单表: id -> [{name, text, action, cfg}]
 
         # 内置指令表
         self._builtins = {
@@ -92,6 +93,7 @@ class Runtime:
             "selection_style": self._cmd_selection_style,
             "import": self._cmd_pass,
             "ui": self._cmd_ui,
+            "menu": self._cmd_menu,
         }
 
     # ==================================================================
@@ -119,13 +121,15 @@ class Runtime:
         from framework.engine.styles import BUILTIN_STYLES
         self.styles = dict(BUILTIN_STYLES)
         self.styles.update(self._scan_styles(script))
-        # selection 全局样式 / UI 主题素材 (静态应用, 读档后仍生效)
+        # selection 全局样式 / UI 主题素材 / 菜单定义 (静态应用)
         self.engine.display.selection_style_overrides.clear()
         for stmt in self._scan_statements(script):
             if stmt.op == "selection_style":
                 self._apply_selection_style_stmt(stmt)
             elif stmt.op == "ui":
                 self._cmd_ui(stmt)
+            elif stmt.op == "menu":
+                self._cmd_menu(stmt)
         self.engine.emit("script_load", path=path, name=script.name)
         log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
                  f"对象 {len(self.script_objects)} 个, "
@@ -942,6 +946,100 @@ class Runtime:
                 self.engine.display.set_theme_image(comp, items)
         return None
 
+    def _parse_action(self, s: str) -> dict:
+        """解析动作字符串: "type [参数...] [k=v ...]"。
+
+        无名参数按动作类型的位置参数名填充:
+            "start game_start" -> label=game_start
+            "slot_menu load"   -> mode=load
+            "save 0"           -> slot=0
+            未知类型默认参数名为 label。
+        """
+        parts = str(s).split()
+        if not parts:
+            return None
+        atype = parts[0]
+        names = {"start": ("label",), "jump": ("label",), "call": ("label",),
+                 "slot_menu": ("mode",), "save": ("slot",),
+                 "load": ("slot",)}.get(atype, ("label",))
+        params = {}
+        pos = 0
+        for p in parts[1:]:
+            if "=" in p:
+                k, v = p.split("=", 1)
+                params[k] = v
+            else:
+                name = names[pos] if pos < len(names) else f"arg{pos}"
+                params[name] = p
+                pos += 1
+        return {"type": atype, **params}
+
+    def _cmd_menu(self, stmt):
+        """定义命名菜单: menu <id> + 按键子块 (可精细化配置)。
+
+        menu title
+            start_button
+                text: "开始游戏"
+                image: "a_默认.png, a_焦点.png"   # 相对脚本目录 (逗号=默认,焦点)
+                width: 262
+                height: 98
+                stretch: false            # 不拉伸 (原尺寸居中)
+                text_visible: false       # 图自带文字时不渲染文案
+                action: start game_start  # 动作: 类型 [参数] (可自定义插件动作)
+
+        标题画面: title 块加 menu: <id> 使用; 系统菜单: 定义 menu system 覆盖内置。
+        """
+        if not stmt.args:
+            return None
+        mid = stmt.args[0]
+        items = []
+        for sub in stmt.block:
+            props = dict(sub.kwargs)
+            text = props.pop("text", sub.op)
+            action = self._parse_action(props.pop("action", ""))
+            cfg = {}
+            for key in ("image", "image_focus", "width", "height",
+                        "stretch", "text_visible"):
+                if key in props:
+                    val = props[key]
+                    if key in ("width", "height"):
+                        try:
+                            cfg[key] = int(float(val))
+                        except (TypeError, ValueError):
+                            pass
+                    elif key in ("stretch", "text_visible"):
+                        cfg[key] = str(val).lower() in ("true", "1", "yes",
+                                                        "on")
+                    elif key == "image":
+                        # "默认图, 焦点图" -> image / image_focus
+                        parts = [p.strip() for p in str(val).split(",")
+                                 if p.strip()]
+                        if parts:
+                            cfg["image"] = parts[0]
+                            if len(parts) > 1:
+                                cfg["image_focus"] = parts[1]
+                    else:
+                        cfg[key] = str(val)
+            items.append({"name": sub.op, "text": str(text),
+                          "action": action, "cfg": cfg})
+        self.menus[mid] = items
+        self.engine.emit("menu_register", name=mid, items=len(items))
+        log.info(f"菜单已注册: {mid} ({len(items)} 个按键)")
+        return None
+
+    def _menu_items(self, mid: str) -> list:
+        """把命名菜单转成 selection items: [(text, action, cfg), ...]。"""
+        menu = self.menus.get(mid)
+        if not menu:
+            return None
+        out = []
+        for it in menu:
+            action = it["action"]
+            if action is None:
+                action = {"type": "close"}
+            out.append((it["text"], action, it["cfg"]))
+        return out
+
     def _cmd_title(self, stmt):
         """显示标题画面 (阻塞直到玩家选择)。
 
@@ -972,22 +1070,30 @@ class Runtime:
             if bool_key in props:
                 pos[bool_key] = str(props[bool_key]).lower() in (
                     "true", "1", "yes", "on")
-        items = []
-        start_label = props.get("start")
-        if start_label:
-            text = str(props.get("start_text") or "开始游戏")
-            items.append((text, {"type": "start", "label": str(start_label)}))
-        if "load" in props:
-            try:
-                slot = int(props["load"])
-            except (TypeError, ValueError):
-                slot = 0
-                log.warning(f"第{stmt.line}行: title 的 load 槽位无效")
-            text = str(props.get("load_text") or "读取存档")
-            items.append((text, {"type": "slot_menu", "mode": "load"}))
-        if str(props.get("quit", "false")).lower() in ("true", "1", "yes", "on"):
-            text = str(props.get("quit_text") or "退出游戏")
-            items.append((text, {"type": "quit"}))
+        items = None
+        menu_id = props.get("menu")
+        if menu_id:
+            items = self._menu_items(str(menu_id))
+            if items is None:
+                log.warning(f"第{stmt.line}行: 菜单 {menu_id!r} 未定义")
+                items = []
+        if items is None:
+            items = []
+            start_label = props.get("start")
+            if start_label:
+                text = str(props.get("start_text") or "开始游戏")
+                items.append((text, {"type": "start", "label": str(start_label)}, {}))
+            if "load" in props:
+                try:
+                    slot = int(props["load"])
+                except (TypeError, ValueError):
+                    slot = 0
+                    log.warning(f"第{stmt.line}行: title 的 load 槽位无效")
+                text = str(props.get("load_text") or "读取存档")
+                items.append((text, {"type": "slot_menu", "mode": "load"}, {}))
+            if str(props.get("quit", "false")).lower() in ("true", "1", "yes", "on"):
+                text = str(props.get("quit_text") or "退出游戏")
+                items.append((text, {"type": "quit"}, {}))
         if not items:
             log.warning(f"第{stmt.line}行: title 没有菜单项")
             return None

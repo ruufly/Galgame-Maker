@@ -266,6 +266,10 @@ class Parser:
         if op == "if" and rest and rest[-1] == ("sym", ":"):
             return self._parse_if(i, indent, lineno, content)
 
+        # ---- menu 嵌套块: menu <id> + 按键名子块 + 属性 ----
+        if op == "menu":
+            return self._parse_menu(i, indent, lineno, content, rest)
+
         # ---- 对象创建: ... / plugins / ui + 属性块
         if op in ("weight", "sprite", "object", "char", "character",
                   "scene", "scenery", "window", "config", "title", "style",
@@ -315,7 +319,47 @@ class Parser:
             raise ParserError(f"第{lineno}行: choice 块没有选项")
         return Statement(op="choice", kwargs={"options": options}, line=lineno, raw=content), i
 
-    # -- if / elif / else / endif 块 -----------------------------------
+    # -- menu 嵌套块 ----------------------------------------------------
+    def _parse_menu(self, i, indent, lineno, content, rest):
+        """menu <id> + 按键子块 (每个按键一层缩进, 属性再一层)。
+
+        menu title
+            start_button
+                text: "开始游戏"
+                image: "a.png, b.png"
+                action: start game_start
+        """
+        ident = rest[0][1] if rest and rest[0][0] == "word" else None
+        i += 1
+        n = len(self.lines)
+        items = []
+        while i < n:
+            ind, ln, cnt = self.lines[i]
+            if ind <= indent:
+                break
+            name = cnt.strip()
+            if name.endswith(":"):
+                name = name[:-1].strip()
+            i += 1
+            props = {}
+            while i < n:
+                ind2, ln2, cnt2 = self.lines[i]
+                if ind2 <= ind:
+                    break
+                kv = cnt2.split(":", 1)
+                if len(kv) == 2:
+                    val = kv[1]
+                    comment = val.find(" #")
+                    if comment != -1:
+                        val = val[:comment]
+                    props[kv[0].strip()] = _unquote(val)
+                else:
+                    log.warning(f"第{ln2}行: 属性需为 key: value, 已跳过")
+                i += 1
+            items.append(Statement(op=name, args=[], kwargs=props,
+                                   line=ln, raw=cnt))
+        return Statement(op="menu", args=[ident] if ident else [],
+                         block=items, line=lineno, raw=content), i
     def _parse_if(self, i, indent, lineno, content):
         # 条件表达式: "if X:" 中的 X
         cond_tokens = _tokenize(content)[1:-1]

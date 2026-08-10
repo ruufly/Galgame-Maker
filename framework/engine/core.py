@@ -280,15 +280,18 @@ class GameEngine:
     # 系统菜单 / 存档选择 / 回标题
     # ==================================================================
     def open_system_menu(self) -> None:
-        """打开游戏内菜单 (暂停游戏), 文案由 menu_texts 配置。"""
+        """打开游戏内菜单 (暂停游戏), 文案由 menu_texts 配置;
+        脚本定义 menu system 可整体覆盖。"""
         self.paused = True
-        items = [
-            (self.menu_texts["continue"], {"type": "continue"}),
-            (self.menu_texts["save"], {"type": "slot_menu", "mode": "save"}),
-            (self.menu_texts["load"], {"type": "slot_menu", "mode": "load"}),
-            (self.menu_texts["title"], {"type": "title"}),
-            (self.menu_texts["quit"], {"type": "quit"}),
-        ]
+        items = self.runtime._menu_items("system")
+        if items is None:
+            items = [
+                (self.menu_texts["continue"], {"type": "continue"}, {}),
+                (self.menu_texts["save"], {"type": "slot_menu", "mode": "save"}, {}),
+                (self.menu_texts["load"], {"type": "slot_menu", "mode": "load"}, {}),
+                (self.menu_texts["title"], {"type": "title"}, {}),
+                (self.menu_texts["quit"], {"type": "quit"}, {}),
+            ]
         self.display.show_system_menu(items)
         self.emit("menu_open")
 
@@ -400,7 +403,7 @@ class GameEngine:
             idx = d.hit_selection(pos)
             if idx < 0:
                 return
-            text, action = d.selection_items[idx]
+            text, action, _item_cfg = d.selection_items[idx]
             source = "title" if d.title_active else "menu"
             self.emit("selection_choice", index=idx, text=text,
                       action=action, source=source)

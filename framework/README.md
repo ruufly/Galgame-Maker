@@ -256,11 +256,27 @@ start:
         #         confirm_panel/confirm_button/slot_frame/slot_panel
         #   style 图片键 (textbox_image 等) 优先级更高, 值为 none 禁用主题图
 
-    # 背景 / 立绘适配模式
-    bg school                            # 场景默认 (mode: 场景定义或指令指定)
-    bg "materials/image/bg.jpg" mode fit   # 适配: cover 铺满裁剪(默认) / fit 等比
-    bg school mode center                 #        center 原尺寸 / full,stretch 拉伸
-    sprite girl mode center               # 立绘同支持 (默认中心偏下 55% 高度)
+    # 标题画面 / ESC 菜单 (命名菜单, 每个按键可精细配置)
+    menu title                       # 标题菜单: title 块用 menu: title 引用
+        start_button
+            text: "开始游戏"
+            image: "…/标题_开始游戏_默认_llf.png, …/标题_开始游戏_焦点_llf.png"
+            width: 262
+            height: 98
+            stretch: false           # 不拉伸 (原尺寸居中)
+            text_visible: false      # 图自带文字时不渲染文案
+            action: start game_start # 动作: 类型 [参数] (内置/插件自定义)
+    menu system                      # ESC 菜单: 定义即覆盖内置五项
+        continue_button
+            text: "继续游戏"
+            image: "…/确认_按钮_默认_llf.png, …/确认_按钮_焦点_llf.png"
+            width: 240
+            height: 60
+            action: continue
+        save_button ...              # 其余按键同理 (slot_menu/title/quit)
+    # 按键属性: text / image(默认,焦点) / width / height / stretch /
+    #           text_visible / action (无名参数按类型映射: start->label,
+    #           slot_menu->mode, save/load->slot; 自定义动作默认 label)
 
     # 音频 / 转场 / 存档 / 结束
     music "bgm.mp3"             # 循环播放
