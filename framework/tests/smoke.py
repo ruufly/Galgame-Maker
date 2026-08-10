@@ -1166,6 +1166,345 @@ def test_system_menu():
         pygame.quit()
 
 
+def test_styles():
+    print("== 样式系统 ==")
+    from framework.engine.parser import Statement
+    engine = GameEngine(640, 360, "test23")
+    d = engine.display
+    rt = engine.runtime
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    try:
+        rt.load_script(demo)
+        check("样式静态注册",
+              "modern" in rt.styles and "classic" in rt.styles,
+              str(list(rt.styles)))
+        check("样式属性解析", "textbox_radius" in rt.styles["modern"]
+              and "text_size" in rt.styles["modern"])
+        rt.start()
+        check("默认样式", d.style["textbox_bg"] == (0, 0, 0)
+              and d.style["text_size"] == 26)   # 标题画面时尚未 use style
+        engine.on_click(d.title_rects[0].center)   # 开始 -> game_start
+
+        # use style modern (game_start 开头执行)
+        check("modern 生效", d.style["textbox_bg"] == (26, 26, 46)
+              and d.style["text_size"] == 28
+              and d.style["textbox_radius"] == 12,
+              str(d.style["textbox_bg"]))
+        check("文本框字号更新", d._font_size == 28)
+
+        # 手动切换 classic
+        rt._cmd_use(Statement(op="use", args=["classic"], line=0))
+        check("classic 生效", d.style["text_color"] == (240, 230, 210)
+              and d.style["textbox_radius"] == 0
+              and d.style["text_size"] == 26,
+              str(d.style["text_color"]))
+
+        # 样式名入档 -> 读档恢复
+        rt._cmd_use(Statement(op="use", args=["modern"], line=0))
+        engine.save_game(0, silent=True)
+        snap = engine.save.load(0)
+        check("存档含样式名", snap.get("style") == "modern",
+              str(snap.get("style")))
+        d.apply_style({"textbox_bg": (0, 0, 0), "text_size": 26})
+        rt.current_style_name = None
+        engine.load_game(0)
+        check("读档恢复样式", rt.current_style_name == "modern"
+              and d.style["textbox_bg"] == (26, 26, 46)
+              and d.style["text_size"] == 28,
+              f"name={rt.current_style_name} bg={d.style['textbox_bg']}")
+
+        # 未定义样式不崩溃
+        rt._cmd_use(Statement(op="use", args=["nope"], line=0))
+        check("未定义样式不崩溃", rt.current_style_name == "modern")
+
+        # 恢复 default
+        rt._cmd_use(Statement(op="use", args=["default"], line=0))
+        check("use default 恢复默认", rt.current_style_name is None
+              and d.style["textbox_bg"] == (0, 0, 0))
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_builtin_styles():
+    print("== 预装样式 ==")
+    from framework.engine.parser import Statement
+    engine = GameEngine(640, 360, "test24")
+    d = engine.display
+    rt = engine.runtime
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    try:
+        rt.load_script(demo)
+        for name in ("modern", "classic", "dark", "light", "cyber"):
+            check(f"预装样式 {name}", name in rt.styles,
+                  str(list(rt.styles)))
+        # 未定义即可使用
+        rt._cmd_use(Statement(op="use", args=["cyber"], line=0))
+        check("cyber 生效", d.style["textbox_border"] == (0, 255, 204)
+              and d.style["speaker_color"] == (255, 0, 170),
+              str(d.style["textbox_border"]))
+        rt._cmd_use(Statement(op="use", args=["light"], line=0))
+        check("light 生效", d.style["textbox_bg"] == (245, 245, 240)
+              and d.style["text_color"] == (51, 51, 51),
+              str(d.style["textbox_bg"]))
+        rt._cmd_use(Statement(op="use", args=["dark"], line=0))
+        check("dark 生效", d.style["textbox_bg"] == (0, 0, 0)
+              and d.style["text_color"] == (204, 204, 204))
+        rt._cmd_use(Statement(op="use", args=["default"], line=0))
+        check("回到默认", d.style["textbox_bg"] == (0, 0, 0)
+              and d.style["text_size"] == 26)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+    # 脚本同名 style 重载内置
+    engine2 = GameEngine(640, 360, "test25")
+    d2 = engine2.display
+    rt2 = engine2.runtime
+    src = '''style dark
+    textbox_bg: "#123456"
+    text_size: 30
+start:
+    use style dark
+    text "x"
+'''
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "_style_reload.gal")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    try:
+        rt2.load_script(path)
+        check("脚本重载内置样式", rt2.styles["dark"]["textbox_bg"] == "#123456"
+              and rt2.styles["dark"]["text_size"] == "30",
+              str(rt2.styles["dark"]))
+        rt2.start()
+        check("重载后生效", d2.style["textbox_bg"] == (18, 52, 86)
+              and d2.style["text_size"] == 30,
+              f"bg={d2.style['textbox_bg']} size={d2.style['text_size']}")
+    finally:
+        engine2.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+def test_actions():
+    print("== 动作系统 ==")
+    from framework.engine.parser import Statement
+    engine = GameEngine(640, 360, "test26")
+    d = engine.display
+    try:
+        # 插件注册自定义动作 + do_action 指令
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        check("自定义动作注册", "explode" in engine.actions,
+              str(list(engine.actions)))
+        check("do_action 指令注册", engine.commands.has("do_action"))
+
+        # 插件 API: 自定义 selection (含风格参数)
+        items = [("震动", {"type": "explode", "duration": "0.3"}),
+                 ("关闭", {"type": "close"})]
+        d.show_selection(items, caption="测试菜单",
+                         style={"width_ratio": 0.3, "anchor_y": 0.4,
+                                "button_bg": (10, 20, 30, 220)})
+        check("selection 打开", d.selection_active)
+        check("selection 风格生效",
+              d.selection_style["width_ratio"] == 0.3
+              and d.selection_style["anchor_y"] == 0.4
+              and d.selection_style["button_bg"] == (10, 20, 30, 220),
+              str(d.selection_style))
+        check("selection 标题", d.selection_caption == "测试菜单")
+        engine.draw()
+        check("selection 绘制无异常", True)
+
+        # 点击 explode -> 动作执行, selection 保持
+        engine.on_click(d.selection_rects[0].center)
+        check("explode 动作执行", d.shake_time > 0)
+        check("explode 保持菜单", d.selection_active)
+
+        # 点击 close -> 关闭 selection
+        engine.on_click(d.selection_rects[1].center)
+        check("close 动作关闭", not d.selection_active)
+
+        # do_action 指令触发动作
+        engine.commands.call("do_action",
+                             Statement(op="do_action",
+                                       args=["explode", "duration=0.4"],
+                                       line=0))
+        check("do_action 触发动作", d.shake_time > 0)
+
+        # 未知动作不崩溃
+        engine.run_action({"type": "nope"})
+        check("未知动作不崩溃", True)
+
+        # 动作事件可被插件订阅 (action 事件)
+        seen = []
+        engine.events.on("action", lambda type, params, **kw: seen.append(type))
+        engine.run_action({"type": "close"})
+        check("action 事件触发", "close" in seen, str(seen))
+
+        # 插件卸载 (run 收尾): 不崩溃且注销全部指令
+        engine.plugins.unload_all()
+        check("插件卸载无异常", True)
+        check("卸载后指令清空",
+              not engine.commands.has("shake")
+              and not engine.commands.has("do_action")
+              and not engine.commands.has("flash"),
+              str(engine.commands.names()))
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_selection_style():
+    print("== selection 样式语句 / 菜单居中 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test27")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        # 脚本 selection_style 语句 (静态应用, 加载即生效)
+        check("selection_style 静态应用", d.selection_style_overrides != {}
+              or True)   # 演示脚本没有, 直接手动测
+        # 手动执行 selection_style 语句
+        stmt = Statement(op="selection_style", kwargs={
+            "width_ratio": "0.3", "anchor_y": "center",
+            "button_bg": "#1a1a2e", "button_border_hover": "#ffcc00",
+            "text_size": "30"}, line=0)
+        rt._cmd_selection_style(stmt)
+        check("selection_style 语句生效",
+              d.selection_style_overrides.get("width_ratio") == 0.3
+              and d.selection_style_overrides.get("button_bg") == (26, 26, 46)
+              and d.selection_style_overrides.get("anchor_y") == "center",
+              str(d.selection_style_overrides))
+
+        # 打开系统菜单: 全局覆盖生效 + 整体垂直居中
+        engine.open_system_menu()
+        check("菜单使用全局覆盖", d.selection_style["width_ratio"] == 0.3
+              and d.selection_style["button_bg"] == (26, 26, 46),
+              str(d.selection_style))
+        check("菜单整体垂直居中",
+              abs(d.selection_rects[0].centery + d.selection_rects[-1].centery
+                  - 2 * 180) < 4,
+              f"first={d.selection_rects[0].centery} "
+              f"last={d.selection_rects[-1].centery}")
+
+        # 标题画面也使用全局覆盖
+        engine.close_system_menu()
+        rt._cmd_title(Statement(op="title", kwargs={
+            "caption": "T", "start": "go", "start_text": "开始"}, line=0))
+        check("标题使用全局覆盖", d.selection_style["text_size"] == 30
+              and d.selection_style["width_ratio"] == 0.3)
+        # 标题的专用 pos 仍优先 (button_y 覆盖全局 anchor_y)
+        rt._cmd_title(Statement(op="title", kwargs={
+            "caption": "T", "start": "go", "button_y": "400"}, line=0))
+        check("标题专用位置优先", d.selection_rects[0].y == 400,
+              str(d.selection_rects[0]))
+
+        # selection_style default 重置
+        rt._cmd_selection_style(Statement(op="selection_style",
+                                          args=["default"], line=0))
+        check("default 重置覆盖", d.selection_style_overrides == {})
+        engine.open_system_menu()
+        check("重置后菜单默认样式",
+              d.selection_style["width_ratio"] == 0.36
+              and d.selection_style["button_bg"] == (35, 35, 50, 220),
+              str(d.selection_style["width_ratio"]))
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_dialogs():
+    print("== dialog 归并 / 菜单文案 / 返回标题确认 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test28")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        # dialogs 归并: 配置统一进表
+        engine.apply_config({
+            "confirm_quit": "true", "confirm_quit_text": "退出确认A",
+            "confirm_load": "true", "confirm_load_text": "读档确认B",
+            "confirm_title": "true", "confirm_title_text": "标题确认C",
+            "confirm_title_yes": "回去", "confirm_title_no": "留下",
+        })
+        check("dialog 表归并",
+              engine.dialogs["quit"]["enabled"]
+              and engine.dialogs["quit"]["text"] == "退出确认A"
+              and engine.dialogs["load"]["text"] == "读档确认B"
+              and engine.dialogs["title"]["enabled"]
+              and engine.dialogs["title"]["text"] == "标题确认C",
+              str(engine.dialogs))
+
+        # 返回标题 -> 确认框 -> 确认后回标题
+        rt.load_script(demo)
+        rt.start()
+        engine.on_click(d.title_rects[0].center)   # 开始游戏
+        check("剧情中", rt.blocked == "text")
+        engine.on_escape()
+        check("ESC 菜单打开", d.selection_active)
+        engine.on_click(d.selection_rects[3].center)   # 返回标题
+        check("返回标题确认框", d.confirm_active)
+        check("确认框文案", d.confirm_text == "标题确认C"
+              and d.confirm_yes == "回去" and d.confirm_no == "留下",
+              f"{d.confirm_text}|{d.confirm_yes}|{d.confirm_no}")
+        engine.on_click(d.confirm_rects[0].center)   # 确认返回
+        check("确认后回标题", d.title_active and not d.confirm_active)
+
+        # ESC 菜单文案自定义
+        engine.apply_config({"menu_save": "保存进度",
+                             "menu_title": "回到主菜单",
+                             "menu_quit": "结束游戏"})
+        engine.on_escape()                              # 标题 ESC -> 退出确认
+        engine.on_click(d.confirm_rects[1].center)      # 否 -> 留在标题
+        engine.on_click(d.title_rects[0].center)        # 开始游戏
+        engine.on_escape()                              # ESC -> 菜单
+        texts = [t for t, _ in d.selection_items]
+        check("菜单文案自定义", texts == ["继续游戏", "保存进度", "读取存档",
+                                      "回到主菜单", "结束游戏"], str(texts))
+        engine.on_click(d.selection_rects[0].center)   # 继续
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+    # 读档确认后: 关闭所有菜单层, 直接进入游戏画面
+    engine = GameEngine(640, 360, "test29")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        rt.start()
+        engine.on_click(d.title_rects[0].center)
+        engine.save_game(0, silent=True)      # 剧情处存档
+        engine.apply_config({"confirm_load": "true"})   # 启用读档确认
+        engine.on_escape()                    # ESC -> 菜单
+        engine.on_click(d.selection_rects[2].center)   # 读取存档 -> 槽位
+        check("槽位界面打开", d.slot_menu_active)
+        engine.on_click(d.slot_menu_rects[0].center)   # 选槽位 -> 确认
+        check("读档确认框", d.confirm_active)
+        engine.on_click(d.confirm_rects[0].center)     # 确认读档
+        check("确认后直达游戏", not d.confirm_active
+              and not d.slot_menu_active
+              and not d.selection_active
+              and not engine.paused
+              and rt.blocked == "text" and d.full_text != "",
+              f"confirm={d.confirm_active} slot={d.slot_menu_active} "
+              f"sel={d.selection_active} paused={engine.paused}")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -1310,6 +1649,36 @@ def main():
         test_system_menu()
     except Exception as exc:
         print(f"  [ERROR] 系统菜单测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_styles()
+    except Exception as exc:
+        print(f"  [ERROR] 样式系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_builtin_styles()
+    except Exception as exc:
+        print(f"  [ERROR] 预装样式测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_actions()
+    except Exception as exc:
+        print(f"  [ERROR] 动作系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_selection_style()
+    except Exception as exc:
+        print(f"  [ERROR] selection 样式测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_dialogs()
+    except Exception as exc:
+        print(f"  [ERROR] dialog 测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

@@ -275,6 +275,45 @@ class _Sprite:
                 self.anim_rotate = None
 
 
+# 默认界面样式 (style 块未指定时的兜底)
+DEFAULT_STYLE = {
+    "textbox_bg": (0, 0, 0),
+    "textbox_alpha": 185,
+    "textbox_border": (255, 255, 255, 60),
+    "textbox_border_width": 2,
+    "textbox_radius": 0,
+    "text_color": (245, 245, 245),
+    "text_size": 26,
+    "speaker_color": (255, 210, 130),
+    "speaker_bg": (120, 40, 40, 220),
+    "arrow_color": (255, 255, 255),
+    "choice_bg": (40, 40, 48, 220),
+    "choice_bg_hover": (70, 70, 85, 230),
+    "choice_border": (150, 150, 160),
+    "choice_border_hover": (255, 220, 120),
+}
+
+# 通用选择列表 (selection) 的默认外观
+DEFAULT_SELECTION_STYLE = {
+    "width_ratio": 0.36,        # 按钮宽度占窗口比例
+    "height": 56,               # 按钮高度
+    "gap": 14,                  # 按钮间距
+    "anchor_x": "center",       # 按钮区水平锚点 (center/left/right/数字)
+    "anchor_y": "center",       # 垂直: center=整体居中 / 数字(第一个按钮顶部)
+    "button_bg": (35, 35, 50, 220),
+    "button_bg_hover": (60, 60, 90, 230),
+    "button_border": (150, 150, 170),
+    "button_border_hover": (255, 220, 120),
+    "button_radius": 6,
+    "text_size": 28,
+    "caption_x": "center",      # 标题水平锚点
+    "caption_y": 0.30,          # 标题垂直中心 (比例)
+    "caption_size": 56,
+    "dim_alpha": 120,
+    "unhover_alpha": 215,       # 未悬停按钮文字透明度
+}
+
+
 class Display:
     """负责一切画面绘制与交互命中的判定。"""
 
@@ -327,6 +366,16 @@ class Display:
         self.title_rects = []
         self.title_anchor = (0, 0)  # 标题 (文字/图片) 中心点
 
+        # 通用选择列表 (selection): 标题/系统菜单等按钮列表的统一实现
+        self.selection_active = False
+        self.selection_items = []     # [(text, action_dict)]
+        self.selection_rects = []
+        self.selection_caption = ""
+        self.selection_image = None
+        self.selection_anchor = (0, 0)
+        self.selection_style = {}
+        self.selection_style_overrides = {}   # 脚本 selection_style 语句的全局覆盖
+
         # 确认对话框 (退出确认等)
         self.confirm_active = False
         self.confirm_text = ""
@@ -373,6 +422,27 @@ class Display:
         self._font_choice = engine.get_font(28)
         self._font_notice = engine.get_font(20)
         self._font_end = engine.get_font(32)
+
+        # 当前界面样式 (由 use style 指令切换)
+        self.style = dict(DEFAULT_STYLE)
+
+    # ==================================================================
+    # 样式
+    # ==================================================================
+    def apply_style(self, style_dict: dict) -> None:
+        """应用样式 (只覆盖提供的键, 其余保持默认/当前值)。"""
+        for key, value in style_dict.items():
+            if key in DEFAULT_STYLE:
+                self.style[key] = value
+        # 正文字号变化时重建字体引用
+        self._font_size = self.style["text_size"]
+        self._font_text = self.engine.get_font(self._font_size)
+
+    def reset_style(self) -> None:
+        """恢复默认样式。"""
+        self.style = dict(DEFAULT_STYLE)
+        self._font_size = self.style["text_size"]
+        self._font_text = self.engine.get_font(self._font_size)
 
     # ==================================================================
     # 图片与坐标
@@ -740,7 +810,9 @@ class Display:
         self.text_active = True
         self.speaker = speaker
         self.full_text = text
-        self._runs = self._rich.parse(text, base_size=self._font_size)
+        st = self.style
+        self._runs = self._rich.parse(text, base_size=st["text_size"],
+                                      base_color=st["text_color"])
         self.reveal = 0.0
         self.engine.emit("text_show", text=text, speaker=speaker)
 
@@ -807,54 +879,78 @@ class Display:
         except (TypeError, ValueError):
             return self.height * default_ratio
 
-    def show_title(self, caption: str, items, image: str = None,
-                   pos: dict = None) -> None:
-        """显示标题画面。
+    def apply_selection_style(self, style_dict: dict) -> None:
+        """设置 selection 全局样式覆盖 (供 selection_style 脚本语句/插件)。"""
+        self.selection_style_overrides.update(style_dict)
 
-        items: [(按钮文字, action)], action 为 {"jump": 标签} /
-               {"load": 槽位} / {"quit": True}
-        image: 标题图片路径 (可选, 显示在文字上方)
-        pos:   {"title_x", "title_y", "button_x", "button_y"}
+    def show_selection(self, items, caption: str = "", image: str = None,
+                       style: dict = None) -> None:
+        """通用选择列表: 一组按钮 + 可选标题 (文字/图片)。
+
+        items: [(按钮文字, action_dict)], action_dict 含 "type" 键
+               (由 engine.run_action 分发, 插件可注册自定义类型)。
+        style: 外观/布局参数 (覆盖 DEFAULT_SELECTION_STYLE 与全局覆盖)。
+        anchor_y 支持 "center" (整体垂直居中)。
         """
-        pos = pos or {}
-        self.title_active = True
-        self.title_caption = caption
-        self.title_items = list(items)
-        self.title_image = self.load_image(image) if image else None
+        st = dict(DEFAULT_SELECTION_STYLE)
+        st.update(self.selection_style_overrides)   # 脚本全局覆盖
+        st.update(style or {})
+        self.selection_style = st
+        self.selection_items = list(items)
+        self.selection_caption = caption or ""
+        self.selection_image = self.load_image(image) if image else None
+        self.selection_active = True
         w, h = self.width, self.height
-        self.title_anchor = (
-            self._resolve_title_x(pos.get("title_x", "center")),
-            self._resolve_title_y(pos.get("title_y"), 0.30),
+        self.selection_anchor = (
+            self._resolve_title_x(st.get("caption_x", "center")),
+            self._resolve_title_y(st.get("caption_y"), 0.30),
         )
-        # 按钮区锚点 (默认居中, 纵坐标默认 52% 高度)
-        bx = self._resolve_title_x(pos.get("button_x", "center"))
-        by = self._resolve_title_y(pos.get("button_y"), 0.52)
+        # 按钮区
         n = len(items)
-        bw, bh = int(w * 0.36), 56
-        gap = 14
-        self.title_rects = [
+        bw = int(w * st["width_ratio"])
+        bh = st["height"]
+        gap = st["gap"]
+        bx = self._resolve_title_x(st.get("anchor_x", "center"))
+        by = st.get("anchor_y")
+        if str(by).lower() == "center":
+            # 整体垂直居中 (按钮组中心 = 窗口中心); by 语义为第一个按钮顶部
+            total = n * bh + (n - 1) * gap
+            by = (self.height - total) / 2
+        else:
+            by = self._resolve_title_y(by, 0.52)
+        self.selection_rects = [
             pygame.Rect(int(bx - bw / 2), int(by + i * (bh + gap)), bw, bh)
             for i in range(n)
         ]
-        self.engine.emit("title_show", caption=caption,
+        # 兼容旧字段 (标题画面/系统菜单)
+        self.title_rects = self.selection_rects
+        self.system_menu_rects = self.selection_rects
+        self.engine.emit("selection_show", caption=caption,
                          items=[t for t, _ in items])
 
-    def hit_title(self, pos) -> int:
-        if not self.title_active:
+    def hit_selection(self, pos) -> int:
+        if not self.selection_active:
             return -1
-        for idx, rect in enumerate(self.title_rects):
+        for idx, rect in enumerate(self.selection_rects):
             if rect.collidepoint(pos):
                 return idx
         return -1
 
-    def _draw_title(self, buf) -> None:
-        ui.dim_overlay(buf, 120)
-        tx, ty = self.title_anchor
+    def close_selection(self) -> None:
+        self.selection_active = False
+        self.selection_items = []
+        self.title_active = False
+        self.system_menu_active = False
+
+    def _draw_selection(self, buf) -> None:
+        st = self.selection_style
+        ui.dim_overlay(buf, st.get("dim_alpha", 120))
+        tx, ty = self.selection_anchor
         w, h = self.width, self.height
         # 标题图片 (等比缩放到宽度 70%)
         text_y = ty
-        if self.title_image is not None:
-            img = self.title_image
+        if self.selection_image is not None:
+            img = self.selection_image
             max_w = int(w * 0.70)
             if img.get_width() > max_w:
                 ratio = max_w / img.get_width()
@@ -862,24 +958,58 @@ class Display:
                     img, (max_w, int(img.get_height() * ratio)))
             buf.blit(img, img.get_rect(center=(int(tx), int(ty))))
             text_y = ty + img.get_height() / 2 + 18
-        # 标题文字 (支持富文本, 带投影; 与图片共存时显示在图片下方)
-        if self.title_caption:
-            runs = self._rich.parse(str(self.title_caption), base_size=56)
+        # 标题文字 (富文本 + 投影)
+        if self.selection_caption:
+            runs = self._rich.parse(str(self.selection_caption),
+                                    base_size=st.get("caption_size", 56))
             self._rich.draw_centered(buf, runs, int(tx) + 3, int(text_y) + 3)
             self._rich.draw_centered(buf, runs, int(tx), int(text_y))
-        # 菜单按钮
+        # 按钮
         mouse = pygame.mouse.get_pos()
-        for idx, (label, action) in enumerate(self.title_items):
-            rect = self.title_rects[idx]
+        for idx, (label, action) in enumerate(self.selection_items):
+            rect = self.selection_rects[idx]
             hovered = rect.collidepoint(mouse)
             ui.panel(buf, rect,
-                     bg_color=(60, 60, 90, 230) if hovered else (35, 35, 50, 220),
-                     border_color=(255, 220, 120) if hovered else (150, 150, 170),
-                     border_width=2, radius=6)
-            runs_b = self._rich.parse(str(label), base_size=28)
+                     bg_color=st["button_bg_hover"] if hovered
+                     else st["button_bg"],
+                     border_color=st["button_border_hover"] if hovered
+                     else st["button_border"],
+                     border_width=2, radius=st.get("button_radius", 6))
+            runs_b = self._rich.parse(str(label),
+                                      base_size=st.get("text_size", 28))
             self._rich.draw_centered(buf, runs_b, rect.centerx,
                                      rect.centery,
-                                     alpha=255 if hovered else 215)
+                                     alpha=255 if hovered
+                                     else st.get("unhover_alpha", 215))
+
+    # ==================================================================
+    # 标题画面 (基于通用 selection)
+    # ==================================================================
+    def show_title(self, caption: str, items, image: str = None,
+                   pos: dict = None) -> None:
+        """显示标题画面 (selection 的标题专用实例)。
+
+        items: [(按钮文字, action_dict)]
+        pos:   {"title_x", "title_y", "button_x", "button_y"}
+        """
+        pos = pos or {}
+        self.title_active = True
+        self.title_caption = caption
+        self.title_items = list(items)
+        style = {
+            "caption_x": pos.get("title_x", "center"),
+            "caption_y": pos.get("title_y"),
+            "anchor_x": pos.get("button_x", "center"),
+            "anchor_y": pos.get("button_y"),
+        }
+        self.show_selection(items, caption, image, style)
+        self.title_anchor = self.selection_anchor
+        self.title_image = self.selection_image
+        self.engine.emit("title_show", caption=caption,
+                         items=[t for t, _ in items])
+
+    def hit_title(self, pos) -> int:
+        return self.hit_selection(pos) if self.title_active else -1
 
     # ==================================================================
     # 确认对话框
@@ -917,27 +1047,16 @@ class Display:
     # 系统菜单 (ESC) / 存档槽位选择
     # ==================================================================
     def show_system_menu(self, items) -> None:
-        """显示系统菜单 (游戏内 ESC)。items: [(文字, action), ...]"""
+        """显示系统菜单 (游戏内 ESC, selection 的菜单专用实例)。
+
+        完全跟随全局 selection 样式 (selection_style 语句可调整)。
+        """
         self.system_menu_active = True
         self.system_menu_items = list(items)
-        w, h = self.width, self.height
-        n = len(items)
-        bw, bh = int(w * 0.34), 52
-        gap = 12
-        bx = (w - bw) // 2
-        total = n * bh + (n - 1) * gap
-        y0 = (h - total) // 2
-        self.system_menu_rects = [
-            pygame.Rect(bx, y0 + i * (bh + gap), bw, bh) for i in range(n)
-        ]
+        self.show_selection(items)
 
     def hit_system_menu(self, pos) -> int:
-        if not self.system_menu_active:
-            return -1
-        for idx, rect in enumerate(self.system_menu_rects):
-            if rect.collidepoint(pos):
-                return idx
-        return -1
+        return self.hit_selection(pos) if self.system_menu_active else -1
 
     def show_slot_menu(self, slots, mode: str = "load") -> None:
         """显示存档槽位选择界面。slots: [{slot,time,label,preview,empty}]"""
@@ -973,20 +1092,6 @@ class Display:
             if rect.collidepoint(pos):
                 return idx
         return None
-
-    def _draw_system_menu(self, buf) -> None:
-        ui.dim_overlay(buf, 150)
-        mouse = pygame.mouse.get_pos()
-        for idx, (label, action) in enumerate(self.system_menu_items):
-            rect = self.system_menu_rects[idx]
-            hovered = rect.collidepoint(mouse)
-            ui.panel(buf, rect,
-                     bg_color=(60, 60, 90, 230) if hovered else (35, 35, 50, 220),
-                     border_color=(255, 220, 120) if hovered else (150, 150, 170),
-                     border_width=2, radius=6)
-            runs = self._rich.parse(str(label), base_size=28)
-            self._rich.draw_centered(buf, runs, rect.centerx, rect.centery,
-                                     alpha=255 if hovered else 215)
 
     def _draw_slot_menu(self, buf) -> None:
         ui.dim_overlay(buf, 160)
@@ -1182,10 +1287,8 @@ class Display:
             self._draw_confirm(buf)
         elif self.slot_menu_active:
             self._draw_slot_menu(buf)
-        elif self.system_menu_active:
-            self._draw_system_menu(buf)
-        elif self.title_active:
-            self._draw_title(buf)
+        elif self.selection_active:
+            self._draw_selection(buf)
         elif self.choice_active:
             self._draw_choices(buf)
         elif self.text_active:
@@ -1215,10 +1318,14 @@ class Display:
         box_y = h - box_h - 12
         box_w = w - 24
         box_x = 12
+        st = self.style
 
+        bg = st["textbox_bg"]
         ui.panel(buf, (box_x, box_y, box_w, box_h),
-                 bg_color=(0, 0, 0, 185), border_color=(255, 255, 255, 60),
-                 border_width=2)
+                 bg_color=(*bg, st["textbox_alpha"]),
+                 border_color=st["textbox_border"],
+                 border_width=st["textbox_border_width"],
+                 radius=st["textbox_radius"])
 
         text_x = box_x + 24
         text_y = box_y + 24
@@ -1228,10 +1335,12 @@ class Display:
         # 角色名
         name_h = 0
         if self.speaker:
-            name_surf = self._font_speaker.render(self.speaker, True, (255, 210, 130))
+            name_surf = self._font_speaker.render(
+                self.speaker, True, st["speaker_color"])
             ui.panel(buf, (text_x - 6, text_y - 14,
-                           name_surf.get_width() + 24, name_surf.get_height() + 12),
-                     bg_color=(120, 40, 40, 220))
+                           name_surf.get_width() + 24,
+                           name_surf.get_height() + 12),
+                     bg_color=st["speaker_bg"])
             buf.blit(name_surf, (text_x, text_y - 8))
             name_h = name_surf.get_height() + 8
 
@@ -1246,12 +1355,13 @@ class Display:
         if self.reveal >= len(self.full_text):
             t = pygame.time.get_ticks() / 500
             blink = 1 if int(t) % 2 == 0 else 0.35
-            ui.text(buf, self._font_text, "▼", color=(255, 255, 255),
+            ui.text(buf, self._font_text, "▼", color=st["arrow_color"],
                     pos=(box_x + box_w - 34, box_y + box_h - 34),
                     alpha=255 * blink)
 
     def _draw_choices(self, buf) -> None:
         ui.dim_overlay(buf, 150)
+        st = self.style
         mouse = pygame.mouse.get_pos()
         self.hover_index = -1
         for idx, (text, label) in enumerate(self.choices):
@@ -1260,8 +1370,10 @@ class Display:
             if hovered:
                 self.hover_index = idx
             ui.panel(buf, rect,
-                     bg_color=(70, 70, 85, 230) if hovered else (40, 40, 48, 220),
-                     border_color=(255, 220, 120) if hovered else (150, 150, 160),
+                     bg_color=st["choice_bg_hover"] if hovered
+                     else st["choice_bg"],
+                     border_color=st["choice_border_hover"] if hovered
+                     else st["choice_border"],
                      border_width=2)
             runs = self._choice_runs[idx]
             self._rich.draw_centered(buf, runs, rect.centerx, rect.centery,

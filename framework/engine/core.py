@@ -95,6 +95,37 @@ class GameEngine:
         self._confirm_callback = None
         self.paused = False          # 系统菜单打开时暂停游戏
 
+        # 对话框 (dialog) 配置: 退出/读档/返回标题等确认框统一归并
+        self.dialogs = {
+            "quit": {"enabled": self.confirm_quit_enabled,
+                     "text": self.confirm_quit_text,
+                     "yes": self.confirm_quit_yes,
+                     "no": self.confirm_quit_no},
+            "load": {"enabled": self.confirm_load_enabled,
+                     "text": self.confirm_load_text,
+                     "yes": self.confirm_load_yes,
+                     "no": self.confirm_load_no},
+            "title": {"enabled": False, "text": "确定要返回标题画面吗？",
+                      "yes": "返回标题", "no": "取消"},
+        }
+        # ESC 系统菜单文案 (window 配置可自定义)
+        self.menu_texts = {
+            "continue": "继续游戏", "save": "存档", "load": "读取存档",
+            "title": "返回标题", "quit": "退出游戏",
+        }
+
+        # 动作注册表 (selection 按钮/插件触发的事件)
+        self.actions = {
+            "start": self._act_start,        # 启动游戏 (跳转标签)
+            "quit": self._act_quit,          # 关闭游戏 (退出确认)
+            "title": self._act_title,        # 回到标题
+            "continue": self._act_continue,  # 关闭菜单继续
+            "slot_menu": self._act_slot_menu,  # 打开存档/读档页面
+            "save": self._act_save,          # 直接存档
+            "load": self._act_load,          # 直接读档
+            "close": self._act_close,        # 关闭当前选择列表
+        }
+
     # ==================================================================
     # 字体
     # ==================================================================
@@ -240,20 +271,20 @@ class GameEngine:
     # 系统菜单 / 存档选择 / 回标题
     # ==================================================================
     def open_system_menu(self) -> None:
-        """打开游戏内菜单 (暂停游戏)。"""
+        """打开游戏内菜单 (暂停游戏), 文案由 menu_texts 配置。"""
         self.paused = True
         items = [
-            ("继续游戏", {"continue": True}),
-            ("存档", {"save": True}),
-            ("读取存档", {"load": True}),
-            ("返回标题", {"title": True}),
-            ("退出游戏", {"quit": True}),
+            (self.menu_texts["continue"], {"type": "continue"}),
+            (self.menu_texts["save"], {"type": "slot_menu", "mode": "save"}),
+            (self.menu_texts["load"], {"type": "slot_menu", "mode": "load"}),
+            (self.menu_texts["title"], {"type": "title"}),
+            (self.menu_texts["quit"], {"type": "quit"}),
         ]
         self.display.show_system_menu(items)
         self.emit("menu_open")
 
     def close_system_menu(self) -> None:
-        self.display.system_menu_active = False
+        self.display.close_selection()
         self.paused = False
         self.emit("menu_close")
 
@@ -261,9 +292,9 @@ class GameEngine:
         """执行读档 (确认通过后), 并关闭所有菜单层回到游戏。"""
         self.load_game(slot)
         d = self.display
+        d.close_selection()       # 关闭 selection / 标题 / 系统菜单
         d.slot_menu_active = False
-        d.system_menu_active = False
-        d.title_active = False
+        d.confirm_active = False
         self.paused = False
 
     def goto_title(self) -> None:
@@ -273,8 +304,7 @@ class GameEngine:
         d.clear_sprites()
         d.clear_bg()          # 清掉旧场景, 由 start 块重新布置
         d.clear_fade()        # 清除黑幕/结束画面/未完成过渡
-        d.title_active = False
-        d.system_menu_active = False
+        d.close_selection()
         d.slot_menu_active = False
         d.confirm_active = False
         d.choice_active = False
@@ -337,42 +367,16 @@ class GameEngine:
                     return
                 self._perform_load(info["slot"])
             return
-        # 2) 系统菜单 (ESC)
-        if d.system_menu_active:
-            idx = d.hit_system_menu(pos)
+        # 2) 选择列表 (标题画面 / 系统菜单)
+        if d.selection_active:
+            idx = d.hit_selection(pos)
             if idx < 0:
                 return
-            label, action = d.system_menu_items[idx]
-            self.emit("menu_choice", index=idx, label=label, action=action)
-            if "continue" in action:
-                self.close_system_menu()
-            elif "save" in action:
-                d.show_slot_menu(self.save.list_slots(), "save")
-            elif "load" in action:
-                d.show_slot_menu(self.save.list_slots(), "load")
-            elif "title" in action:
-                self.goto_title()
-            elif "quit" in action:
-                self.request_quit()
-            return
-        # 3) 标题画面菜单
-        if d.title_active:
-            idx = d.hit_title(pos)
-            if idx < 0:
-                return
-            label, action = d.title_items[idx]
-            self.emit("title_choice", index=idx, label=label, action=action)
-            if "jump" in action:
-                d.title_active = False
-                d.title_items = []
-                self.runtime.release("title")
-                self.runtime._jump_to(action["jump"])
-                self.runtime.advance()
-            elif "load" in action:
-                # 打开槽位选择界面, 标题保留在底层 (可"返回")
-                d.show_slot_menu(self.save.list_slots(), "load")
-            elif "quit" in action:
-                self.request_quit()
+            text, action = d.selection_items[idx]
+            source = "title" if d.title_active else "menu"
+            self.emit("selection_choice", index=idx, text=text,
+                      action=action, source=source)
+            self.run_action(action, source=source)
             return
         # 1) 选项
         if d.choice_active:
@@ -454,29 +458,48 @@ class GameEngine:
     # 退出确认
     # ==================================================================
     def apply_config(self, cfg: dict) -> None:
-        """应用脚本 window 配置中的运行时选项 (窗口已在构造时创建)。"""
-        if "confirm_quit" in cfg:
-            self.confirm_quit_enabled = str(cfg["confirm_quit"]).lower() in (
-                "true", "1", "yes", "on")
-        if "confirm_quit_text" in cfg:
-            self.confirm_quit_text = str(cfg["confirm_quit_text"])
-        if "confirm_quit_yes" in cfg:
-            self.confirm_quit_yes = str(cfg["confirm_quit_yes"])
-        if "confirm_quit_no" in cfg:
-            self.confirm_quit_no = str(cfg["confirm_quit_no"])
-        if "confirm_load" in cfg:
-            self.confirm_load_enabled = str(cfg["confirm_load"]).lower() in (
-                "true", "1", "yes", "on")
-        if "confirm_load_text" in cfg:
-            self.confirm_load_text = str(cfg["confirm_load_text"])
-        if "confirm_load_yes" in cfg:
-            self.confirm_load_yes = str(cfg["confirm_load_yes"])
-        if "confirm_load_no" in cfg:
-            self.confirm_load_no = str(cfg["confirm_load_no"])
-        log.info(f"退出确认: {self.confirm_quit_enabled} "
-                 f"({self.confirm_quit_text!r}) | "
-                 f"读档确认: {self.confirm_load_enabled} "
-                 f"({self.confirm_load_text!r})")
+        """应用脚本 window 配置中的运行时选项 (窗口已在构造时创建)。
+
+        确认框统一归并到 dialogs 表: confirm_quit -> quit,
+        confirm_load -> load, confirm_title -> title。
+        """
+        for cfg_key, dlg_name in (("confirm_quit", "quit"),
+                                  ("confirm_load", "load"),
+                                  ("confirm_title", "title")):
+            dlg = self.dialogs[dlg_name]
+            if cfg_key in cfg:
+                dlg["enabled"] = str(cfg[cfg_key]).lower() in (
+                    "true", "1", "yes", "on")
+            if f"{cfg_key}_text" in cfg:
+                dlg["text"] = str(cfg[f"{cfg_key}_text"])
+            if f"{cfg_key}_yes" in cfg:
+                dlg["yes"] = str(cfg[f"{cfg_key}_yes"])
+            if f"{cfg_key}_no" in cfg:
+                dlg["no"] = str(cfg[f"{cfg_key}_no"])
+        # 兼容旧字段
+        self.confirm_quit_enabled = self.dialogs["quit"]["enabled"]
+        self.confirm_quit_text = self.dialogs["quit"]["text"]
+        self.confirm_quit_yes = self.dialogs["quit"]["yes"]
+        self.confirm_quit_no = self.dialogs["quit"]["no"]
+        self.confirm_load_enabled = self.dialogs["load"]["enabled"]
+        self.confirm_load_text = self.dialogs["load"]["text"]
+        self.confirm_load_yes = self.dialogs["load"]["yes"]
+        self.confirm_load_no = self.dialogs["load"]["no"]
+        # ESC 菜单文案
+        for key in self.menu_texts:
+            if f"menu_{key}" in cfg:
+                self.menu_texts[key] = str(cfg[f"menu_{key}"])
+        log.info(f"对话框: " + ", ".join(
+            f"{k}={'开' if v['enabled'] else '关'}"
+            for k, v in self.dialogs.items()))
+
+    def ask_dialog(self, name: str, callback) -> None:
+        """按 dialog 配置弹确认框; 未启用时直接执行 callback。"""
+        dlg = self.dialogs.get(name)
+        if dlg and dlg.get("enabled") and not self.display.confirm_active:
+            self.ask_confirm(dlg["text"], dlg["yes"], dlg["no"], callback)
+        else:
+            callback()
 
     def ask_confirm(self, text: str, yes_text: str, no_text: str,
                     callback) -> None:
@@ -484,13 +507,95 @@ class GameEngine:
         self._confirm_callback = callback
         self.display.show_confirm(text, yes_text, no_text)
 
+    # ==================================================================
+    # 动作系统 (selection 按钮与插件共用)
+    # ==================================================================
+    def register_action(self, name: str, handler) -> None:
+        """注册自定义动作 (插件 API)。
+
+        handler(engine, params, source) -> bool (True=执行后关闭选择列表)
+        """
+        self.actions[name] = handler
+        log.info(f"动作已注册: {name}")
+
+    def run_action(self, action, source: str = None) -> bool:
+        """执行一个动作 dict {"type": ..., 其他参数}, 返回是否已处理。"""
+        if not isinstance(action, dict) or not action.get("type"):
+            return False
+        atype = action["type"]
+        params = {k: v for k, v in action.items() if k != "type"}
+        self.emit("action", type=atype, params=params, source=source)
+        handler = self.actions.get(atype)
+        if handler is None:
+            log.warning(f"未知动作类型: {atype}")
+            return False
+        try:
+            return bool(handler(self, params, source))
+        except Exception as exc:
+            log.warning(f"动作 {atype} 执行失败: {exc}")
+            return False
+
+    def _act_start(self, engine, params, source):
+        """启动游戏: 关闭所有菜单, 跳转到指定标签。"""
+        label = params.get("label") or params.get("jump") or "start"
+        d = self.display
+        d.close_selection()
+        d.slot_menu_active = False
+        d.confirm_active = False
+        self.paused = False
+        rt = self.runtime
+        if label in rt.labels:
+            rt.release("title")
+            rt._jump_to(label)
+            rt.advance()
+        return True
+
+    def _act_quit(self, engine, params, source):
+        self.request_quit()
+        return False    # 确认框接管, 选择列表保持
+
+    def _act_title(self, engine, params, source):
+        self.ask_dialog("title", self.goto_title)
+        return False    # 确认框启用时菜单保持; 未启用时 goto_title 已关闭
+
+    def _act_continue(self, engine, params, source):
+        self.close_system_menu()
+        return True
+
+    def _act_slot_menu(self, engine, params, source):
+        mode = params.get("mode", "load")
+        self.display.show_slot_menu(self.save.list_slots(), mode)
+        return False    # 槽位界面浮在选择列表之上
+
+    def _act_save(self, engine, params, source):
+        try:
+            slot = int(params.get("slot", 0))
+        except (TypeError, ValueError):
+            slot = 0
+        self.save_game(slot, silent=False)
+        d = self.display
+        d.close_selection()
+        d.slot_menu_active = False
+        self.paused = False
+        d.show_notice(f"已保存到槽位 {slot + 1}", 1.5)
+        return True
+
+    def _act_load(self, engine, params, source):
+        try:
+            slot = int(params.get("slot", 0))
+        except (TypeError, ValueError):
+            slot = 0
+        self.ask_dialog("load", lambda: self._perform_load(slot))
+        return False    # 确认框启用时菜单保持; 未启用时 _perform_load 直接进游戏
+
+    def _act_close(self, engine, params, source):
+        self.display.close_selection()
+        self.paused = False
+        return True
+
     def request_quit(self) -> None:
-        """请求退出: 启用确认时弹对话框, 否则直接退出。"""
-        if self.confirm_quit_enabled and not self.display.confirm_active:
-            self.ask_confirm(self.confirm_quit_text, self.confirm_quit_yes,
-                             self.confirm_quit_no, self.quit)
-        else:
-            self.quit()
+        """请求退出: 按 quit 对话框配置弹确认, 否则直接退出。"""
+        self.ask_dialog("quit", self.quit)
 
     # ==================================================================
     # 存档快捷方式

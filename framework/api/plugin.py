@@ -90,7 +90,7 @@ class Plugin:
         """实例方法版指令注册, 返回装饰器。"""
         def deco(fn):
             self.engine.commands.register(name, fn)
-            self._command_handlers.append(fn)
+            self._command_handlers.append((name, fn))
             return fn
         return deco
 
@@ -100,7 +100,8 @@ class Plugin:
             for ev in list(self.engine.events.names()):
                 self.engine.events.off(ev, fn)
         for name, fn in list(self._command_handlers):
-            pass
+            if self.engine.commands.has(name):
+                self.engine.commands.unregister(name)
         self._event_handlers.clear()
         self._command_handlers.clear()
 
@@ -113,6 +114,7 @@ class PluginManager:
         self.plugins: List[Plugin] = []
         self._modules = {}   # name -> module
         self._classes = {}   # name -> Plugin 类
+        self._mod_regs = {}  # 模块级装饰器注册追踪: name -> {commands, events}
 
     # ------------------------------------------------------------------
     def discover(self, directory: str) -> List[str]:
@@ -138,7 +140,8 @@ class PluginManager:
             sys.modules[mod_name] = module
             spec.loader.exec_module(module)
             self._modules[mod_name] = module
-            self._register_from_module(module)
+            self._mod_regs.setdefault(mod_name, {"commands": [], "events": []})
+            self._register_from_module(module, mod_name)
             return True
         except Exception as exc:
             from framework.engine import log
@@ -153,7 +156,7 @@ class PluginManager:
         return self._instantiate(module)
 
     # ------------------------------------------------------------------
-    def _register_from_module(self, module) -> None:
+    def _register_from_module(self, module, mod_name: str = None) -> None:
         """扫描模块: 收集带装饰器标记的函数与 Plugin 子类。"""
         for attr_name in dir(module):
             obj = getattr(module, attr_name)
@@ -161,15 +164,23 @@ class PluginManager:
                 self._instantiate(obj)
                 continue
             if inspect.isfunction(obj):
-                self._register_function(obj)
+                self._register_function(obj, mod_name)
 
-    def _register_function(self, fn) -> None:
+    def _register_function(self, fn, mod_name: str = None) -> None:
         ev = getattr(fn, _EVENT_ATTR, None)
         if ev is not None:
             self.engine.events.on(ev, fn)
+            if mod_name:
+                self._mod_regs.setdefault(mod_name, {"commands": [],
+                                                     "events": []})
+                self._mod_regs[mod_name]["events"].append((ev, fn))
         cmd = getattr(fn, _COMMAND_ATTR, None)
         if cmd is not None:
             self.engine.commands.register(cmd, fn)
+            if mod_name:
+                self._mod_regs.setdefault(mod_name, {"commands": [],
+                                                     "events": []})
+                self._mod_regs[mod_name]["commands"].append(cmd)
 
     def _instantiate(self, cls) -> Optional[Plugin]:
         try:
@@ -204,6 +215,20 @@ class PluginManager:
             self.plugins.remove(plugin)
         self._classes.pop(plugin.name, None)
 
+    def unload_module(self, mod_name: str) -> None:
+        """清理模块级装饰器注册的指令与事件。"""
+        regs = self._mod_regs.pop(mod_name, None)
+        if not regs:
+            return
+        for cmd_name in regs.get("commands", []):
+            self.engine.commands.unregister(cmd_name)
+        for ev, fn in regs.get("events", []):
+            self.engine.events.off(ev, fn)
+        self._modules.pop(mod_name, None)
+
     def unload_all(self) -> None:
         for plugin in list(self.plugins):
             self.unload(plugin)
+        # 清理所有模块级注册
+        for mod_name in list(self._mod_regs.keys()):
+            self.unload_module(mod_name)

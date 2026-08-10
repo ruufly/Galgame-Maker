@@ -35,14 +35,23 @@ window
     icon: "materials/image/icon.png"
     fps: 60
     fullscreen: false
-    confirm_quit: true                   # 退出时弹确认框 (关窗口/ESC/退出按钮)
-    confirm_quit_text: "确定要退出游戏吗？"
+    confirm_quit: true                   # 对话框 (dialog) 统一配置:
+    confirm_quit_text: "确定要退出游戏吗？"   #   退出确认 (关窗口/ESC/退出按钮)
     confirm_quit_yes: "退出"
     confirm_quit_no: "继续游戏"
-    confirm_load: true                   # 读档前弹确认框
+    confirm_load: true                   #   读档确认
     confirm_load_text: "确定要读取这个存档吗？"
     confirm_load_yes: "读档"
     confirm_load_no: "取消"
+    confirm_title: true                  #   返回标题确认 (菜单"返回标题")
+    confirm_title_text: "确定要返回标题画面吗？"
+    confirm_title_yes: "返回标题"
+    confirm_title_no: "取消"
+    menu_continue: "继续游戏"            # ESC 系统菜单文案
+    menu_save: "存档"
+    menu_load: "读取存档"
+    menu_title: "返回标题"
+    menu_quit: "退出游戏"
 ```
 
 引擎最小用法 (Python):
@@ -152,6 +161,35 @@ start:
         button_x: center                 # 按钮区水平锚点
         button_y: 420                    # 按钮区垂直锚点
 
+    # 界面样式
+    use style modern                   # 内置样式随时取用 (无需定义):
+    use style classic                  #   modern / classic / dark / light / cyber
+    use style dark
+    use style light
+    use style cyber
+    selection_style                    # 选择列表 (标题/ESC菜单) 全局样式:
+        width_ratio: 0.32             #   按钮宽占比
+        height: 56 / gap: 14
+        anchor_x: center               #   水平锚点 (center/left/right/数字)
+        anchor_y: center               #   垂直: center=整体居中 / 数字(顶部)
+        button_bg: "#202020" / button_bg_hover / button_border / button_border_hover
+        button_radius: 6 / text_size: 28 / dim_alpha: 120
+    selection_style default            # 重置为默认
+    style my_theme                     # 自定义样式块 (同名可重载内置)
+        textbox_bg: "#1a1a2e"
+        textbox_alpha: 210
+        textbox_border: "#e94560"
+        textbox_border_width: 3
+        textbox_radius: 12
+        text_color: "#eaeaea"
+        text_size: 28
+        speaker_color: "#ffd282"
+        speaker_bg: "#1e3a5f"
+        arrow_color: "#e94560"
+        # 选项按钮: choice_bg / choice_bg_hover / choice_border / choice_border_hover
+    use style my_theme                 # 切换样式 (存档记录当前样式名)
+    use style default                  # 恢复默认
+
     # 音频 / 转场 / 存档 / 结束
     music "bgm.mp3"             # 循环播放
     sound "click.wav"           # 播放一次
@@ -247,6 +285,42 @@ engine.show_notice(text)
 engine.save_game(slot) / engine.load_game(slot)
 engine.resolve_path(rel)   # 相对脚本目录解析资源路径
 ```
+
+### 动作系统 (selection 按钮与插件共用)
+
+`title` / ESC 系统菜单的按钮都是**动作** (action dict), 由
+`engine.run_action` 分发; 插件可注册自定义动作类型:
+
+| 动作 | 参数 | 说明 |
+| --- | --- | --- |
+| `start` | label | 启动游戏 (跳转标签) |
+| `quit` | | 关闭游戏 (走退出确认) |
+| `title` | | 回到标题画面 |
+| `continue` | | 关闭菜单继续游戏 |
+| `slot_menu` | mode=save/load | 打开存档/读档选择页面 |
+| `save` | slot | 直接存档到槽位 |
+| `load` | slot | 直接读档 |
+| `close` | | 关闭当前选择列表 |
+
+插件注册自定义动作 + 触发:
+
+```python
+# framework/plugins/my_action.py
+class MyAction(Plugin):
+    def on_load(self):
+        def act_explode(engine, params, source):
+            engine.display.shake(params.get("duration", 0.5), 10)
+            return False     # True=执行后关闭选择列表
+        engine.register_action("explode", act_explode)
+```
+
+脚本可通过 `do_action <类型> [k=v ...]` 指令触发任意已注册动作
+(见 `framework/plugins/example_action.py`)。动作执行前触发
+`action` 事件 (type/params/source), 插件可订阅拦截或扩展。
+
+通用选择列表也可由插件/代码直接调用:
+`display.show_selection(items, caption, image, style)`,
+`style` 支持按钮宽高/配色/圆角/字号/锚点等 (见 DEFAULT_SELECTION_STYLE)。
 
 ### 背景过渡效果
 

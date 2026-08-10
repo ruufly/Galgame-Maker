@@ -42,6 +42,8 @@ class Runtime:
         self._created_objects = {}    # weight 创建的背景对象 (id -> obj)
         self.characters = {}          # 角色表: id -> {name, sprites, ...}
         self.scenes = {}              # 场景表: id -> {name, backgrounds, ...}
+        self.styles = {}              # 样式表: name -> {属性: 值}
+        self.current_style_name = None
 
         # 内置指令表
         self._builtins = {
@@ -85,6 +87,9 @@ class Runtime:
             "pass": self._cmd_pass,
             "window": self._cmd_pass,
             "config": self._cmd_pass,
+            "style": self._cmd_style,
+            "use": self._cmd_use,
+            "selection_style": self._cmd_selection_style,
         }
 
     # ==================================================================
@@ -103,9 +108,18 @@ class Runtime:
         # id -> {kind, image, pos, scale, mode, effect}
         # 存档只存 id, 图片路径以脚本为准 (改图片名不影响旧存档)
         self.script_objects = self._scan_objects(script)
-        # 角色表 / 场景表 (静态注册, 无需执行到定义语句)
+        # 角色表 / 场景表 / 样式表 (静态注册, 无需执行到定义语句)
         self._rebuild_characters()
         self._rebuild_scenes()
+        # 样式表: 预装内置样式 + 脚本定义 (同名覆盖)
+        from framework.engine.styles import BUILTIN_STYLES
+        self.styles = dict(BUILTIN_STYLES)
+        self.styles.update(self._scan_styles(script))
+        # selection 全局样式 (静态应用, 读档后仍生效)
+        self.engine.display.selection_style_overrides.clear()
+        for stmt in self._scan_statements(script):
+            if stmt.op == "selection_style":
+                self._apply_selection_style_stmt(stmt)
         self.engine.emit("script_load", path=path, name=script.name)
         log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
                  f"对象 {len(self.script_objects)} 个, "
@@ -187,6 +201,117 @@ class Runtime:
             default = props.pop("default", None)
             self.scenes[sid] = {"id": sid, "name": name,
                                 "backgrounds": props, "default": default}
+
+    # ------------------------------------------------------------------
+    def _scan_statements(self, script) -> list:
+        """收集脚本中所有语句 (顶层 + 各标签), 按出现顺序。"""
+        out = list(script.statements)
+
+        def scan(stmts):
+            for stmt in stmts:
+                for cond, body in stmt.kwargs.get("branches", []):
+                    scan(body)
+                if stmt.kwargs.get("else"):
+                    scan(stmt.kwargs["else"])
+                if stmt.block:
+                    scan(stmt.block)
+
+        for body in script.labels.values():
+            out.extend(body)
+        return out
+
+    # ------------------------------------------------------------------
+    _SEL_STYLE_COLOR_KEYS = {"button_bg", "button_bg_hover", "button_border",
+                             "button_border_hover"}
+    _SEL_STYLE_NUM_KEYS = {"width_ratio", "height", "gap", "caption_y",
+                           "caption_size", "dim_alpha", "text_size",
+                           "unhover_alpha"}
+    _SEL_STYLE_STR_KEYS = {"anchor_x", "caption_x", "anchor_y"}
+
+    def _apply_selection_style_stmt(self, stmt) -> None:
+        """解析并应用一条 selection_style 语句 (属性块)。"""
+        from framework.engine.rich import parse_color
+        parsed = {}
+        for key, value in stmt.kwargs.items():
+            if key in self._SEL_STYLE_COLOR_KEYS:
+                parsed[key] = parse_color(str(value),
+                                          (255, 255, 255, 255))
+            elif key in self._SEL_STYLE_NUM_KEYS:
+                try:
+                    parsed[key] = float(value)
+                except (TypeError, ValueError):
+                    pass
+            elif key in self._SEL_STYLE_STR_KEYS:
+                parsed[key] = str(value)
+        self.engine.display.apply_selection_style(parsed)
+
+    def _cmd_selection_style(self, stmt):
+        """设置 selection (标题/系统菜单按钮列表) 全局样式。
+
+        selection_style              # 属性块形式:
+            width_ratio: 0.3         #   按钮宽占比
+            height: 56 / gap: 14
+            anchor_x: center         #   水平锚点 (center/left/right/数字)
+            anchor_y: center         #   垂直: center=整体居中 / 数字
+            button_bg: "#1a1a2e"     #   按钮配色
+            button_bg_hover: ...
+            button_border: ...
+            button_border_hover: ...
+            button_radius: 6
+            text_size: 28
+            dim_alpha: 120
+        selection_style default      # 重置为默认
+        """
+        if stmt.args and stmt.args[0] == "default":
+            self.engine.display.selection_style_overrides.clear()
+            return None
+        self._apply_selection_style_stmt(stmt)
+        return None
+
+    def _scan_styles(self, script) -> dict:
+        """静态扫描脚本中的 style 定义块。"""
+        styles = {}
+
+        def scan(stmts):
+            for stmt in stmts:
+                if stmt.op == "style" and stmt.args:
+                    styles[stmt.args[0]] = dict(stmt.kwargs)
+                for cond, body in stmt.kwargs.get("branches", []):
+                    scan(body)
+                if stmt.kwargs.get("else"):
+                    scan(stmt.kwargs["else"])
+                if stmt.block:
+                    scan(stmt.block)
+
+        scan(script.statements)
+        for body in script.labels.values():
+            scan(body)
+        return styles
+
+    # ------------------------------------------------------------------
+    _STYLE_COLOR_KEYS = {
+        "textbox_bg", "textbox_border", "text_color", "speaker_color",
+        "speaker_bg", "arrow_color", "choice_bg", "choice_bg_hover",
+        "choice_border", "choice_border_hover",
+    }
+    _STYLE_INT_KEYS = {"textbox_alpha", "textbox_border_width",
+                       "textbox_radius", "text_size"}
+
+    def _parse_style_props(self, props: dict) -> dict:
+        """把 style 块的字符串属性解析为样式值 (颜色 tuple / 数字)。"""
+        from framework.engine.rich import parse_color
+        from framework.engine.display import DEFAULT_STYLE
+        out = {}
+        for key, value in props.items():
+            if key in self._STYLE_COLOR_KEYS:
+                default = DEFAULT_STYLE.get(key, (255, 255, 255))
+                out[key] = parse_color(str(value), default)
+            elif key in self._STYLE_INT_KEYS:
+                try:
+                    out[key] = int(float(value))
+                except (TypeError, ValueError):
+                    pass
+        return out
 
     # ------------------------------------------------------------------
     def load_widget_templates(self, directory: str) -> None:
@@ -703,7 +828,44 @@ class Runtime:
         return BLOCK
 
     # -- 选项 -----------------------------------------------------------
-    # -- 标题画面 -------------------------------------------------------
+    # -- 样式 -----------------------------------------------------------
+    def _cmd_style(self, stmt):
+        """注册样式: style <name> + 属性块 (文本框/文字/名字框/选项等)。"""
+        if not stmt.args:
+            return None
+        name = stmt.args[0]
+        self.styles[name] = dict(stmt.kwargs)
+        self.engine.emit("style_register", name=name)
+        log.info(f"样式已注册: {name} ({len(stmt.kwargs)} 项)")
+        return None
+
+    def _cmd_use(self, stmt):
+        """切换样式: use style <name> 或 use <name>"""
+        if not stmt.args:
+            return None
+        if stmt.args[0] == "style" and len(stmt.args) > 1:
+            name = self._interp(stmt.args[1])
+        else:
+            name = self._interp(stmt.args[0])
+        if name == "default":
+            self.current_style_name = None
+            self.engine.display.reset_style()
+            self.engine.emit("style_change", name="default")
+            return None
+        if name not in self.styles:
+            log.warning(f"第{stmt.line}行: 样式 {name!r} 未定义")
+            return None
+        self.current_style_name = name
+        parsed = self._parse_style_props(self.styles[name])
+        self.engine.display.apply_style(parsed)
+        # 正在显示的文本按新样式重新解析 (字号/颜色变化即时生效)
+        d = self.engine.display
+        if d.text_active:
+            d._runs = d._rich.parse(
+                d.full_text, base_size=d.style["text_size"],
+                base_color=d.style["text_color"])
+        self.engine.emit("style_change", name=name)
+        return None
     def _cmd_title(self, stmt):
         """显示标题画面 (阻塞直到玩家选择)。
 
@@ -734,7 +896,7 @@ class Runtime:
         start_label = props.get("start")
         if start_label:
             text = str(props.get("start_text") or "开始游戏")
-            items.append((text, {"jump": str(start_label)}))
+            items.append((text, {"type": "start", "label": str(start_label)}))
         if "load" in props:
             try:
                 slot = int(props["load"])
@@ -742,10 +904,10 @@ class Runtime:
                 slot = 0
                 log.warning(f"第{stmt.line}行: title 的 load 槽位无效")
             text = str(props.get("load_text") or "读取存档")
-            items.append((text, {"load": slot}))
+            items.append((text, {"type": "slot_menu", "mode": "load"}))
         if str(props.get("quit", "false")).lower() in ("true", "1", "yes", "on"):
             text = str(props.get("quit_text") or "退出游戏")
-            items.append((text, {"quit": True}))
+            items.append((text, {"type": "quit"}))
         if not items:
             log.warning(f"第{stmt.line}行: title 没有菜单项")
             return None
@@ -977,6 +1139,7 @@ class Runtime:
             "bg": d.bg_path if d.bg_id is None and d.bg_scene is None else None,
             "sprites": d.sprite_state(),
             "music": self.engine.audio.current_bgm,
+            "style": self.current_style_name,
         }
 
     def restore(self, data: dict) -> None:
@@ -1003,6 +1166,13 @@ class Runtime:
         # 重建角色表/场景表 (定义可能位于存档点之前)
         self._rebuild_characters()
         self._rebuild_scenes()
+        # 恢复样式
+        style_name = data.get("style")
+        if style_name:
+            self._cmd_use(Statement(op="use", args=[style_name], line=0))
+        elif self.current_style_name is not None:
+            self.current_style_name = None
+            self.engine.display.reset_style()
         # 阻塞状态: text / choice 恢复 (由 display.restore_state 配合显示),
         # sleep 不恢复 (剩余等待时间无意义)
         blocked = data.get("blocked")
