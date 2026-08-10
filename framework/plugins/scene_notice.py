@@ -1,7 +1,7 @@
-"""示例插件 3: 场景切换时在左上角弹出通知。
+"""场景切换通知插件。
 
 订阅 scene_change 事件 (bg <场景id> [背景名] 触发),
-用 display.show_notice(pos="top-left") 在左上角显示通知。
+在左上角弹出"场景切换: xxx"通知。
 """
 
 from framework.api import event_listener

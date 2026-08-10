@@ -226,7 +226,9 @@ class Runtime:
     _SEL_STYLE_NUM_KEYS = {"width_ratio", "height", "gap", "caption_y",
                            "caption_size", "dim_alpha", "text_size",
                            "unhover_alpha"}
-    _SEL_STYLE_STR_KEYS = {"anchor_x", "caption_x", "anchor_y"}
+    _SEL_STYLE_STR_KEYS = {"anchor_x", "caption_x", "anchor_y",
+                           "button_image", "button_image_hover",
+                           "dialog_image"}
 
     def _apply_selection_style_stmt(self, stmt) -> None:
         """解析并应用一条 selection_style 语句 (属性块)。"""
@@ -292,10 +294,13 @@ class Runtime:
     _STYLE_COLOR_KEYS = {
         "textbox_bg", "textbox_border", "text_color", "speaker_color",
         "speaker_bg", "arrow_color", "choice_bg", "choice_bg_hover",
-        "choice_border", "choice_border_hover",
+        "choice_border", "choice_border_hover", "choice_text_color",
+        "choice_text_color_hover",
     }
     _STYLE_INT_KEYS = {"textbox_alpha", "textbox_border_width",
-                       "textbox_radius", "text_size"}
+                       "textbox_radius", "text_size", "choice_text_size"}
+    _STYLE_STR_KEYS = {"textbox_image", "speaker_image", "choice_image",
+                       "choice_image_hover"}
 
     def _parse_style_props(self, props: dict) -> dict:
         """把 style 块的字符串属性解析为样式值 (颜色 tuple / 数字)。"""
@@ -311,6 +316,8 @@ class Runtime:
                     out[key] = int(float(value))
                 except (TypeError, ValueError):
                     pass
+            elif key in self._STYLE_STR_KEYS:
+                out[key] = str(value)
         return out
 
     # ------------------------------------------------------------------
@@ -856,6 +863,8 @@ class Runtime:
             log.warning(f"第{stmt.line}行: 样式 {name!r} 未定义")
             return None
         self.current_style_name = name
+        # 先回默认再应用: style 未定义的键用默认值, 不残留上一套样式
+        self.engine.display.reset_style()
         parsed = self._parse_style_props(self.styles[name])
         self.engine.display.apply_style(parsed)
         # 正在显示的文本按新样式重新解析 (字号/颜色变化即时生效)

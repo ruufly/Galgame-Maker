@@ -1,10 +1,9 @@
-"""示例插件 1: 屏幕震动指令 + 事件演示 (装饰器写法)。
+"""震动/闪屏指令插件 (装饰器写法)。
 
-演示两种插件 API:
-    1. @command("shake")       —— 自定义 DSL 指令, 脚本里写 `shake 0.4` 即可触发
-    2. @event_listener(...)    —— 订阅引擎事件 (这里监听 script_start 打印信息)
-
-放置于 framework/plugins/ 下会被自动加载。
+提供 DSL 指令:
+    shake <时长秒> <幅度像素>  —— 屏幕震动
+    flash                    —— 屏幕白闪 (触发 flash_requested 事件)
+并订阅若干引擎事件打印日志。
 """
 
 import random

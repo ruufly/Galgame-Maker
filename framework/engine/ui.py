@@ -150,3 +150,40 @@ def dim_overlay(surface, alpha=150, color=(0, 0, 0)):
     overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
     overlay.fill((color[0], color[1], color[2], alpha))
     surface.blit(overlay, (0, 0))
+
+
+def nine_slice(source, rect, edge=12):
+    """把图片按九宫格拉伸到 rect, 四角不变、边与中心拉伸。
+
+    适用于小尺寸圆角边框图 (按钮/面板/文本框背景)。edge 为四边宽度。
+    """
+    rect = pygame.Rect(rect)
+    w, h = source.get_size()
+    if w <= edge * 2 or h <= edge * 2:
+        # 图太小, 直接拉伸
+        return pygame.transform.smoothscale(source, rect.size)
+    if rect.w < edge * 2 or rect.h < edge * 2:
+        return pygame.transform.smoothscale(source, rect.size)
+    target = pygame.Surface(rect.size, pygame.SRCALPHA)
+    cw, ch = edge, edge
+    mw, mh = w - 2 * cw, h - 2 * ch
+    tw, th = rect.w - 2 * cw, rect.h - 2 * ch
+    pieces = [
+        (0, 0, cw, ch, 0, 0, cw, ch),                       # 左上
+        (cw, 0, mw, ch, cw, 0, tw, ch),                     # 上
+        (w - cw, 0, cw, ch, rect.w - cw, 0, cw, ch),        # 右上
+        (0, ch, cw, mh, 0, ch, cw, th),                     # 左
+        (cw, ch, mw, mh, cw, ch, tw, th),                   # 中
+        (w - cw, ch, cw, mh, rect.w - cw, ch, cw, th),      # 右
+        (0, h - ch, cw, ch, 0, rect.h - ch, cw, ch),        # 左下
+        (cw, h - ch, mw, ch, cw, rect.h - ch, tw, ch),      # 下
+        (w - cw, h - ch, cw, ch, rect.w - cw, rect.h - ch, cw, ch),  # 右下
+    ]
+    for sx, sy, sw, sh, dx, dy, dw, dh in pieces:
+        if sw <= 0 or sh <= 0 or dw <= 0 or dh <= 0:
+            continue
+        piece = source.subsurface((sx, sy, sw, sh))
+        if (dw, dh) != piece.get_size():
+            piece = pygame.transform.smoothscale(piece, (dw, dh))
+        target.blit(piece, (dx, dy))
+    return target

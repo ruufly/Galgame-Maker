@@ -1,7 +1,6 @@
-"""示例插件 4: 自定义背景过渡效果 (水平擦除 wipe)。
+"""自定义背景过渡: 水平擦除 (wipe)。
 
-演示过渡系统的可扩展性: 继承 engine.display.Transition 并注册到
-display.transitions 注册表, 脚本里即可使用 ``bg ... with wipe``。
+注册 wipe 过渡效果, 脚本里使用 ``bg ... with wipe``。
 """
 
 from framework.api import Plugin

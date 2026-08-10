@@ -25,6 +25,28 @@ py -3.10 gamelauncher.py path/to/your.gal
 py -3.10 framework/tests/smoke.py
 ```
 
+### 插件
+
+框架自带 5 个正式插件 (`framework/plugins/`), 默认全部自动装载,
+可在脚本顶层用 `plugins` 块选择装载 (插件文件名, 不含 .py):
+
+```gal
+plugins
+    only: "shake, scene_notice"    # 只装载列出的
+    # 或
+    except: "fps_overlay"          # 排除列出的
+```
+
+| 插件 | 提供 |
+| --- | --- |
+| shake | `shake`/`flash` 指令, 屏幕震动与白闪 |
+| fps_overlay | 右上角 FPS 浮层 |
+| scene_notice | 场景切换时左上角通知 |
+| wipe_transition | `bg ... with wipe` 擦除过渡 |
+| custom_actions | `explode` 动作 + `do_action` 指令 |
+
+插件开发见 [插件 API](#插件-api)。
+
 窗口配置写在脚本顶层, 启动器创建窗口前读取::
 
 ```gal
@@ -186,9 +208,19 @@ start:
         speaker_color: "#ffd282"
         speaker_bg: "#1e3a5f"
         arrow_color: "#e94560"
-        # 选项按钮: choice_bg / choice_bg_hover / choice_border / choice_border_hover
+        textbox_image: "materials/image/ui/say.png"      # 文本框背景图 (9-slice)
+        speaker_image: "materials/image/ui/button.png"   # 角色名框背景图
+        choice_image: "materials/image/ui/button.png"    # 选择支按钮背景图
+        choice_image_hover: "materials/image/ui/button.png"
+        choice_text_size: 26                             # 选择支字号
+        choice_text_color: "#e6e6eb" / choice_text_color_hover
+        # 选项按钮配色: choice_bg / choice_bg_hover / choice_border / choice_border_hover
     use style my_theme                 # 切换样式 (存档记录当前样式名)
     use style default                  # 恢复默认
+    selection_style                    # 选择列表全局样式补充:
+        button_image: "materials/image/ui/button.png"        # 按钮背景图
+        button_image_hover: "materials/image/ui/button.png"  # 悬停按钮图
+        dialog_image: "materials/image/ui/dialog.png"        # 对话框/槽位面板图
 
     # 音频 / 转场 / 存档 / 结束
     music "bgm.mp3"             # 循环播放

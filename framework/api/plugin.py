@@ -117,16 +117,29 @@ class PluginManager:
         self._mod_regs = {}  # 模块级装饰器注册追踪: name -> {commands, events}
 
     # ------------------------------------------------------------------
-    def discover(self, directory: str) -> List[str]:
-        """扫描目录下所有 ``*.py`` (排除下划线开头) 并加载, 返回模块名列表。"""
+    def discover(self, directory: str, config: dict = None) -> List[str]:
+        """扫描目录下所有 ``*.py`` (排除下划线开头) 并加载, 返回模块名列表。
+
+        config: 可选插件装载配置
+            {"only": [插件文件名...]}   只装载列出的
+            {"except": [插件文件名...]} 排除列出的
+        """
+        config = config or {}
+        only = config.get("only") or []
+        except_ = config.get("except") or []
         loaded = []
         if not os.path.isdir(directory):
             return loaded
         for entry in sorted(os.listdir(directory)):
             if entry.startswith("_") or not entry.endswith(".py"):
                 continue
+            base = os.path.splitext(entry)[0]
+            if only and base not in only:
+                continue
+            if base in except_:
+                continue
             path = os.path.join(directory, entry)
-            mod_name = "gm_plugin_" + os.path.splitext(entry)[0]
+            mod_name = "gm_plugin_" + base
             if self.load_module_from_path(mod_name, path):
                 loaded.append(mod_name)
         return loaded

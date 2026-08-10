@@ -206,7 +206,9 @@ class GameEngine:
         self.project_dir = self.script_dir
 
         if self.autoload_plugins:
-            self.plugins.discover(self.plugins_dir)
+            # 脚本顶层的 plugins 块可指定装载哪些插件
+            plugins_cfg = self._extract_plugins_config(script_path)
+            self.plugins.discover(self.plugins_dir, plugins_cfg)
         self.emit("engine_start", engine=self)
 
         try:
@@ -457,6 +459,34 @@ class GameEngine:
     # ==================================================================
     # 退出确认
     # ==================================================================
+    def _extract_plugins_config(self, script_path: str) -> dict:
+        """预解析脚本顶层的 plugins 块 (插件装载配置)。
+
+        plugins
+            only: "shake, fps_overlay"    # 只装载列出的插件 (文件名)
+            # 或
+            except: "fps_overlay"         # 排除列出的插件
+        """
+        try:
+            from framework.engine.parser import parse_file
+            script = parse_file(script_path)
+            for stmt in script.statements:
+                if stmt.op == "plugins":
+                    cfg = {}
+                    only = stmt.kwargs.get("only")
+                    ex = stmt.kwargs.get("except")
+                    if only:
+                        cfg["only"] = [s.strip() for s in str(only).split(",")
+                                       if s.strip()]
+                    if ex:
+                        cfg["except"] = [s.strip() for s in str(ex).split(",")
+                                         if s.strip()]
+                    log.info(f"插件装载配置: {cfg}")
+                    return cfg
+        except Exception as exc:
+            log.warning(f"解析插件配置失败: {exc}")
+        return {}
+
     def apply_config(self, cfg: dict) -> None:
         """应用脚本 window 配置中的运行时选项 (窗口已在构造时创建)。
 

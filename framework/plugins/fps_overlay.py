@@ -1,9 +1,9 @@
-"""示例插件 2: 类形式插件 —— 右上角显示 FPS 与版本 (类 + 生命周期钩子写法)。
+"""FPS 浮层插件 (类形式: Plugin 基类 + 生命周期钩子)。
 
-展示 Plugin 基类的用法:
+在画面右上角叠加显示插件名与实时帧率, 演示:
     * on_load / on_unload 生命周期
-    * self.listen() / self.add_command() 实例方法注册
-    * 渲染钩子事件 draw_overlay (每帧画面绘制完成后触发)
+    * self.listen() 实例方法订阅
+    * draw_overlay 渲染钩子 (每帧画面绘制完成后触发)
 """
 
 import time

@@ -1,10 +1,7 @@
-"""示例插件 5: 自定义动作 (action) 系统扩展。
+"""自定义动作插件。
 
-演示动作系统 API:
-    1. engine.register_action(name, handler)  注册自定义动作
-    2. 动作 handler: handler(engine, params, source) -> bool
-       (True=执行后关闭选择列表, False=保持)
-    3. 脚本指令 do_action <类型> [k=v ...] 触发任意已注册动作
+注册 explode (屏幕震动) 动作, 并提供 do_action <类型> [k=v ...]
+指令让脚本触发任意已注册动作。
 """
 
 from framework.api import Plugin, command

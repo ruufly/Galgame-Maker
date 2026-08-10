@@ -287,10 +287,17 @@ DEFAULT_STYLE = {
     "speaker_color": (255, 210, 130),
     "speaker_bg": (120, 40, 40, 220),
     "arrow_color": (255, 255, 255),
+    "textbox_image": None,       # 文本框背景图 (9-slice), 优先于纯色
+    "speaker_image": None,       # 角色名框背景图
     "choice_bg": (40, 40, 48, 220),
     "choice_bg_hover": (70, 70, 85, 230),
     "choice_border": (150, 150, 160),
     "choice_border_hover": (255, 220, 120),
+    "choice_image": None,        # 选择支按钮背景图
+    "choice_image_hover": None,
+    "choice_text_size": 28,
+    "choice_text_color": (230, 230, 235),
+    "choice_text_color_hover": (255, 255, 255),
 }
 
 # 通用选择列表 (selection) 的默认外观
@@ -311,6 +318,9 @@ DEFAULT_SELECTION_STYLE = {
     "caption_size": 56,
     "dim_alpha": 120,
     "unhover_alpha": 215,       # 未悬停按钮文字透明度
+    "button_image": None,       # 按钮背景图 (9-slice), 优先于纯色
+    "button_image_hover": None, # 悬停按钮背景图
+    "dialog_image": None,       # 对话框/槽位面板背景图
 }
 
 
@@ -375,6 +385,7 @@ class Display:
         self.selection_anchor = (0, 0)
         self.selection_style = {}
         self.selection_style_overrides = {}   # 脚本 selection_style 语句的全局覆盖
+        self._ui_cache = {}                   # UI 图片缓存 (path -> surface)
 
         # 确认对话框 (退出确认等)
         self.confirm_active = False
@@ -443,6 +454,36 @@ class Display:
         self.style = dict(DEFAULT_STYLE)
         self._font_size = self.style["text_size"]
         self._font_text = self.engine.get_font(self._font_size)
+
+    # ==================================================================
+    # UI 图片 (9-slice) 加载
+    # ==================================================================
+    def _ui_image(self, path):
+        """加载 UI 背景图 (带缓存), 路径相对脚本目录。"""
+        if not path:
+            return None
+        if path in self._ui_cache:
+            return self._ui_cache[path]
+        real = self.engine.resolve_path(path)
+        try:
+            img = pygame.image.load(real).convert_alpha()
+            self._ui_cache[path] = img
+            return img
+        except Exception as exc:
+            log.warning(f"UI 图片加载失败 {path}: {exc}")
+            self._ui_cache[path] = None
+            return None
+
+    def _panel_or_image(self, buf, rect, image, bg_color,
+                        border_color=None, border_width=0, radius=0):
+        """面板绘制: 有图片用 9-slice, 否则纯色面板。"""
+        rect = pygame.Rect(rect)
+        if image is not None:
+            buf.blit(ui.nine_slice(image, rect), rect.topleft)
+            return rect
+        ui.panel(buf, rect, bg_color=bg_color, border_color=border_color,
+                 border_width=border_width, radius=radius)
+        return rect
 
     # ==================================================================
     # 图片与坐标
@@ -835,7 +876,12 @@ class Display:
         """options: [(文本, 跳转标签), ...]"""
         self.choices = list(options)
         self.choice_rects = []
-        self._choice_runs = [self._rich.parse(t, base_size=28) for t, _ in options]
+        st = self.style
+        self._choice_runs = [
+            self._rich.parse(t, base_size=st["choice_text_size"],
+                             base_color=st["choice_text_color"])
+            for t, _ in options
+        ]
         self.choice_active = True
         self.hover_index = -1
         n = len(self.choices)
@@ -969,12 +1015,15 @@ class Display:
         for idx, (label, action) in enumerate(self.selection_items):
             rect = self.selection_rects[idx]
             hovered = rect.collidepoint(mouse)
-            ui.panel(buf, rect,
-                     bg_color=st["button_bg_hover"] if hovered
-                     else st["button_bg"],
-                     border_color=st["button_border_hover"] if hovered
-                     else st["button_border"],
-                     border_width=2, radius=st.get("button_radius", 6))
+            img = self._ui_image(st.get("button_image_hover") if hovered
+                                 else st.get("button_image"))
+            self._panel_or_image(buf, rect, img,
+                                 bg_color=st["button_bg_hover"] if hovered
+                                 else st["button_bg"],
+                                 border_color=st["button_border_hover"]
+                                 if hovered else st["button_border"],
+                                 border_width=2,
+                                 radius=st.get("button_radius", 6))
             runs_b = self._rich.parse(str(label),
                                       base_size=st.get("text_size", 28))
             self._rich.draw_centered(buf, runs_b, rect.centerx,
@@ -1098,9 +1147,12 @@ class Display:
         w, h = self.width, self.height
         panel_w, panel_h = int(w * 0.72), int(h * 0.66)
         px, py = (w - panel_w) // 2, int(h * 0.16)
-        ui.panel(buf, (px, py, panel_w, panel_h),
-                 bg_color=(25, 25, 38, 245), border_color=(200, 200, 220),
-                 border_width=2, radius=10)
+        dlg_img = self._ui_image(
+            self.selection_style_overrides.get("dialog_image"))
+        self._panel_or_image(buf, (px, py, panel_w, panel_h), dlg_img,
+                             bg_color=(25, 25, 38, 245),
+                             border_color=(200, 200, 220),
+                             border_width=2, radius=10)
         title = "选择存档" if self.slot_menu_mode == "save" else "选择读档"
         runs_t = self._rich.parse(title, base_size=30)
         self._rich.draw_centered(buf, runs_t, w // 2, py + 22)
@@ -1142,9 +1194,12 @@ class Display:
 
     def _draw_confirm(self, buf) -> None:
         ui.dim_overlay(buf, 170)
-        ui.panel(buf, self.confirm_panel,
-                 bg_color=(25, 25, 38, 245), border_color=(200, 200, 220),
-                 border_width=2, radius=10)
+        dlg_img = self._ui_image(
+            self.selection_style_overrides.get("dialog_image"))
+        self._panel_or_image(buf, self.confirm_panel, dlg_img,
+                             bg_color=(25, 25, 38, 245),
+                             border_color=(200, 200, 220),
+                             border_width=2, radius=10)
         # 提示文本 (富文本, 居中换行)
         runs = self._rich.parse(str(self.confirm_text), base_size=28)
         pad = 24
@@ -1321,11 +1376,12 @@ class Display:
         st = self.style
 
         bg = st["textbox_bg"]
-        ui.panel(buf, (box_x, box_y, box_w, box_h),
-                 bg_color=(*bg, st["textbox_alpha"]),
-                 border_color=st["textbox_border"],
-                 border_width=st["textbox_border_width"],
-                 radius=st["textbox_radius"])
+        self._panel_or_image(buf, (box_x, box_y, box_w, box_h),
+                             self._ui_image(st.get("textbox_image")),
+                             bg_color=(*bg, st["textbox_alpha"]),
+                             border_color=st["textbox_border"],
+                             border_width=st["textbox_border_width"],
+                             radius=st["textbox_radius"])
 
         text_x = box_x + 24
         text_y = box_y + 24
@@ -1337,10 +1393,12 @@ class Display:
         if self.speaker:
             name_surf = self._font_speaker.render(
                 self.speaker, True, st["speaker_color"])
-            ui.panel(buf, (text_x - 6, text_y - 14,
-                           name_surf.get_width() + 24,
-                           name_surf.get_height() + 12),
-                     bg_color=st["speaker_bg"])
+            self._panel_or_image(buf,
+                                 (text_x - 6, text_y - 14,
+                                  name_surf.get_width() + 24,
+                                  name_surf.get_height() + 12),
+                                 self._ui_image(st.get("speaker_image")),
+                                 bg_color=st["speaker_bg"])
             buf.blit(name_surf, (text_x, text_y - 8))
             name_h = name_surf.get_height() + 8
 
@@ -1369,15 +1427,31 @@ class Display:
             hovered = rect.collidepoint(mouse)
             if hovered:
                 self.hover_index = idx
-            ui.panel(buf, rect,
-                     bg_color=st["choice_bg_hover"] if hovered
-                     else st["choice_bg"],
-                     border_color=st["choice_border_hover"] if hovered
-                     else st["choice_border"],
-                     border_width=2)
+            img = self._ui_image(st["choice_image_hover"] if hovered
+                                 else st["choice_image"])
+            self._panel_or_image(buf, rect, img,
+                                 bg_color=st["choice_bg_hover"] if hovered
+                                 else st["choice_bg"],
+                                 border_color=st["choice_border_hover"]
+                                 if hovered else st["choice_border"],
+                                 border_width=2, radius=6)
             runs = self._choice_runs[idx]
-            self._rich.draw_centered(buf, runs, rect.centerx, rect.centery,
-                                     alpha=255 if hovered else 210)
+            color = st["choice_text_color_hover"] if hovered \
+                else st["choice_text_color"]
+            # 未着色的 run 用当前按钮文字色 (复制 run, 不污染缓存)
+            from framework.engine.rich import Run
+            runs_final = []
+            for run in runs:
+                if run.color == st["choice_text_color"]:
+                    runs_final.append(
+                        Run(run.text, color, run.size, run.bold, run.italic,
+                            run.underline, run.outline, run.outline_width,
+                            run.math))
+                else:
+                    runs_final.append(run)
+            self._rich.draw_centered(buf, runs_final, rect.centerx,
+                                     rect.centery,
+                                     alpha=255 if hovered else 235)
 
     def _draw_notice(self, buf) -> None:
         surf = self._font_notice.render(self.notice, True, (255, 255, 255))

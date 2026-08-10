@@ -1198,6 +1198,16 @@ def test_styles():
               and d.style["textbox_radius"] == 0
               and d.style["text_size"] == 26,
               str(d.style["text_color"]))
+        # 修复验证: classic 未定义图片键 -> 不应残留 modern 的图片
+        check("classic 无图片残留", d.style.get("textbox_image") is None
+              and d.style.get("speaker_image") is None,
+              str(d.style.get("textbox_image")))
+        # 切回 modern -> 图片恢复
+        rt._cmd_use(Statement(op="use", args=["modern"], line=0))
+        check("modern 图片恢复",
+              d.style.get("textbox_image") == "materials/image/ui/say.png"
+              and d.style.get("choice_image")
+              == "materials/image/ui/button.png")
 
         # 样式名入档 -> 读档恢复
         rt._cmd_use(Statement(op="use", args=["modern"], line=0))
@@ -1505,6 +1515,108 @@ def test_dialogs():
         pygame.quit()
 
 
+def test_ui_images():
+    print("== UI 图片素材 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test30")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        # style 图片键解析
+        check("style 图片键",
+              rt.styles["modern"].get("textbox_image")
+              == "materials/image/ui/say.png",
+              str(rt.styles["modern"].get("textbox_image")))
+        # selection 图片键 (静态应用)
+        ov = d.selection_style_overrides
+        check("selection 图片键",
+              ov.get("button_image") == "materials/image/ui/button.png"
+              and ov.get("dialog_image") == "materials/image/ui/dialog.png",
+              str(ov))
+        # 加载缓存
+        img = d._ui_image("materials/image/ui/say.png")
+        check("UI 图片加载", img is not None and img.get_width() > 0)
+        check("UI 图片缓存", "materials/image/ui/say.png" in d._ui_cache)
+        check("缺失图片容错", d._ui_image("no/such.png") is None)
+
+        # 应用 modern 样式后绘制 (文本框用图片)
+        rt._cmd_use(Statement(op="use", args=["modern"], line=0))
+        check("样式生效", d.style.get("textbox_image")
+              == "materials/image/ui/say.png")
+        d.show_text("测试文本框图片", "制作人")
+        engine.draw()
+        check("文本框图片绘制无异常", True)
+
+        # selection 用按钮图
+        d.show_selection([("测试", {"type": "close"})])
+        st = d.selection_style
+        check("selection 合并图片键",
+              st.get("button_image") == "materials/image/ui/button.png")
+        engine.draw()
+        check("按钮图片绘制无异常", True)
+
+        # 选择支按钮样式 (图片/字号/颜色)
+        rt._cmd_use(Statement(op="use", args=["modern"], line=0))
+        check("choice 图片键",
+              d.style.get("choice_image") == "materials/image/ui/button.png"
+              and d.style["choice_text_size"] == 26)
+        d.show_choices([("选项A", "lbl_a"), ("选项B", "lbl_b")])
+        engine.draw()
+        check("选择支图片绘制无异常", True)
+        check("choice runs 用样式字号", d._choice_runs[0][0].size == 26,
+              str(d._choice_runs[0][0].size))
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_plugins_config():
+    print("== 插件装载配置 ==")
+    plugins_dir = os.path.join(_ROOT, "framework", "plugins")
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+
+    # 预解析: demo 用 except 排除 fps_overlay
+    engine = GameEngine(640, 360, "test31")
+    cfg = engine._extract_plugins_config(demo)
+    check("解析 except 配置", cfg == {"except": ["fps_overlay"]}, str(cfg))
+    mods = engine.plugins.discover(plugins_dir, cfg)
+    check("except 排除生效",
+          "gm_plugin_fps_overlay" not in mods
+          and "gm_plugin_shake" in mods
+          and "gm_plugin_custom_actions" in mods,
+          str(mods))
+    check("except 后指令注册", engine.commands.has("shake")
+          and engine.commands.has("do_action"))
+    engine.plugins.unload_all()
+    engine.quit()
+    import pygame
+    pygame.quit()
+
+    # only 白名单
+    engine = GameEngine(640, 360, "test32")
+    mods = engine.plugins.discover(plugins_dir, {"only": ["shake",
+                                                          "scene_notice"]})
+    check("only 白名单生效",
+          sorted(mods) == ["gm_plugin_scene_notice", "gm_plugin_shake"],
+          str(mods))
+    check("白名单指令注册", engine.commands.has("shake")
+          and not engine.commands.has("do_action"))
+    engine.plugins.unload_all()
+    engine.quit()
+    pygame.quit()
+
+    # 无配置 -> 全装
+    engine = GameEngine(640, 360, "test33")
+    mods = engine.plugins.discover(plugins_dir)
+    check("无配置全装", len(mods) >= 5, str(len(mods)))
+    engine.plugins.unload_all()
+    engine.quit()
+    pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -1679,6 +1791,18 @@ def main():
         test_dialogs()
     except Exception as exc:
         print(f"  [ERROR] dialog 测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_ui_images()
+    except Exception as exc:
+        print(f"  [ERROR] UI 图片测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_plugins_config()
+    except Exception as exc:
+        print(f"  [ERROR] 插件装载配置测试异常: {exc}")
         import traceback
         traceback.print_exc()
 
