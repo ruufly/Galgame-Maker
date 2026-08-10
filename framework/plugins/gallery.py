@@ -83,7 +83,11 @@ class GalleryPlugin(Plugin):
         @self.listen("engine_click")
         def _on_click(pos, **kw):
             if self._view is not None:
-                self._view = None          # 大图: 点击关闭
+                # CG 大图: 点击轮播下一形态, 播完退出
+                v = self._view
+                v["idx"] += 1
+                if v["idx"] >= len(v["poses"]):
+                    self._view = None
                 return False
             if self._active:
                 return self._handle_click(pos)
@@ -218,8 +222,10 @@ class GalleryPlugin(Plugin):
     def _on_grid_click(self, i):
         kind, payload = self._grid_items[i]
         if kind == "cg":
-            self._view = {"scene": payload[0], "pose": payload[1],
-                          "path": payload[2]}
+            sid, poses, _total = payload
+            if not poses:
+                return            # 未解锁 CG: 不可点
+            self._view = {"scene": sid, "poses": list(poses), "idx": 0}
         elif kind == "bgm":
             # 先显示"正在切换"提示, 稍后再实际切换 (见 _draw_bgm)
             self._bgm_pending = {"name": payload,
@@ -234,19 +240,29 @@ class GalleryPlugin(Plugin):
         return [c for c, _label in CATEGORY_NAMES if c in cats]
 
     def _cg_entries(self):
-        """已解锁 CG 条目: [(scene_id, pose, img_path)]。"""
+        """CG 条目 (按场景合并): [(scene_id, poses, total, thumb_path)]。
+
+        poses: 已解锁形态列表 (含 "" 表示默认背景);
+        total: 该场景总形态数 (backgrounds 键数, 至少 1);
+        thumb: 缩略图路径 (已解锁取首个形态, 未解锁为 None)。
+        """
         out = []
         unlocked = self.engine.get_unlocked_cgs()
         scenes = self.engine.runtime.scenes
-        for sid, poses in unlocked.items():
-            scene = scenes.get(sid)
-            if not scene or scene.get("type") != "cg":
+        for sid, scene in scenes.items():
+            if scene.get("type") != "cg":
                 continue
-            for pose in poses:
-                img = (scene["backgrounds"].get(pose)
-                       if pose in scene["backgrounds"]
-                       else scene.get("default"))
-                out.append((sid, pose, img))
+            poses = unlocked.get(sid, [])
+            # 形态总数 = 背景名键数 + 默认背景 (default 也算一个形态)
+            all_poses = list(scene["backgrounds"].keys())
+            total = len(all_poses) + (1 if scene.get("default") else 0)
+            thumb = None
+            if poses:
+                first = poses[0]
+                thumb = (scene["backgrounds"].get(first)
+                         if first in scene["backgrounds"]
+                         else scene.get("default"))
+            out.append((sid, list(poses), total, thumb))
         return out
 
     def _bgm_entries(self):
@@ -342,21 +358,17 @@ class GalleryPlugin(Plugin):
         ui = self.engine.ui
         w, h = surface.get_size()
         rt = self.engine.runtime
-        unlocked = self.engine.get_unlocked_cgs()
-        total = sum(len(sc["backgrounds"]) or 1
-                    for sc in rt.scenes.values()
-                    if sc.get("type") == "cg")
-        collected = sum(len(v) for v in unlocked.values())
-        ui.text(surface, self.engine.get_font(20),
-                f"CG 收集: {collected} / {total}",
-                color=(200, 200, 210), pos=(28, 132))
         entries = self._cg_entries()
+        collected = sum(1 for _s, poses, _t, _th in entries if poses)
+        ui.text(surface, self.engine.get_font(20),
+                f"CG 收集: {collected} / {len(entries)}",
+                color=(200, 200, 210), pos=(28, 132))
         self._grid_rects = []
         self._grid_items = []
         if not entries:
             ui.text(surface, self.engine.get_font(20),
-                    "尚未解锁任何 CG —— 去游戏中达成结局吧",
-                    color=(150, 150, 165), center=(w // 2, h // 2))
+                    "暂无 CG 可鉴赏", color=(150, 150, 165),
+                    center=(w // 2, h // 2))
             return
         cols = 4
         gap = 16
@@ -365,20 +377,33 @@ class GalleryPlugin(Plugin):
         x0 = (w - (cols * cw + (cols - 1) * gap)) // 2
         y0 = 158
         font_s = self.engine.get_font(16)
-        for i, (sid, pose, img_path) in enumerate(entries):
+        font_q = self.engine.get_font(44)
+        for i, (sid, poses, total, thumb) in enumerate(entries):
             r, c = divmod(i, cols)
             rect = pygame.Rect(x0 + c * (cw + gap), y0 + r * (ch + 26),
                                cw, ch)
             self._grid_rects.append(rect)
-            self._grid_items.append(("cg", (sid, pose, img_path)))
-            ui.panel(surface, rect, bg_color=(22, 22, 32),
-                     border_color=(70, 70, 95), border_width=1)
-            img = self._scaled(img_path, cw, ch)
-            if img:
-                surface.blit(img, img.get_rect(center=rect.center))
+            self._grid_items.append(("cg", (sid, poses, total)))
             scene = rt.scenes.get(sid, {})
-            label = f"{scene.get('name', sid)} · {pose or '默认'}"
-            ui.text(surface, font_s, label, color=(190, 190, 205),
+            if thumb:
+                # 已解锁: 缩略图 + 形态进度
+                ui.panel(surface, rect, bg_color=(22, 22, 32),
+                         border_color=(90, 90, 120), border_width=1)
+                img = self._scaled(thumb, cw, ch)
+                if img:
+                    surface.blit(img, img.get_rect(center=rect.center))
+                label = (f"{scene.get('name', sid)} "
+                         f"({len(poses)}/{total})")
+                color = (230, 230, 235)
+            else:
+                # 未解锁: 灰色占位框
+                ui.panel(surface, rect, bg_color=(48, 48, 54),
+                         border_color=(90, 90, 98), border_width=1)
+                ui.text(surface, font_q, "？", color=(120, 120, 128),
+                        center=rect.center)
+                label = f"{scene.get('name', sid)} · 未解锁"
+                color = (140, 140, 150)
+            ui.text(surface, font_s, label, color=color,
                     center=(rect.centerx, rect.bottom + 13))
 
     def _draw_bgm(self, surface):
@@ -472,7 +497,9 @@ class GalleryPlugin(Plugin):
     def _draw_scenes(self, surface):
         ui = self.engine.ui
         w, h = surface.get_size()
-        scenes = list(self.engine.runtime.scenes.values())
+        # 场景鉴赏只展示 normal 场景 (CG 场景归 CG 鉴赏)
+        scenes = [sc for sc in self.engine.runtime.scenes.values()
+                  if sc.get("type") != "cg"]
         self._grid_rects = []
         self._grid_items = []
         if not scenes:
@@ -504,21 +531,31 @@ class GalleryPlugin(Plugin):
                     center=(rect.centerx, rect.bottom + 13))
 
     def _draw_view(self, surface):
-        """CG 大图查看 (全屏黑底 + 等比放大图)。"""
+        """CG 大图查看: 全屏黑底 + 等比放大图; 点击轮播形态, 播完退出。"""
         ui = self.engine.ui
         w, h = surface.get_size()
+        v = self._view
+        scene = self.engine.runtime.scenes.get(v["scene"], {})
+        pose = v["poses"][v["idx"]]
+        img_path = (scene["backgrounds"].get(pose)
+                    if pose in scene["backgrounds"]
+                    else scene.get("default"))
         surface.fill((0, 0, 0))
-        img = self._load_img(self._view["path"])
+        img = self._load_img(img_path)
         if img:
             iw, ih = img.get_size()
             scale = min((w - 40) / iw, (h - 110) / ih)
             tw, th = max(1, int(iw * scale)), max(1, int(ih * scale))
             shown = pygame.transform.smoothscale(img, (tw, th))
             surface.blit(shown, shown.get_rect(center=(w // 2, (h - 60) // 2)))
-        scene = self.engine.runtime.scenes.get(self._view["scene"], {})
-        label = (f"{scene.get('name', self._view['scene'])} · "
-                 f"{self._view['pose'] or '默认'}")
+        total = len(v["poses"])
+        label = (f"{scene.get('name', v['scene'])} · "
+                 f"形态 {v['idx'] + 1} / {total}")
         ui.text(surface, self.engine.get_font(22), label,
                 color=(230, 230, 240), center=(w // 2, h - 46))
-        ui.text(surface, self.engine.get_font(16), "点击任意处返回",
+        if v["idx"] < total - 1:
+            hint = "点击切换下一形态 · ESC 退出"
+        else:
+            hint = "已是最后形态 · 点击退出"
+        ui.text(surface, self.engine.get_font(16), hint,
                 color=(140, 140, 155), center=(w // 2, h - 20))

@@ -2985,6 +2985,10 @@ scene s2
     type: normal
     name: "普通场景"
     default: "z.png"
+scene s3
+    type: cg
+    name: "未解锁CG"
+    default: "w.png"
 sound bgm_a
     type: music
     file: "materials/audio/maou_bgm_piano41.mp3"
@@ -3065,18 +3069,39 @@ game_start:
         check("CG 展示即记录", engine.cg_unlocked("s1", ""))
         rt._cmd_bg(Statement(op="bg", args=["s1", "pose2"], line=0))
         check("CG pose 记录", engine.cg_unlocked("s1", "pose2"))
-        check("CG 条目", len(plug._cg_entries()) == 2,
-              str(plug._cg_entries()))
+        entries = plug._cg_entries()
+        check("CG 按场景合并", len(entries) == 2,
+              str([e[0] for e in entries]))   # s1 解锁 + s3 未解锁
+        s1 = [e for e in entries if e[0] == "s1"][0]
+        check("CG 形态列表", s1[1] == ["", "pose2"] and s1[2] == 2,
+              str(s1))
+        s3 = [e for e in entries if e[0] == "s3"][0]
+        check("未解锁 CG 占位", s3[1] == [] and s3[3] is None, str(s3))
         check("CG 收集计数",
               sum(len(v) for v in engine.get_unlocked_cgs().values()) == 2)
-        # CG 大图查看与关闭 (走完整 engine_click 事件路径)
+        # CG 大图: 形态轮播 (点击切下一形态, 播完退出)
         plug._category = "cg"
         plug._grid_rects = [pygame.Rect(10, 10, 100, 100)]
-        plug._grid_items = [("cg", ("s1", "", "x.png"))]
+        plug._grid_items = [("cg", ("s1", ["", "pose2"], 2))]
         plug._on_grid_click(0)
-        check("CG 大图打开", plug._view is not None)
+        check("CG 大图打开", plug._view is not None
+              and plug._view["idx"] == 0)
         engine.on_click((20, 20))
-        check("大图点击关闭", plug._view is None and not d.slot_menu_active)
+        check("CG 轮播下一形态", plug._view is not None
+              and plug._view["idx"] == 1)
+        engine.on_click((20, 20))
+        check("CG 播完退出", plug._view is None)
+        # 未解锁 CG 点击无效
+        plug._grid_items = [("cg", ("s3", [], 1))]
+        plug._on_grid_click(0)
+        check("未解锁 CG 不可点", plug._view is None)
+        # 场景鉴赏排除 CG 场景
+        plug._category = "scene"
+        plug._draw_scenes(pygame.Surface((640, 360)))
+        check("场景鉴赏排除 CG",
+              len(plug._grid_items) == 1
+              and plug._grid_items[0][1] == "s2",
+              str(plug._grid_items))
         # BGM 试听: 先显示切换提示, 延迟后再实际切换
         plug._category = "bgm"
         surf = pygame.Surface((640, 360))

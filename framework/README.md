@@ -42,12 +42,12 @@ framework/
 │   └── gallery.py            鉴赏: 标题菜单按钮 + CG/BGM/角色/场景鉴赏
 │                            (结局解锁, 配置在 gallery.gal)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 568 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 573 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 568 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 573 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -560,9 +560,14 @@ scene cg_school                     # CG 场景定义 (type: cg)
   未配置时禁用态为纯色暗化)
 * **数据来源**: CG 来自 `type: cg` 场景的已解锁背景; BGM 来自
   `sound` 注册表 `type: music`; 角色来自 `char` (含 desc 等描述);
-  场景来自 `scene` 定义
-* **界面**: 分类按钮行 + 内容网格 (CG 点击放大查看; BGM 点击后
-  先在页面显示"正在切换"提示再实际切换试听), ESC/返回 关闭回标题
+  场景来自 `scene` 定义 (CG 场景只出现在 CG 鉴赏, 场景鉴赏仅展示
+  normal 场景)
+* **CG 鉴赏**: 同一 CG 场景的多个形态**合并为一个条目** (缩略图 +
+  形态进度 x/y); 点击放大后**点击图片轮播切换形态**, 播完最后一个
+  形态后再点击退出 (ESC 随时退出); 未解锁的 CG 显示**灰色占位框**
+  (问号 + "未解锁"), 点击无效
+* **界面**: 分类按钮行 + 内容网格 (BGM 点击后先在页面显示"正在切换"
+  提示再实际切换试听), ESC/返回 关闭回标题
 * **标题 BGM**: `start:` 块可用 `music` 配置标题背景音乐, 回标题/
   退出鉴赏时自动恢复播放 (engine 记录 `runtime.title_bgm`)
 
@@ -879,7 +884,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (568 项断言)
+## 12. 测试 (573 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -971,6 +976,7 @@ py -3.10 framework/tests/smoke.py
 | 21. 菜单双模式 | menu_mode: popup (ESC 弹窗) / bar (常驻菜单栏, 对话框下方或窗口上方, 随时点击) + menu_bar 样式块 + 运行时切换 + 测试增至 539 项 |
 | 22. 鉴赏系统 | gallery 插件 (标题按钮+结局解锁+CG/BGM/角色/场景鉴赏) + 菜单按钮注册/禁用 API + ending 结局名 + char 描述 + scene type cg + 全局进度 (save/global.json) + 测试增至 562 项 |
 | 23. 鉴赏完善 | 标题按钮多列布局 (button_columns) + 按钮禁用图 image_disabled + BGM 先显示后切换 + 标题 BGM (start 块, 退出鉴赏恢复) + 测试增至 568 项 |
+| 24. CG 鉴赏细化 | CG 按场景合并 (形态轮播, 播完退出) + 未解锁灰色占位框 + 场景鉴赏排除 CG 场景 + 测试增至 573 项 |
 
 ---
 
