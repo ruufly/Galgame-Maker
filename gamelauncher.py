@@ -34,9 +34,10 @@ from framework import GameEngine
 
 
 def extract_window_config(script_path: str) -> dict:
-    """从脚本顶层解析 window 配置块 (无需运行脚本)。"""
+    """从脚本 (递归展开 import) 顶层解析 window 配置块。"""
     try:
-        script = parse_file(script_path)
+        from framework.engine.loader import load_script_with_imports
+        script = load_script_with_imports(script_path)
     except Exception as exc:
         log.warning(f"预解析脚本失败, 使用默认窗口配置: {exc}")
         return {}

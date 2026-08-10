@@ -90,6 +90,7 @@ class Runtime:
             "style": self._cmd_style,
             "use": self._cmd_use,
             "selection_style": self._cmd_selection_style,
+            "import": self._cmd_pass,
         }
 
     # ==================================================================
@@ -100,7 +101,9 @@ class Runtime:
         self.script_path = path
         self.script_dir = os.path.dirname(path)
         self.engine.project_dir = self.script_dir
-        script = parse_file(path)
+        # 递归展开 import 后解析
+        from framework.engine.loader import load_script_with_imports
+        script = load_script_with_imports(path)
         self.labels = script.labels
         self.statements = script.statements
         self.ip = 0

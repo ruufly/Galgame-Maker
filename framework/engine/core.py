@@ -468,8 +468,8 @@ class GameEngine:
             except: "fps_overlay"         # 排除列出的插件
         """
         try:
-            from framework.engine.parser import parse_file
-            script = parse_file(script_path)
+            from framework.engine.loader import load_script_with_imports
+            script = load_script_with_imports(script_path)
             for stmt in script.statements:
                 if stmt.op == "plugins":
                     cfg = {}

@@ -42,10 +42,9 @@ def check(name, cond, detail=""):
 
 def test_parser():
     print("== 解析器 ==")
+    from framework.engine.loader import load_script_with_imports
     script_path = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
-    with open(script_path, "r", encoding="utf-8") as f:
-        text = f.read()
-    script = parse(text, script_path)
+    script = load_script_with_imports(script_path)   # 展开 import
     check("标签数量 == 6", len(script.labels) == 6, str(list(script.labels)))
     check("存在 start 标签", "start" in script.labels)
     check("存在 game_start 标签", "game_start" in script.labels)
@@ -1617,6 +1616,61 @@ def test_plugins_config():
     pygame.quit()
 
 
+def test_imports():
+    print("== import 拆分 ==")
+    import shutil
+    import tempfile
+    from framework.engine.loader import load_script_with_imports
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    script = load_script_with_imports(demo)
+    for label in ("start", "game_start", "like_it", "neutral", "dislike",
+                  "after_choice"):
+        check(f"标签 {label} 已合并", label in script.labels,
+              str(list(script.labels)))
+    tops = [s.op for s in script.statements]
+    check("顶层声明合并",
+          "style" in tops and "char" in tops and "scene" in tops
+          and "selection_style" in tops and "plugins" in tops
+          and "window" in tops,
+          str(tops))
+    # import 语句本身已展开 (不留在顶层)
+    check("import 已展开", "import" not in tops, str(tops))
+
+    # 循环导入检测
+    d = tempfile.mkdtemp()
+    a = os.path.join(d, "a.gal")
+    b = os.path.join(d, "b.gal")
+    with open(a, "w", encoding="utf-8") as f:
+        f.write('''import "b.gal"
+''')
+    with open(b, "w", encoding="utf-8") as f:
+        f.write('''import "a.gal"
+''')
+    try:
+        load_script_with_imports(a)
+        check("循环导入报错", False)
+    except Exception as exc:
+        check("循环导入报错", "循环导入" in str(exc), str(exc))
+    shutil.rmtree(d, ignore_errors=True)
+
+    # 运行时: 跨文件跳转 + 子文件定义注册
+    engine = GameEngine(640, 360, "test34")
+    d2 = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        rt.start()
+        engine.on_click(d2.title_rects[0].center)
+        check("跨文件标签跳转", rt.current_label == "game_start")
+        check("子文件角色/场景注册",
+              "producer" in rt.characters and "school" in rt.scenes
+              and "after_choice" in rt.labels)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -1803,6 +1857,12 @@ def main():
         test_plugins_config()
     except Exception as exc:
         print(f"  [ERROR] 插件装载配置测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_imports()
+    except Exception as exc:
+        print(f"  [ERROR] import 拆分测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

@@ -25,6 +25,27 @@ py -3.10 gamelauncher.py path/to/your.gal
 py -3.10 framework/tests/smoke.py
 ```
 
+### 脚本拆分 (import)
+
+`.gal` 支持按功能拆分多个文件, 顶层用 `import` 合并:
+
+```gal
+import "ui.gal"          # 界面样式定义
+import "cast.gal"        # 角色与场景定义
+import "branches.gal"    # 分支流程标签
+```
+
+合并规则:
+* 被导入文件的标签全部并入 (重复标签报错), 子文件的 `start` 标签忽略
+* 顶层声明 (window/style/char/scene/plugins/selection_style) 按 import
+  位置顺序并入, 运行时静态注册
+* 相对路径 (相对 import 语句所在文件), 支持链式 import, 循环导入报错
+
+demo (`test/engine_demo/`) 已按此拆分: `demo.gal` (主流程) +
+`ui.gal` (样式) + `cast.gal` (角色/场景) + `branches.gal` (分支)。
+
+窗口配置 / 插件配置的预解析 (启动器) 同样递归展开 import。
+
 ### 插件
 
 框架自带 5 个正式插件 (`framework/plugins/`), 默认全部自动装载,
