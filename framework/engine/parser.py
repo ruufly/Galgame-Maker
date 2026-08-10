@@ -271,6 +271,8 @@ class Parser:
             return self._parse_menu(i, indent, lineno, content, rest)
 
         # ---- 对象创建: ... / plugins / ui + 属性块
+        # gallery 等插件自定义块也在语法层识别为属性块 (引擎通过
+        # script_block 事件广播给插件处理, 未装载对应插件时安全忽略)
         if op in ("weight", "sprite", "object", "char", "character",
                   "scene", "scenery", "window", "config", "title", "style",
                   "selection_style", "menu_bar", "plugins", "ui", "sound",

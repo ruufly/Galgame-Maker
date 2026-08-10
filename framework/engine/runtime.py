@@ -49,6 +49,7 @@ class Runtime:
         self.menus = {}               # 菜单表: id -> [{name, text, action, cfg}]
         self.sounds = {}              # 声音表: name -> {type, file, volume}
         self.title_bgm = None         # start 块配置的标题 BGM (注册名/路径)
+        self.skip_mode = False        # 跳过模式: 直达下一个选择支/结局
 
         # 内置指令表
         self._builtins = {
@@ -97,7 +98,6 @@ class Runtime:
             "use": self._cmd_use,
             "selection_style": self._cmd_selection_style,
             "menu_bar": self._cmd_menu_bar,
-            "gallery": self._cmd_gallery,
             "import": self._cmd_pass,
             "ui": self._cmd_ui,
             "menu": self._cmd_menu,
@@ -153,9 +153,10 @@ class Runtime:
             elif stmt.op == "menu_bar":
                 # 常驻菜单栏样式 (bar 模式系统菜单)
                 self._apply_menu_bar_stmt(stmt)
-            elif stmt.op == "gallery":
-                # 鉴赏配置 (gallery.gal, 插件读取)
-                self._cmd_gallery(stmt)
+            elif stmt.kwargs or stmt.block:
+                # 其他属性块: 广播给插件处理 (如 gallery 块由 gallery
+                # 插件解析; 未装载对应插件时安全忽略)
+                self.engine.emit("script_block", op=stmt.op, stmt=stmt)
             # 注: window/config 块不在此静态应用 —— 窗口类配置由启动器
             # 预解析 (extract_window_config), 交互配置由启动器 apply_config;
             # 运行中的 `window config` 命令在执行到该语句时即时生效。
@@ -378,23 +379,6 @@ class Runtime:
         self._apply_menu_bar_stmt(stmt)
         return None
 
-    def _cmd_gallery(self, stmt):
-        """鉴赏配置块 (由鉴赏插件读取):
-
-        gallery
-            unlock_ending: "真结局"          # 达成此结局解锁鉴赏按钮 (空=不锁)
-            button_text: "鉴赏"              # 标题菜单按钮文本
-            title: "鉴赏"                    # 鉴赏界面标题
-            categories: "cg, bgm, character, scene"   # 可用分类
-            locked_hint: "达成真结局后解锁"   # 锁定提示
-        """
-        base = dict(self.engine.gallery_config)
-        base.update({k: str(v) for k, v in stmt.kwargs.items()})
-        self.engine.gallery_config = base
-        self.engine.emit("gallery_config", config=base)
-        log.info(f"鉴赏配置已应用: {base}")
-        return None
-
     def _scan_styles(self, script) -> dict:
         """静态扫描脚本中的 style 定义块。"""
         styles = {}
@@ -533,9 +517,13 @@ class Runtime:
         self.advance()
 
     def advance(self) -> None:
-        """执行语句直到阻塞或脚本结束。"""
+        """执行语句直到阻塞或脚本结束。
+
+        skip_mode 开启时跳过文本/等待/动画类阻塞, 直达下一个选择支、
+        标题或结局 (choice/title 仍会停止, ending 自然结束)。
+        """
         while self.running and not self.ended:
-            if self.blocked:
+            if self.blocked and not self.skip_mode:
                 return
             if self.ip >= len(self.statements):
                 if self.call_stack:
@@ -549,7 +537,15 @@ class Runtime:
                                     label=self.current_label)
             result = self._dispatch(stmt)
             if result == BLOCK:
+                if self.skip_mode and self._skipable(stmt):
+                    self.blocked = None     # 跳过阻塞, 继续执行
+                    continue
                 return
+
+    def _skipable(self, stmt) -> bool:
+        """跳过模式下可忽略的阻塞指令 (文本/等待/移动动画)。"""
+        return stmt.op in ("text", "nar", "narrate", "say", "sleep",
+                           "move")
 
     def _dispatch(self, stmt: Statement):
         op = stmt.op
@@ -1058,7 +1054,11 @@ class Runtime:
         """播放/停止语音 (voice 参数; 无语音时停止上一个)。
 
         语音音量 = 全局(sfx×voice) × 声音块 volume × 角色 voice_volume。
+        跳过模式 (skip_mode) 下不播放语音, 只停止 (快进静音)。
         """
+        if self.skip_mode:
+            self.engine.audio.stop_voice()
+            return
         if not voice_name:
             self.engine.audio.stop_voice()
             return
@@ -1226,8 +1226,9 @@ class Runtime:
             text = props.pop("text", sub.op)
             action = self._parse_action(props.pop("action", ""))
             cfg = {}
-            for key in ("image", "image_focus", "image_disabled", "width",
-                        "height", "stretch", "text_visible"):
+            for key in ("image", "image_focus", "image_disabled",
+                        "image_active", "width", "height",
+                        "stretch", "text_visible"):
                 if key in props:
                     val = props[key]
                     if key in ("width", "height"):
@@ -1327,6 +1328,34 @@ class Runtime:
         items[idx].setdefault("cfg", {})["enabled"] = bool(enabled)
         self.engine.emit("menu_button_state", name=mid,
                          button=items[idx]["name"], enabled=bool(enabled))
+        return True
+
+    def set_menu_button_cfg(self, mid: str, key, cfg_update: dict) -> bool:
+        """插件 API: 更新菜单按钮的 cfg (如动态切换按钮图/文本)。
+
+        自动模式等按钮的"激活/未激活"外观切换用。
+        """
+        menu = self.menus.get(mid)
+        if isinstance(menu, dict):
+            items = menu.get("items", [])
+        elif isinstance(menu, list):
+            items = menu
+        else:
+            return False
+        idx = None
+        if isinstance(key, int):
+            idx = key
+        else:
+            key_s = str(key)
+            for i, it in enumerate(items):
+                if it.get("name") == key_s or str(it.get("text")) == key_s:
+                    idx = i
+                    break
+        if idx is None or not (0 <= idx < len(items)):
+            return False
+        items[idx].setdefault("cfg", {}).update(dict(cfg_update))
+        self.engine.emit("menu_button_cfg", name=mid,
+                         button=items[idx]["name"])
         return True
 
     def _menu_items(self, mid: str) -> list:

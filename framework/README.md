@@ -39,15 +39,17 @@ framework/
 │   │                         wave 文字模式
 │   ├── bgm_notice.py         BGM 播放/暂停/恢复/停止通知
 │   ├── slot_thumbnails.py    存档画面快照 (槽位缩略图)
-│   └── gallery.py            鉴赏: 标题菜单按钮 + CG/BGM/角色/场景鉴赏
-│                            (结局解锁, 配置在 gallery.gal)
+│   ├── gallery.py            鉴赏: 标题菜单按钮 + CG/BGM/角色/场景鉴赏
+│   │                            (结局解锁, 配置在 gallery.gal)
+│   └── auto_skip.py          自动模式 (自动推进, 非正式界面自动暂停)
+│                               + 跳过剧情 (直达下一个选择支/结局)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 573 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 611 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 573 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 611 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -320,9 +322,11 @@ menu title                       # title 块用 menu: title 引用
 menu system                      # ESC 菜单: 定义即覆盖内置五项
     continue_button ...          # 按键属性同 title (action: continue/save/...)
 
-# 按键属性: text / image(默认,焦点) / width / height / stretch /
-#           text_visible / action (无名参数按类型映射: start->label,
-#           slot_menu->mode, save/load->slot; 自定义动作默认 label)
+# 按键属性: text / image(默认,焦点) / image_disabled(禁用图) /
+#           image_active(激活图, 自动模式等切换用) / width / height /
+#           stretch / text_visible / action (无名参数按类型映射:
+#           start->label, slot_menu->mode, save/load->slot;
+#           自定义动作默认 label)
 
 # 选择支行内参数 (见 4.2) 也支持 ui_click/ui_hover 配置
 ```
@@ -534,7 +538,9 @@ engine.cg_unlocked(scene_id, pose)   # -> bool
 ### 4.15 鉴赏系统 (gallery 插件)
 
 标题画面的「鉴赏」按钮可解锁 **CG / BGM / 角色 / 场景** 四类鉴赏。
-配置在独立 `.gal` 文件 (如 `gallery.gal`, 被主脚本 import):
+配置在独立 `.gal` 文件 (如 `gallery.gal`, 被主脚本 import);
+`gallery` 块由 gallery 插件解析 (引擎将未处理的属性块通过
+`script_block` 事件广播给插件, 未装载插件时安全忽略):
 
 ```gal
 gallery
@@ -543,6 +549,13 @@ gallery
     title: "鉴赏"                    # 鉴赏界面标题
     categories: "cg, bgm, character, scene"   # 可用分类
     locked_hint: "达成「真结局」后解锁鉴赏"
+    # --- 界面样式 (可选) ---
+    bg: "materials/.../bg.png"       # 界面背景图 (cover 铺满)
+    cat_image: "默认.png, 焦点.png"  # 分类按钮图 (默认, 焦点)
+    back_image: "默认.png, 焦点.png" # 返回按钮图
+    cat_text: false                  # 图自带文字时关闭分类文案
+    cg_frame: "默认.png, 焦点.png"   # CG 插画框 (九宫格)
+    cg_placeholder: "占位.png"       # 未解锁 CG 占位图 (默认灰色框+问号)
 
 scene cg_school                     # CG 场景定义 (type: cg)
     type: cg
@@ -719,6 +732,21 @@ engine.display.register_slot_thumbnail_provider(fn)   # 槽位缩略图绘制钩
 | custom_actions | `explode` 动作 + `do_action` 指令 + wobble 立绘效果 + wave 文字模式 |
 | bgm_notice | BGM 播放/暂停/恢复/停止通知 (music_* 事件) |
 | slot_thumbnails | 存档画面快照 + 槽位缩略图 |
+| auto_skip | 系统菜单 (ESC/bar) 加「自动模式」「跳过剧情」按钮 |
+
+**auto_skip 用法**: 插件自动向系统菜单追加两个按钮 (popup 弹窗与
+bar 常驻栏共用, 未定义 menu system 时先补内置五项); 按钮样式在
+ui.gal 的 ``menu system`` 中配置 (action: auto_toggle / skip_once,
+支持 image/image_focus/image_active/image_disabled 等):
+* **自动模式**: 文本显示完毕后自动推进下一句 (间隔 `AUTO_DELAY`,
+  默认 1.2s); 选择支/标题自动暂停; **在标题/鉴赏/菜单等非正式界面
+  自动关闭, 回到正式游戏界面自动恢复** (按用户意图); 开启时按钮
+  切换 `image_active` 激活图; 点击后退出 ESC 菜单; 右上角 [自动]
+* **跳过剧情**: 直达下一个**选择支/标题/结局**之前 (跳过文本/等待/
+  移动动画阻塞; 背景/立绘等场景指令正常执行到位); 点击后退出 ESC
+  菜单; 再次点击可取消; 右上角 [跳过]
+* 跳过由引擎 `runtime.skip_mode` 支持 (`advance()` 快进, 语音静音);
+  插件不装载时系统菜单不含这两个按钮, 不影响核心
 
 ### 9.2 两种写法
 
@@ -762,6 +790,7 @@ class MyPlugin(Plugin):
 | --- | --- |
 | engine_start / engine_quit | engine |
 | script_load / script_start / script_end | path / name |
+| script_block (静态扫描属性块) | op, stmt (插件自定义块, 如 gallery) |
 | label_enter | label |
 | statement | stmt, label |
 | text_show / text_advance / text_complete | text, speaker |
@@ -823,6 +852,9 @@ engine.copy_to_clipboard(text)
 | `display.register_text_mode(name, spec)` | 文字显示模式 |
 | `display.register_slot_thumbnail_provider(fn)` | 槽位缩略图 |
 | `engine.register_action` + `do_action` 指令 | 脚本触发动作 |
+| `engine.register_menu_button(mid, text, action, cfg)` | 插件向命名菜单添加按钮 (cfg 支持 enabled/image_disabled/image_active 等) |
+| `engine.set_menu_button_state(mid, key, enabled)` | 按钮启用/禁用 (禁用态暗色/禁用图) |
+| `engine.set_menu_button_cfg(mid, key, cfg)` | 更新按钮 cfg (动态切换图/文本, 显示中同步刷新) |
 
 ### 9.6 动作系统
 
@@ -884,7 +916,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (573 项断言)
+## 12. 测试 (611 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -977,6 +1009,10 @@ py -3.10 framework/tests/smoke.py
 | 22. 鉴赏系统 | gallery 插件 (标题按钮+结局解锁+CG/BGM/角色/场景鉴赏) + 菜单按钮注册/禁用 API + ending 结局名 + char 描述 + scene type cg + 全局进度 (save/global.json) + 测试增至 562 项 |
 | 23. 鉴赏完善 | 标题按钮多列布局 (button_columns) + 按钮禁用图 image_disabled + BGM 先显示后切换 + 标题 BGM (start 块, 退出鉴赏恢复) + 测试增至 568 项 |
 | 24. CG 鉴赏细化 | CG 按场景合并 (形态轮播, 播完退出) + 未解锁灰色占位框 + 场景鉴赏排除 CG 场景 + 测试增至 573 项 |
+| 25. 插件化重构 | gallery 块解析移入 gallery 插件 (引擎广播 script_block 事件); 未装载插件时安全忽略; 测试增至 574 项 |
+| 26. 自动/跳过 | auto_skip 插件 (ESC/bar 菜单按钮): 自动模式自动推进 + 跳过剧情直达下一个选择支/结局 (runtime.skip_mode 快进, 背景同步) + 鉴赏中退出确认框修复 + 测试增至 591 项 |
+| 27. 交互完善 | 自动/跳过按钮样式可在 menu system 配置 (image_active 激活图) + 点击退出 ESC 菜单 + 非正式界面自动模式自动暂停/恢复 + CG 大图确认框修复 + 鉴赏界面样式扩展 (bg/cat_image/cg_frame/cg_placeholder) + 测试增至 604 项 |
+| 28. 交互修复 | 自动模式二次点击关闭修复 (按用户意图翻转) + bar 按钮支持 image 图 (激活样式区分) + 测试增至 611 项 |
 
 ---
 

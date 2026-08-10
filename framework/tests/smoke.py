@@ -1129,7 +1129,7 @@ def test_system_menu():
         # 游戏中按 ESC -> 系统菜单
         engine.on_escape()
         check("ESC 打开系统菜单", d.system_menu_active and engine.paused)
-        check("菜单 5 项", len(d.system_menu_items) == 5,
+        check("菜单 7 项", len(d.system_menu_items) == 7,
               str([t for t, _, _ in d.system_menu_items]))
         engine.draw()
         check("菜单绘制无异常", True)
@@ -1503,7 +1503,8 @@ def test_dialogs():
         engine.on_escape()                              # ESC -> 菜单
         texts = [t for t, _, _ in d.selection_items]
         check("ESC 菜单用命名菜单文案",
-              texts == ["继续游戏", "存档", "读取存档", "返回标题", "退出游戏"],
+              texts == ["继续游戏", "存档", "读取存档", "返回标题",
+                        "退出游戏", "自动模式", "跳过剧情"],
               str(texts))
         engine.on_click(d.selection_rects[0].center)   # 继续
     finally:
@@ -2020,7 +2021,7 @@ def test_menu_block():
         # ESC 系统菜单由 menu system 块覆盖
         engine.open_system_menu()
         check("ESC 菜单用命名菜单",
-              d.system_menu_active and len(d.selection_items) == 5
+              d.system_menu_active and len(d.selection_items) == 7
               and d.selection_items[0][0] == "继续游戏"
               and d.selection_items[0][2].get("width") == 240,
               str([t for t, _, _ in d.selection_items]))
@@ -2855,12 +2856,14 @@ def test_menu_bar():
         check("menu_mode 配置", engine.menu_mode == "bar")
         rt.load_script(demo)
         check("bar 已构建", d.menu_bar_active
-              and len(d.menu_bar_items) == 4,
+              and len(d.menu_bar_items) == 6,
               f"{len(d.menu_bar_items)} 项")
         types = [it[1].get("type") for it in d.menu_bar_items]
         check("bar 过滤 continue", "continue" not in types, str(types))
         check("bar 项目顺序", types == ["slot_menu", "slot_menu",
-                                        "title", "quit"], str(types))
+                                        "title", "quit",
+                                        "auto_toggle", "skip_once"],
+              str(types))
         # bottom 位置: 贴窗口底部
         st = d.menu_bar_style
         bar_y = d.menu_bar_rects[0].y
@@ -3102,6 +3105,49 @@ game_start:
               len(plug._grid_items) == 1
               and plug._grid_items[0][1] == "s2",
               str(plug._grid_items))
+        # 未装载插件时 gallery 块安全忽略 (引擎只广播 script_block 事件)
+        engine3 = GameEngine(640, 360, "t56")
+        p3 = os.path.join(demo_dir, "_gallery_noplug.gal")
+        try:
+            src3 = '''gallery
+    unlock_ending: "真结局"
+start:
+    text "x"
+'''
+            with open(p3, "w", encoding="utf-8") as f:
+                f.write(src3)
+            engine3.runtime.load_script(p3)
+            check("未装插件 gallery 块忽略",
+                  not hasattr(engine3, "gallery_config"))
+        finally:
+            engine3.quit()      # 不调 pygame.quit: 外层 finally 统一收尾
+            if os.path.isfile(p3):
+                os.remove(p3)
+        # 鉴赏中退出确认框: 正常显示且可点击 (gallery 不拦截)
+        engine._quit_ok = False
+        engine.ask_confirm("确定退出游戏吗？", "退出", "继续",
+                           lambda: setattr(engine, "_quit_ok", True))
+        check("鉴赏中确认框打开", d.confirm_active)
+        engine.draw()           # 绘制: gallery 只暗化底, 不盖住确认框
+        check("鉴赏中确认框绘制", d.confirm_active)
+        engine.on_click(d.confirm_rects[0].center)
+        check("鉴赏中确认框可点击",
+              engine._quit_ok and not d.confirm_active,
+              f"ok={engine._quit_ok} confirm={d.confirm_active}")
+        # 正在查看 CG 大图时退出确认框: 同样正常显示与点击
+        plug._view = {"scene": "s1", "poses": ["", "pose2"], "idx": 0}
+        engine._quit_ok2 = False
+        engine.ask_confirm("确定退出游戏吗？", "退出", "继续",
+                           lambda: setattr(engine, "_quit_ok2", True))
+        check("大图中确认框打开", d.confirm_active)
+        engine.draw()
+        check("大图中确认框绘制", d.confirm_active)
+        engine.on_click(d.confirm_rects[0].center)
+        check("大图中确认框可点击",
+              engine._quit_ok2 and not d.confirm_active
+              and plug._view is not None,   # 大图状态保留 (确认后继续鉴赏)
+              f"ok={engine._quit_ok2} view={plug._view is not None}")
+        plug._view = None
         # BGM 试听: 先显示切换提示, 延迟后再实际切换
         plug._category = "bgm"
         surf = pygame.Surface((640, 360))
@@ -3136,6 +3182,193 @@ game_start:
             r = os.path.join(root, "save")
             if _os.path.isdir(r):
                 shutil.rmtree(r, ignore_errors=True)
+
+
+def test_auto_skip():
+    print("== 自动模式 / 跳过剧情 ==")
+    import pygame
+    base = os.path.dirname(os.path.abspath(__file__))
+    engine = GameEngine(640, 360, "test57")
+    d = engine.display
+    rt = engine.runtime
+    engine.project_dir = base
+    path = os.path.join(base, "_auto_skip_test.gal")
+    src = '''scene sc1
+    name: "一"
+    default: "a.png"
+scene sc2
+    name: "二"
+    default: "b.png"
+start:
+    bg sc1
+    text "第一句"
+    bg sc2
+    text "第二句"
+    choice:
+        "A" -> lab_a
+        "B" -> lab_b
+lab_a:
+    text "选了A"
+    ending 结局A
+lab_b:
+    text "选了B"
+    ending 结局B
+'''
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        plug = engine.plugins._classes.get("auto_skip")
+        check("auto_skip 插件装载", plug is not None)
+        rt.load_script(path)
+        # 系统菜单按钮 (popup/bar 共用)
+        names = [t for t, _a, _c in (rt._menu_items("system") or [])]
+        check("自动模式按钮", "自动模式" in names, str(names))
+        check("跳过剧情按钮", "跳过剧情" in names, str(names))
+        rt.start()
+        check("开始文本阻塞", rt.blocked == "text")
+        # 跳过: 直达选择支, 背景同步跳转到位
+        plug._do_skip(engine, {}, "menu")
+        check("跳过直达选择支", d.choice_active and not rt.skip_mode,
+              f"choice={d.choice_active}")
+        check("跳过背景到位", d.bg_scene == "sc2", str(d.bg_scene))
+        # 自动模式: 选择支处不推进
+        plug._toggle_auto(engine, {}, "menu")
+        check("自动模式开启", plug.auto_on)
+        plug._auto_tick()
+        check("自动在choice暂停", d.choice_active)
+        # 选 A -> 文本 -> 自动推进 (文本完成 + 时间流逝)
+        engine.on_click(d.choice_rects[0].center)
+        check("选择后文本", d.text_active and rt.blocked == "text")
+        d.reveal = d._logic_len
+        plug._auto_t = pygame.time.get_ticks() - 2000
+        plug._auto_tick()
+        check("自动推进到结局", rt.ended, f"ended={rt.ended}")
+        check("结局已记录", "结局A" in engine.get_endings(),
+              str(engine.get_endings()))
+        # 结束画面后自动模式不推进 (无文本)
+        plug._auto_tick()
+        check("自动在结局暂停", rt.ended)
+        # 取消自动
+        plug._toggle_auto(engine, {}, "menu")
+        check("自动模式关闭", not plug.auto_on)
+        # 再次跳过: 重置后从 start 直达最近的 choice (背景同步到位)
+        d.ending = False
+        rt.running = True
+        rt.ended = False
+        rt.call_stack = []
+        rt.blocked = None
+        rt._jump_to("start")
+        rt.advance()
+        plug._do_skip(engine, {}, "menu")
+        check("重置后跳过到选择支", d.choice_active
+              and d.bg_scene == "sc2",
+              f"choice={d.choice_active} bg={d.bg_scene}")
+        # ESC 菜单中点击自动模式: 开启 + 退出菜单
+        engine.open_system_menu()
+        check("系统菜单打开", engine.paused and d.selection_active)
+        idx = next(i for i, it in enumerate(d.selection_items)
+                   if it[0] == "自动模式")
+        engine.on_click(d.selection_rects[idx].center)
+        check("点击后退出菜单", not d.system_menu_active
+              and not engine.paused, f"paused={engine.paused}")
+        check("自动模式开启", plug.auto_on and plug._auto_wanted)
+        # 非正式界面 (菜单) 自动关闭自动模式, 回正式界面恢复
+        engine.open_system_menu()
+        plug._sync_auto_state()
+        check("菜单时自动关闭", not plug.auto_on)
+        engine.close_system_menu()
+        plug._sync_auto_state()
+        check("回游戏自动恢复", plug.auto_on)
+        plug._toggle_auto(engine, {}, "menu")   # 关闭
+        check("自动模式关闭", not plug.auto_on and not plug._auto_wanted)
+        # 脚本 menu system 定义按钮 (含 image_active) 时: 不重复添加 + 激活样式
+        engine4 = GameEngine(640, 360, "t58")
+        try:
+            engine4.plugins.discover(
+                os.path.join(_ROOT, "framework", "plugins"))
+            engine4.runtime.load_script(
+                os.path.join(_ROOT, "test", "engine_demo", "demo.gal"))
+            plug4 = engine4.plugins._classes["auto_skip"]
+            items4 = engine4.runtime._menu_items("system") or []
+            check("脚本按钮不重复",
+                  len([1 for t, _a, _c in items4 if t == "自动模式"]) == 1,
+                  str([t for t, _a, _c in items4]))
+            cfg4 = [c for t, _a, c in items4 if t == "自动模式"][0]
+            check("image_active 配置", bool(cfg4.get("image_active")),
+                  str(cfg4))
+            plug4._toggle_auto(engine4, {}, "menu")
+            cfg_on = [c for t, _a, c in
+                      (engine4.runtime._menu_items("system") or [])
+                      if t == "自动模式"][0]
+            check("激活样式切换", cfg_on["image"] == cfg_on["image_active"],
+                  str(cfg_on))
+            plug4._toggle_auto(engine4, {}, "menu")
+            cfg_off = [c for t, _a, c in
+                       (engine4.runtime._menu_items("system") or [])
+                       if t == "自动模式"][0]
+            check("关闭恢复样式", cfg_off["image"] != cfg_off["image_active"],
+                  str(cfg_off))
+        finally:
+            engine4.quit()
+            import pygame as pg7
+            pg7.quit()
+        # ESC 菜单二次点击: 能正常关闭自动模式 (bug 回归)
+        engine.open_system_menu()
+        idx_a = next(i for i, it in enumerate(d.selection_items)
+                     if it[0] == "自动模式")
+        engine.on_click(d.selection_rects[idx_a].center)   # 开启
+        check("ESC 首次点击开启", plug.auto_on and not engine.paused)
+        engine.open_system_menu()                          # 再开菜单
+        plug._sync_auto_state()                            # 菜单中显示关闭
+        check("菜单中显示关闭", not plug.auto_on)
+        idx_b = next(i for i, it in enumerate(d.selection_items)
+                     if it[0] == "自动模式")
+        engine.on_click(d.selection_rects[idx_b].center)   # 再次点击 -> 关闭
+        check("ESC 二次点击关闭",
+              not plug.auto_on and not plug._auto_wanted,
+              f"auto={plug.auto_on} wanted={plug._auto_wanted}")
+        # bar 模式: 开启自动模式按钮样式区分 (image_active 生效)
+        engine5 = GameEngine(640, 360, "t59")
+        try:
+            engine5.apply_config({"menu_mode": "bar"})
+            engine5.plugins.discover(
+                os.path.join(_ROOT, "framework", "plugins"))
+            engine5.runtime.load_script(
+                os.path.join(_ROOT, "test", "engine_demo", "demo.gal"))
+            plug5 = engine5.plugins._classes["auto_skip"]
+            d5 = engine5.display
+            bar_cfg = [c for t, _a, c in d5.menu_bar_items
+                       if t == "自动模式"][0]
+            active_img = bar_cfg.get("image_active")
+            check("bar 激活前默认图", bar_cfg["image"] != active_img
+                  and active_img, str(bar_cfg))
+            plug5._toggle_auto(engine5, {}, "bar")
+            bar_cfg2 = [c for t, _a, c in d5.menu_bar_items
+                        if t == "自动模式"][0]
+            check("bar 激活图生效", bar_cfg2["image"] == active_img,
+                  str(bar_cfg2))
+            engine5.draw()
+            check("bar 激活图绘制无异常", True)
+            plug5._toggle_auto(engine5, {}, "bar")
+            bar_cfg3 = [c for t, _a, c in d5.menu_bar_items
+                        if t == "自动模式"][0]
+            check("bar 关闭恢复样式", bar_cfg3["image"] != active_img,
+                  str(bar_cfg3))
+        finally:
+            engine5.quit()
+            import pygame as pg8
+            pg8.quit()
+    finally:
+        engine.quit()
+        import pygame as pg6
+        pg6.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+        sd = os.path.join(base, "save")
+        import shutil
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
 
 
 def test_window_config_scaling():
@@ -3528,6 +3761,12 @@ def main():
         test_gallery()
     except Exception as exc:
         print(f"  [ERROR] 鉴赏系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_auto_skip()
+    except Exception as exc:
+        print(f"  [ERROR] 自动/跳过测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

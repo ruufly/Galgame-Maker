@@ -111,15 +111,6 @@ class GameEngine:
         self.menu_bar_pos = "bottom"   # bar 模式位置: bottom / top
         self._last_bar_hover = -1      # bar 悬停音效去重
 
-        # 鉴赏配置 (gallery 块, 鉴赏插件读取)
-        self.gallery_config = {
-            "unlock_ending": None,
-            "button_text": "鉴赏",
-            "title": "鉴赏",
-            "categories": "cg, bgm, character, scene",
-            "locked_hint": "",
-        }
-
         # UI 交互音效 (window 配置 ui_click_sound, 按钮确认时播放)
         self.ui_click_sound = None
         self.ui_hover_sound = None      # 活动选项变化时播放 (菜单/choice 配置)
@@ -1083,6 +1074,14 @@ class GameEngine:
         if ok and (self.display.title_active
                    or self.display.system_menu_active):
             self.display.sync_selection_enabled()
+        return ok
+
+    def set_menu_button_cfg(self, menu_id: str, key, cfg_update: dict) -> bool:
+        """插件 API: 更新菜单按钮 cfg (动态换图/文本等), 显示中同步刷新。"""
+        ok = self.runtime.set_menu_button_cfg(menu_id, key, cfg_update)
+        if ok and (self.display.title_active
+                   or self.display.system_menu_active):
+            self.display.sync_selection_cfg(menu_id)
         return ok
 
     def _play_ui_sound(self, kind: str = "click") -> None:

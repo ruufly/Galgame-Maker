@@ -4,7 +4,7 @@
     gallery 配置里的 unlock_ending 指定的结局达成后解锁鉴赏按钮
     (未达成时按钮呈禁用态, 点击无效)。结局用 ``ending <名>`` 指令达成。
 
-配置 (独立 .gal 文件, 由引擎解析存到 engine.gallery_config):
+配置 (独立 .gal 文件, 由本插件解析, 引擎广播 script_block 事件):
 
     gallery
         unlock_ending: "真结局"          # 达成此结局解锁 (空=不锁)
@@ -48,7 +48,18 @@ class GalleryPlugin(Plugin):
     name = "gallery"
     version = "1.0"
 
+    DEFAULT_CONFIG = {
+        "unlock_ending": None,
+        "button_text": "鉴赏",
+        "title": "鉴赏",
+        "categories": "cg, bgm, character, scene",
+        "locked_hint": "",
+    }
+
     def on_load(self):
+        # 鉴赏配置由本插件管理 (gallery 块由引擎广播 script_block 事件)
+        if not hasattr(self.engine, "gallery_config"):
+            self.engine.gallery_config = dict(self.DEFAULT_CONFIG)
         self._cfg = dict(self.engine.gallery_config)
         self._active = False          # 鉴赏界面是否打开
         self._category = "cg"         # 当前分类
@@ -64,10 +75,11 @@ class GalleryPlugin(Plugin):
         # 打开动作 (标题菜单按钮 action: gallery_open)
         self.engine.register_action("gallery_open", self._open)
 
-        @self.listen("gallery_config")
-        def _on_cfg(config, **kw):
-            self._cfg = dict(config)
-            self._ensure_button()
+        @self.listen("script_block")
+        def _on_block(op, stmt, **kw):
+            # 引擎广播的未处理属性块: gallery 块由本插件解析
+            if op == "gallery":
+                self._apply_gallery_block(stmt)
 
         @self.listen("script_load")
         def _on_script_load(**kw):
@@ -82,6 +94,9 @@ class GalleryPlugin(Plugin):
 
         @self.listen("engine_click")
         def _on_click(pos, **kw):
+            d = self.engine.display
+            if d.confirm_active or d.error_active or d.slot_menu_active:
+                return None        # 确认框/错误弹窗/槽位界面优先, 不拦截
             if self._view is not None:
                 # CG 大图: 点击轮播下一形态, 播完退出
                 v = self._view
@@ -114,6 +129,31 @@ class GalleryPlugin(Plugin):
         self.engine.actions.pop("gallery_open", None)
         self._img_cache.clear()
         print("[插件] gallery 已卸载")
+
+    def _apply_gallery_block(self, stmt):
+        """解析 gallery 配置块 (引擎广播 script_block 事件):
+
+        gallery
+            unlock_ending: "真结局"          # 达成此结局解锁鉴赏按钮 (空=不锁)
+            button_text: "鉴赏"              # 标题菜单按钮文本
+            title: "鉴赏"                    # 鉴赏界面标题
+            categories: "cg, bgm, character, scene"   # 可用分类
+            locked_hint: "达成真结局后解锁"   # 锁定提示
+            # --- 界面样式 (可选, 相对脚本目录) ---
+            bg: "materials/.../bg.png"       # 界面背景图 (cover 铺满)
+            cat_image: "默认.png, 焦点.png"  # 分类按钮图 (默认, 焦点)
+            back_image: "默认.png, 焦点.png" # 返回按钮图
+            cat_text: false                  # 图自带文字时不渲染分类文案
+            cg_frame: "默认.png, 焦点.png"   # CG 插画框 (九宫格)
+            cg_placeholder: "占位.png"       # 未解锁 CG 占位图
+        """
+        base = dict(self.engine.gallery_config)
+        base.update({k: str(v) for k, v in stmt.kwargs.items()})
+        self.engine.gallery_config = base
+        self._cfg = dict(base)
+        self._ensure_button()
+        from framework.engine import log
+        log.info(f"鉴赏配置已应用: {base}")
 
     # ------------------------------------------------------------------
     # 按钮: 挂接 / 解锁
@@ -299,13 +339,37 @@ class GalleryPlugin(Plugin):
             return pygame.transform.smoothscale(img, (tw, th))
         return img
 
+    def _theme_img(self, key):
+        """解析配置图 "默认, 焦点" -> (default_surface, focus_surface)。"""
+        v = self._cfg.get(key)
+        if not v:
+            return (None, None)
+        parts = [p.strip() for p in str(v).split(",") if p.strip()]
+        d = self._load_img(parts[0]) if parts else None
+        f = self._load_img(parts[1]) if len(parts) > 1 else None
+        return (d, f)
+
     # ------------------------------------------------------------------
     # 绘制
     # ------------------------------------------------------------------
     def _draw_gallery(self, surface):
         ui = self.engine.ui
         w, h = surface.get_size()
-        surface.fill((8, 8, 14))
+        # 确认框/错误弹窗打开时: 只画暗化底, 让引擎覆盖层正常显示
+        if (self.engine.display.confirm_active
+                or self.engine.display.error_active):
+            ui.dim_overlay(surface, 120)
+            return
+        # 界面背景图 (cover 铺满) / 纯色底
+        bg_img = self._load_img(self._cfg.get("bg"))
+        if bg_img:
+            iw, ih = bg_img.get_size()
+            scale = max(w / iw, h / ih)
+            tw, th = max(1, int(iw * scale)), max(1, int(ih * scale))
+            shown = pygame.transform.smoothscale(bg_img, (tw, th))
+            surface.blit(shown, shown.get_rect(center=(w // 2, h // 2)))
+        else:
+            surface.fill((8, 8, 14))
         # 标题
         ui.text(surface, self.engine.get_font(40),
                 str(self._cfg.get("title") or "鉴赏"),
@@ -314,24 +378,36 @@ class GalleryPlugin(Plugin):
         self._build_cat_layout(w)
         font_b = self.engine.get_font(22)
         mouse = self.engine.display.mouse_pos()
+        cat_d, cat_f = self._theme_img("cat_image")
+        back_d, back_f = self._theme_img("back_image")
         for i, rect in enumerate(self._cat_rects):
             name = self._cat_names[i]
             hovered = rect.collidepoint(mouse)
             if name == "back":
                 label = "← 返回"
+                img = back_f if hovered else back_d
                 bg = (70, 44, 44) if hovered else (42, 30, 30)
                 border = (220, 130, 130) if hovered else (120, 80, 80)
             else:
                 active = (name == self._category)
                 label = dict(CATEGORY_NAMES).get(name, name)
+                img = cat_f if (hovered or active) else cat_d
                 bg = ((233, 69, 96) if active else
                       (85, 62, 95) if hovered else (45, 45, 70))
                 border = ((255, 210, 130) if (active or hovered)
                           else (90, 90, 130))
-            ui.panel(surface, rect, bg_color=(*bg, 240),
-                     border_color=border, border_width=2, radius=8)
-            ui.text(surface, font_b, label, color=(255, 255, 255),
-                    center=rect.center)
+            if img is not None:
+                # 图优先: 九宫格拉伸 (图自带文字时可配 text_visible: false)
+                surface.blit(ui.nine_slice(img, rect), rect.topleft)
+                if str(self._cfg.get("cat_text", "true")).lower() not in (
+                        "false", "0", "no"):
+                    ui.text(surface, font_b, label,
+                            color=(255, 255, 255), center=rect.center)
+            else:
+                ui.panel(surface, rect, bg_color=(*bg, 240),
+                         border_color=border, border_width=2, radius=8)
+                ui.text(surface, font_b, label, color=(255, 255, 255),
+                        center=rect.center)
         # 内容
         if self._category == "cg":
             self._draw_cg(surface)
@@ -378,6 +454,8 @@ class GalleryPlugin(Plugin):
         y0 = 158
         font_s = self.engine.get_font(16)
         font_q = self.engine.get_font(44)
+        frame_d, _frame_f = self._theme_img("cg_frame")
+        placeholder = self._load_img(self._cfg.get("cg_placeholder"))
         for i, (sid, poses, total, thumb) in enumerate(entries):
             r, c = divmod(i, cols)
             rect = pygame.Rect(x0 + c * (cw + gap), y0 + r * (ch + 26),
@@ -386,21 +464,28 @@ class GalleryPlugin(Plugin):
             self._grid_items.append(("cg", (sid, poses, total)))
             scene = rt.scenes.get(sid, {})
             if thumb:
-                # 已解锁: 缩略图 + 形态进度
-                ui.panel(surface, rect, bg_color=(22, 22, 32),
-                         border_color=(90, 90, 120), border_width=1)
-                img = self._scaled(thumb, cw, ch)
+                # 已解锁: 插画框 + 缩略图 + 形态进度
+                if frame_d is not None:
+                    surface.blit(ui.nine_slice(frame_d, rect), rect.topleft)
+                else:
+                    ui.panel(surface, rect, bg_color=(22, 22, 32),
+                             border_color=(90, 90, 120), border_width=1)
+                img = self._scaled(thumb, cw - 6, ch - 6)
                 if img:
                     surface.blit(img, img.get_rect(center=rect.center))
                 label = (f"{scene.get('name', sid)} "
                          f"({len(poses)}/{total})")
                 color = (230, 230, 235)
             else:
-                # 未解锁: 灰色占位框
-                ui.panel(surface, rect, bg_color=(48, 48, 54),
-                         border_color=(90, 90, 98), border_width=1)
-                ui.text(surface, font_q, "？", color=(120, 120, 128),
-                        center=rect.center)
+                # 未解锁: 占位图 (或灰色框 + 问号)
+                if placeholder is not None:
+                    surface.blit(pygame.transform.smoothscale(
+                        placeholder, rect.size), rect.topleft)
+                else:
+                    ui.panel(surface, rect, bg_color=(48, 48, 54),
+                             border_color=(90, 90, 98), border_width=1)
+                    ui.text(surface, font_q, "？", color=(120, 120, 128),
+                            center=rect.center)
                 label = f"{scene.get('name', sid)} · 未解锁"
                 color = (140, 140, 150)
             ui.text(surface, font_s, label, color=color,
@@ -534,6 +619,11 @@ class GalleryPlugin(Plugin):
         """CG 大图查看: 全屏黑底 + 等比放大图; 点击轮播形态, 播完退出。"""
         ui = self.engine.ui
         w, h = surface.get_size()
+        # 确认框/错误弹窗打开时: 只画暗化底, 让引擎覆盖层正常显示
+        if (self.engine.display.confirm_active
+                or self.engine.display.error_active):
+            ui.dim_overlay(surface, 120)
+            return
         v = self._view
         scene = self.engine.runtime.scenes.get(v["scene"], {})
         pose = v["poses"][v["idx"]]

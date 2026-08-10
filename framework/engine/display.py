@@ -1451,6 +1451,19 @@ class Display:
             if nc is not None and "enabled" in nc:
                 cfg["enabled"] = nc["enabled"]
 
+    def sync_selection_cfg(self, mid: str) -> None:
+        """从命名菜单数据同步按钮 cfg (图/文本等) 到当前显示的 selection。"""
+        if not self.selection_active:
+            return
+        items = self.engine.runtime._menu_items(mid)
+        if items is None:
+            return
+        by_text = {t: c for t, _a, c in items}
+        for text, _a, cfg in self.selection_items:
+            nc = by_text.get(text)
+            if nc is not None:
+                cfg.update(nc)
+
     def hit_selection(self, pos) -> int:
         if not self.selection_active:
             return -1
@@ -1690,15 +1703,22 @@ class Display:
                  bg_color=st["bg"], border_color=st["border"],
                  border_width=1)
         font = self.engine.get_font(int(st["text_size"]))
-        for idx, (text, _a, _c) in enumerate(self.menu_bar_items):
+        for idx, (text, _a, cfg) in enumerate(self.menu_bar_items):
             rect = self.menu_bar_rects[idx]
             hovered = idx == self.menu_bar_hover
-            ui.panel(buf, rect,
-                     bg_color=st["button_bg_hover" if hovered
-                                 else "button_bg"],
-                     border_color=st["button_border_hover" if hovered
-                                     else "button_border"],
-                     border_width=2, radius=int(st["button_radius"]))
+            # 按钮图 (menu system 配置 image/image_focus/image_active 等):
+            # 有图时九宫格绘制, 无图回退纯色
+            img = self._ui_image(
+                cfg.get("image_focus") if hovered else cfg.get("image"))
+            if img is not None:
+                buf.blit(ui.nine_slice(img, rect), rect.topleft)
+            else:
+                ui.panel(buf, rect,
+                         bg_color=st["button_bg_hover" if hovered
+                                     else "button_bg"],
+                         border_color=st["button_border_hover" if hovered
+                                         else "button_border"],
+                         border_width=2, radius=int(st["button_radius"]))
             ui.text(buf, font, str(text),
                     color=st["text_color_hover" if hovered
                              else "text_color"],
