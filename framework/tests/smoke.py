@@ -464,6 +464,33 @@ def test_save_id_based():
     rt = engine.runtime
     demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
     try:
+        # dummy 音频驱动下 mixer.music 不可用, 用假对象验证状态机
+        import pygame.mixer as _mixer
+        class _FakeMusic:
+            def __init__(self):
+                self.busy = False
+                self.loaded = None
+                self.playing = False
+                self.vol = 1.0
+            def load(self, p):
+                self.loaded = p
+            def play(self, *a):
+                self.playing = True
+                self.busy = True
+            def stop(self):
+                self.playing = False
+                self.busy = False
+            def pause(self):
+                self.playing = False
+            def unpause(self):
+                self.playing = True
+            def set_volume(self, v):
+                self.vol = v
+            def get_busy(self):
+                return self.busy
+        _orig_music = _mixer.music
+        _mixer.music = _FakeMusic()
+
         rt.load_script(demo)
         rt.start()
         check("demo 先显示标题", d.title_active)
@@ -2256,6 +2283,274 @@ def test_key_nav():
         pygame.quit()
 
 
+def test_sound_system():
+    print("== 声音系统 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test45")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        # sound 块注册 (audio.gal)
+        check("声音注册",
+              "sfx_click" in rt.sounds and "sfx_boom" in rt.sounds
+              and "voice_demo" in rt.sounds,
+              str(list(rt.sounds)))
+        check("声音类型/文件",
+              rt.sounds["sfx_click"]["type"] == "sfx_ui"
+              and rt.sounds["voice_demo"]["type"] == "voice"
+              and rt.sounds["sfx_boom"]["file"].endswith("sfx_boom.wav"),
+              str(rt.sounds["sfx_click"]))
+        check("resolve_sound 绝对路径", rt.resolve_sound("voice_demo")
+              and rt.resolve_sound("voice_demo").endswith("voice_demo.wav"))
+
+        # 剧情音效 sfx 语句
+        rt._cmd_sfx(Statement(op="sfx", args=["sfx_boom"], line=0))
+        # 未注册警告不崩溃
+        rt._cmd_sfx(Statement(op="sfx", args=["nope"], line=0))
+
+        # say voice 播放 / 推进停止
+        engine.apply_config({"ui_click_sound": "sfx_click"})
+        rt.start()
+        engine.on_click(d.title_rects[0].center)   # 开始
+        # 推进到带语音的旁白
+        for _ in range(8):
+            if d.text_active and "语音" in d.full_text:
+                break
+            engine.on_click((320, 180))
+        check("语音旁白出现", "语音" in d.full_text)
+        check("语音开始播放", engine.audio.voice_playing())
+        # 点击推进 -> 语音停止
+        engine.on_click((320, 180))   # 完成打字
+        engine.on_click((320, 180))   # 推进
+        check("推进后语音停止", not engine.audio.voice_playing())
+        # 无 voice 的台词不播放语音
+        check("无语音台词", not engine.audio.voice_playing())
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_bgm_and_ui_sounds():
+    print("== BGM 控制与 UI 音效 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test46")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        check("BGM 注册", "bgm_piano41" in rt.sounds
+              and rt.sounds["bgm_piano41"]["type"] == "music",
+              str(rt.sounds.get("bgm_piano41")))
+        engine.apply_config({"music_fade": "1.0"})
+        check("music_fade 配置", engine.audio.fade_duration == 1.0)
+
+        # 播放 (淡入)
+        rt._cmd_music(Statement(op="music", args=["bgm_piano41", "fade",
+                                                  "1.0"], line=0))
+        check("BGM 播放", engine.audio.current_bgm is not None
+              and engine.audio.current_bgm.endswith("maou_bgm_piano41.mp3"),
+              str(engine.audio.current_bgm))
+        # 切换 (旧曲淡出 pending)
+        rt._cmd_music(Statement(op="music", args=["bgm_piano39", "fade",
+                                                  "1.0"], line=0))
+        check("BGM 切换淡出启动", engine.audio._fade is not None
+              and engine.audio._fade.get("pending") is not None)
+        for _ in range(180):
+            engine.audio.update(1 / 60)
+        check("切换完成新 BGM", engine.audio._fade is None
+              and engine.audio.current_bgm
+              and engine.audio.current_bgm.endswith("maou_bgm_piano39.mp3"),
+              str(engine.audio.current_bgm))
+
+        # 暂停 / 恢复 / 音量 / 停止
+        rt._cmd_pause(Statement(op="pause", args=["music", "fade", "0.5"],
+                                line=0))
+        check("暂停淡出", engine.audio._fade is not None
+              and engine.audio._fade["pending"][0] == "pause")
+        for _ in range(60):
+            engine.audio.update(1 / 60)
+        rt._cmd_resume(Statement(op="resume", args=["music", "fade", "0.5"],
+                                 line=0))
+        rt._cmd_volume(Statement(op="volume", args=["music", "0.3"], line=0))
+        check("音量调整", abs(engine.audio.bgm_volume - 0.3) < 0.01,
+              str(engine.audio.bgm_volume))
+        rt._cmd_stop(Statement(op="stop", args=["music"], line=0))
+        check("停止淡出启动", engine.audio._fade is not None
+              and engine.audio._fade["pending"][0] == "stop")
+
+        # menu 级 UI 音效
+        ui = rt._menu_ui("system")
+        check("menu UI 音效配置",
+              ui.get("ui_hover_sound") == "sfx_hover"
+              and ui.get("ui_click_sound") == "sfx_click", str(ui))
+
+        # choice UI 音效参数
+        engine._set_ui_sounds({})
+        rt._cmd_choice(Statement(op="choice", args=["ui_click", "sfx_click"],
+                                 kwargs={"options": [("A", "a")]}, line=0))
+        check("choice UI 音效", engine.ui_click_sound == "sfx_click")
+        d.choice_active = False
+
+        # hover 音效: 活动项变化触发
+        calls = []
+        orig = engine._play_ui_sound
+        engine._play_ui_sound = lambda kind="click": calls.append(kind)
+        engine.ui_hover_sound = "sfx_hover"
+        d.show_selection([("X", {"type": "close"})])
+        d.active_index = 0
+        engine.update(0.016)
+        check("hover 音效触发", "hover" in calls, str(calls))
+        engine._play_ui_sound = orig
+    finally:
+        import pygame.mixer as _mixer2
+        try:
+            _mixer2.music = _orig_music
+        except Exception:
+            pass
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_audio_api():
+    print("== 音频 API / 全局静音 / BGM 通知 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test47")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        import pygame.mixer as _mixer
+        class _FakeMusic:
+            def __init__(self):
+                self.busy = False
+                self.loaded = None
+                self.playing = False
+                self.vol = 1.0
+            def load(self, p):
+                self.loaded = p
+            def play(self, *a):
+                self.playing = True
+                self.busy = True
+            def stop(self):
+                self.playing = False
+                self.busy = False
+            def pause(self):
+                self.playing = False
+            def unpause(self):
+                self.playing = True
+            def set_volume(self, v):
+                self.vol = v
+            def get_busy(self):
+                return self.busy
+        _orig = _mixer.music
+        _mixer.music = _FakeMusic()
+
+        rt.load_script(demo)
+        # engine 音频 API (注册名)
+        check("engine.play_music", engine.play_music("bgm_piano41", fade=0.5)
+              and engine.audio.current_bgm
+              and engine.audio.current_bgm.endswith("maou_bgm_piano41.mp3"),
+              str(engine.audio.current_bgm))
+        for _ in range(60):
+            engine.audio.update(1 / 60)
+        # 插件: BGM 通知
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        check("bgm_notice 插件加载",
+              any("bgm_notice" in m for m in engine.plugins._modules),
+              str(list(engine.plugins._modules)))
+        engine.emit("music_play", name="demo_bgm", path="x.mp3", loop=True,
+                    fade=0.0)
+        check("BGM 通知弹出", d.notice is not None and "BGM" in d.notice
+              and d.notice_pos == "top-right", str(d.notice))
+        d.notice = None
+        engine.audio.stop_music(0.0)
+        engine.emit("music_stop")
+        check("BGM 停止通知", d.notice is not None, str(d.notice))
+        d.notice = None
+
+        # stop all / pause all (全局)
+        engine.play_music("bgm_piano39", fade=0.5)
+        rt._cmd_stop(Statement(op="stop", args=["all"], line=0))
+        check("stop all 淡出启动", engine.audio._fade is not None
+              and engine.audio._fade["pending"][0] == "stop")
+        for _ in range(90):
+            engine.audio.update(1 / 60)
+        engine.play_music("bgm_piano41", fade=0.5)
+        rt._cmd_pause(Statement(op="pause", args=["all"], line=0))
+        check("pause all 淡出启动", engine.audio._fade is not None
+              and engine.audio._fade["pending"][0] == "pause")
+
+        # 点击音效收敛: 文本推进不再播 click
+        calls = []
+        orig = engine._play_ui_sound
+        engine._play_ui_sound = lambda kind="click": calls.append(kind)
+        d.show_text("测试推进")
+        engine.on_click((320, 180))   # 完成打字
+        engine.on_click((320, 180))   # 推进
+        check("文本推进不播 click", "click" not in calls, str(calls))
+        # 确认框"否"不播
+        d.show_confirm("?", "是", "否")
+        engine.on_click(d.confirm_rects[1].center)
+        check("确认框否不播 click", "click" not in calls, str(calls))
+        d.confirm_active = False
+        engine._play_ui_sound = orig
+
+        # 存档 BGM 存注册名 (而非路径)
+        engine.play_music("bgm_piano41", loop=True, fade=0.0)
+        snap = rt.snapshot()
+        check("存档 BGM 为注册名", snap.get("music") == "bgm_piano41",
+              str(snap.get("music")))
+        check("audio 记录注册名", engine.audio.current_bgm_name == "bgm_piano41")
+        # music_play 事件含 name 载荷
+        seen = {}
+        engine.events.on("music_play",
+                         lambda name, **kw: seen.update(name=name))
+        engine.play_music("bgm_piano39", loop=True, fade=0.0)
+        for _ in range(90):
+            engine.audio.update(1 / 60)
+        check("事件载荷含名称", seen.get("name") == "bgm_piano39",
+              str(seen))
+        # 单次播放 (loop=0)
+        rt._cmd_music(Statement(op="music", args=["bgm_piano41", "loop", "0",
+                                                  "fade", "0"], line=0))
+        check("单次播放 loop=0", engine.audio.current_bgm_name == "bgm_piano41")
+        # fade 表达式 (变量)
+        rt._cmd_set(Statement(op="set", args=["f", "1.5"], line=0))
+        rt._cmd_stop(Statement(op="stop", args=["music", "fade", "$f"],
+                               line=0))
+        check("fade 变量解析", engine.audio._fade is not None
+              and abs(engine.audio._fade["duration"] - 1.5) < 0.01,
+              str(engine.audio._fade))
+        for _ in range(150):
+            engine.audio.update(1 / 60)
+        # ending 停音乐
+        engine.play_music("bgm_piano41", fade=0.0)
+        rt._cmd_ending(Statement(op="ending", line=0))
+        check("ending 淡出音乐", engine.audio._fade is not None
+              and engine.audio._fade["pending"][0] == "stop")
+        # 开始游戏停音乐 (不全局静音)
+        for _ in range(120):
+            engine.audio.update(1 / 60)
+        engine.play_music("bgm_piano41", fade=0.0)
+        engine._act_start(engine, {"label": "game_start"}, "test")
+        check("开始游戏淡出 BGM", engine.audio._fade is not None
+              and engine.audio._fade["pending"][0] == "stop")
+    finally:
+        try:
+            import pygame.mixer as _m
+            _m.music = _orig
+        except Exception:
+            pass
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -2490,6 +2785,24 @@ def main():
         test_key_nav()
     except Exception as exc:
         print(f"  [ERROR] 键盘导航测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_sound_system()
+    except Exception as exc:
+        print(f"  [ERROR] 声音系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_bgm_and_ui_sounds()
+    except Exception as exc:
+        print(f"  [ERROR] BGM/UI 音效测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_audio_api()
+    except Exception as exc:
+        print(f"  [ERROR] 音频 API 测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

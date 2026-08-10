@@ -100,6 +100,12 @@ class GameEngine:
         self.key_down = [pygame.K_DOWN]
         self.key_confirm = [pygame.K_RETURN, pygame.K_SPACE]
 
+        # UI 交互音效 (window 配置 ui_click_sound, 按钮确认时播放)
+        self.ui_click_sound = None
+        self.ui_hover_sound = None      # 活动选项变化时播放 (菜单/choice 配置)
+        self._default_ui_click = None   # window 默认点击音 (临时覆盖后恢复用)
+        self._last_active_index = -1
+
         # 错误处理: 记录日志 + 游戏内弹窗
         from framework.engine.error import ErrorHandler
         self.error_handler = ErrorHandler(self)
@@ -313,6 +319,8 @@ class GameEngine:
                 (self.menu_texts["title"], {"type": "title"}, {}),
                 (self.menu_texts["quit"], {"type": "quit"}, {}),
             ]
+        else:
+            self._set_ui_sounds(self.runtime._menu_ui("system"))
         self.display.show_system_menu(items)
         self.emit("menu_open")
 
@@ -337,6 +345,7 @@ class GameEngine:
         d.clear_sprites()
         d.clear_bg()          # 清掉旧场景, 由 start 块重新布置
         d.clear_fade()        # 清除黑幕/结束画面/未完成过渡
+        self.audio.stop_voice()
         d.close_selection()
         d.slot_menu_active = False
         d.confirm_active = False
@@ -388,6 +397,8 @@ class GameEngine:
             d.confirm_active = False
             cb = self._confirm_callback
             self._confirm_callback = None
+            if idx == 0:
+                self._play_ui_sound()
             self.emit("confirm_choice", index=idx)
             if idx == 0 and cb is not None:
                 cb()      # 是 -> 执行确认后的动作
@@ -397,6 +408,8 @@ class GameEngine:
             hit = d.hit_slot_menu(pos)
             if hit is None:
                 return
+            if hit != "back":
+                self._play_ui_sound()
             if hit == "back":
                 d.slot_menu_active = False   # 返回上一层 (菜单/标题)
                 return
@@ -426,6 +439,7 @@ class GameEngine:
                 return
             text, action, _item_cfg = d.selection_items[idx]
             d.active_index = idx
+            self._play_ui_sound()
             source = "title" if d.title_active else "menu"
             self.emit("selection_choice", index=idx, text=text,
                       action=action, source=source)
@@ -437,6 +451,7 @@ class GameEngine:
             if idx < 0:
                 return
             d.active_index = idx
+            self._play_ui_sound()
             text, label = d.choices[idx]
             self.emit("choice_made", index=idx, label=label, text=text)
             d.choice_active = False
@@ -448,6 +463,7 @@ class GameEngine:
             if not d.text_done():
                 d.finish_text()
                 return
+            self.audio.stop_voice()   # 先停语音 (避免与 UI 音效抢语音通道)
             self.emit("text_advance", text=d.full_text, speaker=d.speaker)
             d.clear_text()
             self.runtime.release("text")
@@ -460,12 +476,28 @@ class GameEngine:
     # 帧更新与绘制
     # ==================================================================
     def update(self, dt: float) -> None:
+        # BGM 淡入淡出持续推进 (暂停菜单时音乐渐变不中断)
+        self.audio.update(dt)
         if self.paused:
             # 暂停期间仍同步鼠标活动项 (ESC 菜单键盘/鼠标一致)
             self.display.sync_mouse_active()
+            self._sync_hover_sound()
             return   # 系统菜单打开时暂停游戏逻辑 (菜单绘制仍进行)
         self.display.update(dt)
+        self._sync_hover_sound()
         self.runtime.tick(dt)
+
+    def _sync_hover_sound(self) -> None:
+        """活动选项变化时播放 UI 悬停音效。"""
+        d = self.display
+        if d.selection_active or d.choice_active:
+            ai = d.active_index
+            if ai != self._last_active_index:
+                self._last_active_index = ai
+                if ai >= 0:
+                    self._play_ui_sound("hover")
+        else:
+            self._last_active_index = -1
 
     def draw(self) -> None:
         self.display.draw(self.screen)
@@ -599,6 +631,15 @@ class GameEngine:
                 parsed = self._parse_keys(cfg[cfg_key])
                 if parsed:
                     setattr(self, attr, parsed)
+        if "ui_click_sound" in cfg:
+            self._default_ui_click = str(cfg["ui_click_sound"])
+            self.ui_click_sound = self._default_ui_click
+        if "music_fade" in cfg:
+            try:
+                self.audio.fade_duration = max(
+                    0.0, float(cfg["music_fade"]))
+            except (TypeError, ValueError):
+                pass
         # ESC 菜单文案
         for key in self.menu_texts:
             if f"menu_{key}" in cfg:
@@ -650,8 +691,9 @@ class GameEngine:
             return False
 
     def _act_start(self, engine, params, source):
-        """启动游戏: 关闭所有菜单, 跳转到指定标签。"""
+        """启动游戏: 关闭所有菜单, 停止标题残留 BGM (淡出), 跳转。"""
         label = params.get("label") or params.get("jump") or "start"
+        self.audio.stop_music()   # 淡出停止 (不全局静音)
         d = self.display
         d.close_selection()
         d.slot_menu_active = False
@@ -727,6 +769,80 @@ class GameEngine:
         except Exception as exc:
             log.error(f"错误处理失败: {exc}")
 
+    # ==================================================================
+    # 音频 API (供插件/游戏代码调用; 名称可为注册名或路径)
+    # ==================================================================
+    def play_music(self, name_or_path: str, loop: bool = True,
+                   fade: float = None) -> bool:
+        """播放/切换 BGM (注册名或路径)。fade None=默认时长。
+
+        loop=True 循环 (播完自动重播); False 单次。注册名会记入存档/事件。
+        """
+        is_reg = name_or_path in self.runtime.sounds
+        path = self.runtime.resolve_sound(name_or_path)
+        if path is None:
+            path = name_or_path
+        return self.audio.play_music(
+            path, loop, fade, name=(name_or_path if is_reg else None))
+
+    def stop_music(self, fade: float = None) -> None:
+        self.audio.stop_music(fade)
+
+    def pause_music(self, fade: float = None) -> None:
+        self.audio.pause_music(fade)
+
+    def resume_music(self, fade: float = None) -> None:
+        self.audio.resume_music(fade)
+
+    def play_sfx(self, name: str) -> bool:
+        """播放剧情音效 (注册名)。"""
+        path = self.runtime.resolve_sound(name)
+        if path is None:
+            return False
+        return self.audio.play_sound(path)
+
+    def play_voice(self, name: str) -> bool:
+        path = self.runtime.resolve_sound(name)
+        if path is None:
+            return False
+        return self.audio.play_voice(path)
+
+    def stop_voice(self) -> None:
+        self.audio.stop_voice()
+
+    def set_music_volume(self, vol: float) -> None:
+        self.audio.set_bgm_volume(vol)
+
+    def set_sfx_volume(self, vol: float) -> None:
+        self.audio.set_sfx_volume(vol)
+
+    def stop_all_sounds(self, fade: float = None) -> None:
+        """全局停止所有声音 (BGM 淡出 + 音效/语音)。"""
+        self.audio.stop_all(fade)
+
+    def pause_all_sounds(self, fade: float = None) -> None:
+        """全局暂停所有声音。"""
+        self.audio.pause_all(fade)
+
+    def _play_ui_sound(self, kind: str = "click") -> None:
+        """播放 UI 交互音效 (click=按下 / hover=活动项变化)。"""
+        name = self.ui_hover_sound if kind == "hover" else self.ui_click_sound
+        if not name:
+            return
+        path = self.runtime.resolve_sound(name)
+        if path:
+            self.audio.play_sound(path)
+
+    def _set_ui_sounds(self, ui_cfg: dict = None) -> None:
+        """应用菜单/选择支的 UI 音效配置 (临时覆盖 window 默认)。
+
+        ui_cfg: {"ui_click_sound": 名, "ui_hover_sound": 名}; 空则恢复默认。
+        """
+        ui_cfg = ui_cfg or {}
+        self.ui_click_sound = ui_cfg.get(
+            "ui_click_sound") or self._default_ui_click
+        self.ui_hover_sound = ui_cfg.get("ui_hover_sound")
+
     def copy_to_clipboard(self, text: str) -> bool:
         """把文本复制到系统剪贴板 (pygame.scrap)。"""
         if not text:
@@ -758,10 +874,10 @@ class GameEngine:
         self.runtime.restore(data)
         # 恢复视觉 (背景/立绘/正在显示的文本或选择支)
         self.display.restore_state(data)
-        # 恢复音乐
+        # 恢复音乐 (注册名或路径均可)
         music = data.get("music")
         if music:
-            self.audio.play_music(music)
+            self.play_music(music)
         else:
             self.audio.stop_music()
         self.display.show_notice(f"已读档 (槽位 {slot})")

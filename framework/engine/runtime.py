@@ -45,6 +45,7 @@ class Runtime:
         self.styles = {}              # 样式表: name -> {属性: 值}
         self.current_style_name = None
         self.menus = {}               # 菜单表: id -> [{name, text, action, cfg}]
+        self.sounds = {}              # 声音表: name -> {type, file, volume}
 
         # 内置指令表
         self._builtins = {
@@ -95,6 +96,11 @@ class Runtime:
             "ui": self._cmd_ui,
             "menu": self._cmd_menu,
             "typing": self._cmd_typing,
+            "sound": self._cmd_sound,
+            "sfx": self._cmd_sfx,
+            "pause": self._cmd_pause,
+            "resume": self._cmd_resume,
+            "volume": self._cmd_volume,
         }
 
     # ==================================================================
@@ -122,7 +128,7 @@ class Runtime:
         from framework.engine.styles import BUILTIN_STYLES
         self.styles = dict(BUILTIN_STYLES)
         self.styles.update(self._scan_styles(script))
-        # selection 全局样式 / UI 主题素材 / 菜单定义 (静态应用)
+        # selection 全局样式 / UI 主题素材 / 菜单 / 声音 (静态应用)
         self.engine.display.selection_style_overrides.clear()
         for stmt in self._scan_statements(script):
             if stmt.op == "selection_style":
@@ -131,6 +137,8 @@ class Runtime:
                 self._cmd_ui(stmt)
             elif stmt.op == "menu":
                 self._cmd_menu(stmt)
+            elif stmt.op == "sound":
+                self._cmd_sound(stmt)
         self.engine.emit("script_load", path=path, name=script.name)
         log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
                  f"对象 {len(self.script_objects)} 个, "
@@ -848,19 +856,36 @@ class Runtime:
 
     # -- 文本 -----------------------------------------------------------
     def _cmd_text(self, stmt):
-        text = self._interp(" ".join(stmt.args)) if stmt.args else ""
+        """nar/text 旁白: [voice 语音名]"""
+        args = list(stmt.args)
+        voice = None
+        if "voice" in args:
+            vi = args.index("voice")
+            if vi + 1 < len(args):
+                voice = args[vi + 1]
+            del args[vi:vi + 2]
+        text = self._interp(" ".join(args)) if args else ""
         if not text:
             log.warning(f"第{stmt.line}行: text 内容为空")
             return None
+        self._play_voice(voice)
         self.engine.display.show_text(text)
         self.blocked = "text"
         return BLOCK
 
     def _cmd_say(self, stmt):
+        """say <角色> "台词" [voice 语音名]"""
         if not stmt.args:
             return None
-        speaker = self._interp(stmt.args[0])
-        text = self._interp(" ".join(stmt.args[1:])) if len(stmt.args) > 1 else ""
+        args = list(stmt.args)
+        voice = None
+        if "voice" in args:
+            vi = args.index("voice")
+            if vi + 1 < len(args):
+                voice = args[vi + 1]
+            del args[vi:vi + 2]
+        speaker = self._interp(args[0])
+        text = self._interp(" ".join(args[1:])) if len(args) > 1 else ""
         if not text:
             log.warning(f"第{stmt.line}行: say 内容为空")
             return None
@@ -870,9 +895,21 @@ class Runtime:
             display_speaker = self.characters[speaker]["name"]
         elif speaker and speaker != "旁白":
             display_speaker = speaker
+        self._play_voice(voice)
         self.engine.display.show_text(text, display_speaker)
         self.blocked = "text"
         return BLOCK
+
+    def _play_voice(self, voice_name) -> None:
+        """播放/停止语音 (voice 参数; 无语音时停止上一个)。"""
+        if not voice_name:
+            self.engine.audio.stop_voice()
+            return
+        path = self.resolve_sound(voice_name)
+        if path:
+            self.engine.audio.play_voice(path)
+        else:
+            log.warning(f"语音 {voice_name!r} 未注册")
 
     # -- 选项 -----------------------------------------------------------
     # -- 样式 -----------------------------------------------------------
@@ -999,6 +1036,10 @@ class Runtime:
         if not stmt.args:
             return None
         mid = stmt.args[0]
+        ui_cfg = {}
+        for key in ("ui_click_sound", "ui_hover_sound"):
+            if key in stmt.kwargs:
+                ui_cfg[key] = str(stmt.kwargs[key])
         items = []
         for sub in stmt.block:
             props = dict(sub.kwargs)
@@ -1029,7 +1070,10 @@ class Runtime:
                         cfg[key] = str(val)
             items.append({"name": sub.op, "text": str(text),
                           "action": action, "cfg": cfg})
-        self.menus[mid] = items
+        if ui_cfg:
+            self.menus[mid] = {"ui": ui_cfg, "items": items}
+        else:
+            self.menus[mid] = items
         self.engine.emit("menu_register", name=mid, items=len(items))
         log.info(f"菜单已注册: {mid} ({len(items)} 个按键)")
         return None
@@ -1039,6 +1083,8 @@ class Runtime:
         menu = self.menus.get(mid)
         if not menu:
             return None
+        if isinstance(menu, dict):
+            menu = menu["items"]
         out = []
         for it in menu:
             action = it["action"]
@@ -1057,6 +1103,133 @@ class Runtime:
             return None
         self.engine.display.set_text_mode(self._interp(stmt.args[0]))
         return None
+
+    # -- 声音系统 -------------------------------------------------------
+    def resolve_sound(self, name: str) -> str:
+        """把声音注册名解析为绝对路径 (未注册时返回 None)。"""
+        s = self.sounds.get(name)
+        if s and s.get("file"):
+            return os.path.join(self.script_dir, str(s["file"]))
+        return None
+
+    def _cmd_sound(self, stmt):
+        """注册声音: sound <名称> + 属性块。
+
+        sound sfx_click
+            type: sfx_ui        # music / sfx_ui / sfx_story / voice
+            file: "sfx/click.wav"
+            volume: 0.8         # 可选
+        """
+        if not stmt.args:
+            return None
+        name = stmt.args[0]
+        props = dict(stmt.kwargs)
+        stype = props.pop("type", "sfx_story")
+        f = props.pop("file", "")
+        self.sounds[name] = {"type": str(stype), "file": str(f), **props}
+        self.engine.emit("sound_register", name=name, type=stype)
+        log.info(f"声音已注册: {name} ({stype})")
+        return None
+
+    def _cmd_sfx(self, stmt):
+        """播放剧情音效: sfx <声音名>"""
+        if not stmt.args:
+            return None
+        name = self._interp(stmt.args[0])
+        path = self.resolve_sound(name)
+        if path:
+            self.engine.audio.play_sound(path)
+        else:
+            log.warning(f"第{stmt.line}行: 音效 {name!r} 未注册")
+        return None
+
+    def _cmd_music(self, stmt):
+        """播放音乐: music <注册名或路径> [loop 1/0] [fade 秒|表达式]
+
+        loop 1=循环 (播完自动重播), 0=单次; fade 0 无淡入淡出;
+        切换曲目自动旧曲淡出新曲淡入。fade/loop 值支持变量/表达式。
+        """
+        if not stmt.args:
+            return None
+        args = list(stmt.args)
+        fade = None
+        if "fade" in args:
+            fi = args.index("fade")
+            if fi + 1 < len(args):
+                try:
+                    fade = float(self.evaluate(args[fi + 1]))
+                except (ValueError, RuntimeError_):
+                    fade = None
+            del args[fi:fi + 2]
+        target = self._interp(args[0])
+        loop = True
+        if "loop" in args:
+            idx = args.index("loop")
+            if idx + 1 < len(args):
+                try:
+                    loop = bool(self.evaluate(args[idx + 1]))
+                except RuntimeError_:
+                    loop = True
+        # 注册名优先, 否则按路径
+        is_reg = target in self.sounds
+        path = self.resolve_sound(target)
+        if path is None:
+            path = target
+        self.engine.audio.play_music(path, loop, fade,
+                                     name=(target if is_reg else None))
+        return None
+
+    def _cmd_pause(self, stmt):
+        """暂停: pause music [fade 秒] / pause all (全局暂停, 淡出配置沿用)"""
+        if not stmt.args:
+            return None
+        target = stmt.args[0]
+        fade = None
+        if len(stmt.args) > 2 and stmt.args[1] == "fade":
+            try:
+                fade = float(self.evaluate(stmt.args[2]))
+            except (ValueError, RuntimeError_):
+                fade = None
+        if target in ("music", "bgm"):
+            self.engine.audio.pause_music(fade)
+        elif target in ("all", "everything"):
+            self.engine.audio.pause_all(fade)
+        return None
+
+    def _cmd_resume(self, stmt):
+        """恢复音乐: resume music [fade 秒]"""
+        if not stmt.args or stmt.args[0] not in ("music", "bgm"):
+            return None
+        fade = None
+        if len(stmt.args) > 2 and stmt.args[1] == "fade":
+            try:
+                fade = float(stmt.args[2])
+            except ValueError:
+                fade = None
+        self.engine.audio.resume_music(fade)
+        return None
+
+    def _cmd_volume(self, stmt):
+        """临时音量调整: volume music <0-1> / volume sfx <0-1>"""
+        if len(stmt.args) < 2:
+            return None
+        target = stmt.args[0]
+        try:
+            vol = max(0.0, min(1.0, float(self._interp(stmt.args[1]))))
+        except ValueError:
+            return None
+        if target in ("music", "bgm"):
+            self.engine.audio.set_bgm_volume(vol)
+        elif target in ("sfx", "sound"):
+            self.engine.audio.set_sfx_volume(vol)
+        return None
+
+    def _menu_ui(self, mid: str) -> dict:
+        """取命名菜单的 UI 音效配置 (无则空)。"""
+        menu = self.menus.get(mid)
+        if isinstance(menu, dict) and menu.get("ui"):
+            return menu["ui"]
+        return {}
 
     def _cmd_title(self, stmt):
         """显示标题画面 (阻塞直到玩家选择)。
@@ -1091,6 +1264,7 @@ class Runtime:
         items = None
         menu_id = props.get("menu")
         if menu_id:
+            self.engine._set_ui_sounds(self._menu_ui(str(menu_id)))
             items = self._menu_items(str(menu_id))
             if items is None:
                 log.warning(f"第{stmt.line}行: 菜单 {menu_id!r} 未定义")
@@ -1120,6 +1294,18 @@ class Runtime:
         return BLOCK
 
     def _cmd_choice(self, stmt):
+        # choice [ui_click 名] [ui_hover 名]
+        ui_cfg = {}
+        args = list(stmt.args)
+        if "ui_click" in args:
+            ai = args.index("ui_click")
+            if ai + 1 < len(args):
+                ui_cfg["ui_click_sound"] = args[ai + 1]
+        if "ui_hover" in args:
+            ai = args.index("ui_hover")
+            if ai + 1 < len(args):
+                ui_cfg["ui_hover_sound"] = args[ai + 1]
+        self.engine._set_ui_sounds(ui_cfg)
         options = stmt.kwargs.get("options", [])
         # 选项文本支持变量插值
         rendered = [(self._interp(t), lbl) for t, lbl in options]
@@ -1131,6 +1317,8 @@ class Runtime:
         """选项被点击后由引擎调用。"""
         self.release("choice")
         self.engine.display.clear_text()
+        # 选择支结束, 恢复默认 UI 音效
+        self.engine._set_ui_sounds({})
         if label:
             # 跳转失败抛 RuntimeError_, 由引擎按 error 处理 (弹窗)
             self._jump_to(label)
@@ -1178,10 +1366,10 @@ class Runtime:
         translated = re.sub(
             r"\$([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)",
             r"__vars__['\1']", expr)
-        # 安全检查: 禁止函数调用与魔法属性
+        # 安全检查: 禁止函数调用与魔法属性 (__vars__ 为内部合法名)
         if re.search(r"[A-Za-z_\u4e00-\u9fff]\s*\(", translated):
             raise RuntimeError_(f"表达式不允许函数调用: {expr!r}")
-        if re.search(r"\b__\w+__\b", translated):
+        if re.search(r"\b__(?!vars__)\w+__\b", translated):
             raise RuntimeError_(f"表达式包含非法符号: {expr!r}")
         ns = dict(self.vars)
         ns["__vars__"] = self.vars
@@ -1225,25 +1413,23 @@ class Runtime:
         self.blocked = "sleep"
         return BLOCK
 
-    def _cmd_music(self, stmt):
-        if not stmt.args:
-            return None
-        path = self._interp(stmt.args[0])
-        loop = True
-        if "loop" in stmt.args:
-            loop = self._interp(stmt.args[stmt.args.index("loop") + 1]) != "0" \
-                if stmt.args.index("loop") + 1 < len(stmt.args) else True
-        self.engine.audio.play_music(path, loop)
-        return None
-
-    def _cmd_sound(self, stmt):
-        if not stmt.args:
-            return None
-        self.engine.audio.play_sound(self._interp(stmt.args[0]))
-        return None
-
     def _cmd_stop(self, stmt):
-        self.engine.audio.stop_music()
+        """停止: stop music [fade 秒] / stop all (全局停止, 淡出配置沿用)"""
+        if not stmt.args:
+            return None
+        target = stmt.args[0]
+        fade = None
+        if "fade" in stmt.args:
+            fi = stmt.args.index("fade")
+            if fi + 1 < len(stmt.args):
+                try:
+                    fade = float(self.evaluate(stmt.args[fi + 1]))
+                except (ValueError, RuntimeError_):
+                    fade = None
+        if target in ("all", "everything"):
+            self.engine.audio.stop_all(fade)
+        elif target in ("music", "bgm"):
+            self.engine.audio.stop_music(fade)
         return None
 
     # -- 转场 -----------------------------------------------------------
@@ -1278,7 +1464,9 @@ class Runtime:
 
     # -- 结束 -----------------------------------------------------------
     def _cmd_ending(self, stmt):
+        """结束游戏: 显示结束画面, 同时淡出停止 BGM。"""
         self.engine.display.show_ending()
+        self.engine.audio.stop_music()   # 淡出 (沿用 music_fade)
         self.ended = True
         self.running = False
         self.engine.emit("script_end")
@@ -1337,7 +1525,8 @@ class Runtime:
             "bg_pose": d.bg_pose,
             "bg": d.bg_path if d.bg_id is None and d.bg_scene is None else None,
             "sprites": d.sprite_state(),
-            "music": self.engine.audio.current_bgm,
+            "music": (self.engine.audio.current_bgm_name
+                      or self.engine.audio.current_bgm),
             "style": self.current_style_name,
         }
 

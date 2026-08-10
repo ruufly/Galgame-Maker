@@ -273,7 +273,7 @@ class Parser:
         # ---- 对象创建: ... / plugins / ui + 属性块
         if op in ("weight", "sprite", "object", "char", "character",
                   "scene", "scenery", "window", "config", "title", "style",
-                  "selection_style", "plugins", "ui"):
+                  "selection_style", "plugins", "ui", "sound"):
             return self._parse_create(i, indent, lineno, content, op, rest)
 
         # ---- set: 保留字符串引号, 表达式部分重构 ----------------
@@ -333,10 +333,21 @@ class Parser:
         i += 1
         n = len(self.lines)
         items = []
+        kwargs = {}
         while i < n:
             ind, ln, cnt = self.lines[i]
             if ind <= indent:
                 break
+            # 菜单级属性行 (含冒号): ui_click_sound 等
+            if ":" in cnt and not cnt.strip().endswith(":"):
+                kv = cnt.split(":", 1)
+                val = kv[1]
+                comment = val.find(" #")
+                if comment != -1:
+                    val = val[:comment]
+                kwargs[kv[0].strip()] = _unquote(val)
+                i += 1
+                continue
             name = cnt.strip()
             if name.endswith(":"):
                 name = name[:-1].strip()
@@ -359,7 +370,8 @@ class Parser:
             items.append(Statement(op=name, args=[], kwargs=props,
                                    line=ln, raw=cnt))
         return Statement(op="menu", args=[ident] if ident else [],
-                         block=items, line=lineno, raw=content), i
+                         kwargs=kwargs, block=items, line=lineno,
+                         raw=content), i
     def _parse_if(self, i, indent, lineno, content):
         # 条件表达式: "if X:" 中的 X
         cond_tokens = _tokenize(content)[1:-1]

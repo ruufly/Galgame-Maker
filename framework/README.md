@@ -294,6 +294,28 @@ start:
     # 插件 API: register_text_mode(name, {"reset": fn(display),
     #                                     "update": fn(display, dt)})
 
+    # 声音系统 (音乐/音效/语音 分别管理, 建议独立 audio.gal 文件 import)
+    sound sfx_click                  # 注册声音: sound <名称> + 属性块
+        type: sfx_ui                #   music / sfx_ui / sfx_story / voice
+        file: "materials/audio/sfx_click.wav"
+        volume: 0.6
+    music bgm_main                   # 播放音乐 (注册名或直接路径)
+    music bgm_piano39 fade 1.0       # 切换/淡入 (fade 秒, 切换自动旧曲淡出新曲淡入)
+    music bgm_piano39 loop 0         # loop 1=循环(播完自动重播) / 0=单次
+    pause music fade 0.8             # 暂停 (淡出后暂停)
+    resume music fade 0.8            # 恢复 (淡入)
+    volume music 0.3                 # 临时音量调整 (music/sfx)
+    stop music                       # 停止 (淡出; fade 值支持变量/表达式)
+    stop all                         # 全局停止所有声音 (BGM 淡出, 沿用 music_fade)
+    pause all                        # 全局暂停 (BGM 淡出 + 停音效/语音)
+    sfx sfx_boom                     # 播放剧情音效
+    say producer "台词" voice voice_demo   # 台词语音; say/nar 结束语音立即停止
+    # 存档保存 BGM 注册名 (非路径); ending/开始游戏自动淡出停止 BGM
+    # UI 音效: window ui_click_sound 全局默认; menu 块/choice 语句可单独配置:
+    #   menu 块级属性: ui_hover_sound / ui_click_sound
+    #   choice ui_click sfx_a ui_hover sfx_b
+    #   活动项变化播 hover 音, 按下确认播 click 音
+
     # 音频 / 转场 / 存档 / 结束
     music "bgm.mp3"             # 循环播放
     sound "click.wav"           # 播放一次
@@ -447,6 +469,21 @@ class MyAction(Plugin):
 
 引擎 API: `engine.handle_error(exc, level="error")` /
 `engine.copy_to_clipboard(text)`。
+
+### 音频 API (插件/代码调用, 名称可为注册名或路径)
+
+```python
+engine.play_music("bgm_piano41", loop=True, fade=None)   # 播放/切换
+engine.stop_music(fade=None) / engine.pause_music(fade)
+engine.resume_music(fade) / engine.play_sfx(name)
+engine.play_voice(name) / engine.stop_voice()
+engine.set_music_volume(v) / engine.set_sfx_volume(v)
+engine.stop_all_sounds(fade) / engine.pause_all_sounds(fade)
+```
+
+BGM 事件: `music_play`/`music_pause`/`music_resume`/`music_stop`
+(插件 `bgm_notice.py` 监听它们弹出通知; 曲名取文件名)。UI 音效只在
+明确的确认操作时播放 (菜单/选择支/确认框确认), 文本推进与取消返回不响。
 
 ### 背景过渡效果
 
