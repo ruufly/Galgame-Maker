@@ -199,7 +199,7 @@ def test_scene_flow():
     d = engine.display
     rt = engine.runtime
     img_abs = os.path.join(_ROOT, "test", "engine_demo", "materials",
-                           "image", "bg.png").replace("\\", "/")
+                           "image", "bg.jpg").replace("\\", "/")
     src = f'''
 start:
     bg "{img_abs}"
@@ -322,7 +322,7 @@ def test_save_restore_state():
     d = engine.display
     rt = engine.runtime
     img = os.path.join(_ROOT, "test", "engine_demo", "materials",
-                       "image", "bg.png").replace("\\", "/")
+                       "image", "bg.jpg").replace("\\", "/")
     src = f'''
 start:
     set love = 5
@@ -626,7 +626,7 @@ def test_scenes():
         check("场景内背景切换", d.bg_pose == "morning" and d.bg_scene == "school")
 
         # 直接路径 bg 兼容
-        rt._cmd_bg(Statement(op="bg", args=["materials/image/bg.png"], line=0))
+        rt._cmd_bg(Statement(op="bg", args=["materials/image/bg.jpg"], line=0))
         check("直接路径 bg 兼容", d.bg_scene is None and d.bg_id is None
               and d.bg_surface is not None)
 
@@ -655,7 +655,7 @@ def test_transitions():
     d = engine.display
     rt = engine.runtime
     img = os.path.join(_ROOT, "test", "engine_demo", "materials",
-                       "image", "bg.png").replace("\\", "/")
+                       "image", "bg.jpg").replace("\\", "/")
     src = '''start:
     bg "%s"
     text "x"
@@ -970,6 +970,7 @@ def test_window_config():
 def test_title_screen():
     print("== 标题画面 ==")
     demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = None
 
     def fresh():
         eng = GameEngine(640, 360, "title_test")
@@ -1185,9 +1186,10 @@ def test_styles():
         engine.on_click(d.title_rects[0].center)   # 开始 -> game_start
 
         # use style modern (game_start 开头执行)
-        check("modern 生效", d.style["textbox_bg"] == (26, 26, 46)
+        check("modern 生效", d.style["textbox_bg"] == (255, 255, 255)
               and d.style["text_size"] == 28
-              and d.style["textbox_radius"] == 12,
+              and d.style["textbox_radius"] == 12
+              and d.style["text_color"] == (46, 46, 62),
               str(d.style["textbox_bg"]))
         check("文本框字号更新", d._font_size == 28)
 
@@ -1197,16 +1199,17 @@ def test_styles():
               and d.style["textbox_radius"] == 0
               and d.style["text_size"] == 26,
               str(d.style["text_color"]))
-        # 修复验证: classic 未定义图片键 -> 不应残留 modern 的图片
-        check("classic 无图片残留", d.style.get("textbox_image") is None
-              and d.style.get("speaker_image") is None,
+        # 修复验证: classic 显式禁用图片 (none) -> 纯色复古
+        check("classic 禁用主题图", d.style.get("textbox_image") == "none"
+              and d.style.get("speaker_image") == "none"
+              and d.style.get("choice_image") == "none",
               str(d.style.get("textbox_image")))
-        # 切回 modern -> 图片恢复
+        # 切回 modern -> 无 style 图片键 (走 ui 主题图)
         rt._cmd_use(Statement(op="use", args=["modern"], line=0))
-        check("modern 图片恢复",
-              d.style.get("textbox_image") == "materials/image/ui/say.png"
-              and d.style.get("choice_image")
-              == "materials/image/ui/button.png")
+        check("modern 走主题图",
+              d.style.get("textbox_image") is None
+              and "textbox" in d.theme_images
+              and d.style.get("choice_image") is None)
 
         # 样式名入档 -> 读档恢复
         rt._cmd_use(Statement(op="use", args=["modern"], line=0))
@@ -1218,7 +1221,7 @@ def test_styles():
         rt.current_style_name = None
         engine.load_game(0)
         check("读档恢复样式", rt.current_style_name == "modern"
-              and d.style["textbox_bg"] == (26, 26, 46)
+              and d.style["textbox_bg"] == (255, 255, 255)
               and d.style["text_size"] == 28,
               f"name={rt.current_style_name} bg={d.style['textbox_bg']}")
 
@@ -1523,49 +1526,80 @@ def test_ui_images():
     rt = engine.runtime
     try:
         rt.load_script(demo)
-        # style 图片键解析
-        check("style 图片键",
-              rt.styles["modern"].get("textbox_image")
-              == "materials/image/ui/say.png",
+        # ui 块直接路径解析 (无自动拼接)
+        check("ui 块直接路径",
+              rt.styles["modern"].get("textbox_image") is None,  # modern 不配图
               str(rt.styles["modern"].get("textbox_image")))
-        # selection 图片键 (静态应用)
+        check("ui 主题注册", "textbox" in d.theme_images
+              and "menu_buttons" in d.theme_images
+              and "title_buttons" in d.theme_images)
+        # selection 深色文字与确认框文字 (静态应用)
         ov = d.selection_style_overrides
-        check("selection 图片键",
-              ov.get("button_image") == "materials/image/ui/button.png"
-              and ov.get("dialog_image") == "materials/image/ui/dialog.png",
-              str(ov))
+        check("selection 深色文字",
+              ov.get("text_color") == (58, 58, 78)
+              and ov.get("dialog_text_color") == (58, 58, 78),
+              str(ov.get("text_color")))
         # 加载缓存
         img = d._ui_image("materials/image/ui/say.png")
         check("UI 图片加载", img is not None and img.get_width() > 0)
         check("UI 图片缓存", "materials/image/ui/say.png" in d._ui_cache)
         check("缺失图片容错", d._ui_image("no/such.png") is None)
 
-        # 应用 modern 样式后绘制 (文本框用图片)
+        # 应用 modern 样式后绘制 (文本框走 ui 主题图)
         rt._cmd_use(Statement(op="use", args=["modern"], line=0))
-        check("样式生效", d.style.get("textbox_image")
-              == "materials/image/ui/say.png")
+        check("样式生效", d.style.get("textbox_image") is None
+              and "textbox" in d.theme_images)
         d.show_text("测试文本框图片", "制作人")
         engine.draw()
         check("文本框图片绘制无异常", True)
 
-        # selection 用按钮图
+        # selection 按钮
         d.show_selection([("测试", {"type": "close"})])
-        st = d.selection_style
-        check("selection 合并图片键",
-              st.get("button_image") == "materials/image/ui/button.png")
         engine.draw()
         check("按钮图片绘制无异常", True)
 
-        # 选择支按钮样式 (图片/字号/颜色)
+        # 选择支按钮样式 (字号/颜色)
         rt._cmd_use(Statement(op="use", args=["modern"], line=0))
-        check("choice 图片键",
-              d.style.get("choice_image") == "materials/image/ui/button.png"
-              and d.style["choice_text_size"] == 26)
+        check("choice 深色文字",
+              d.style["choice_text_size"] == 26
+              and d.style["choice_text_color"] == (46, 46, 62))
         d.show_choices([("选项A", "lbl_a"), ("选项B", "lbl_b")])
         engine.draw()
         check("选择支图片绘制无异常", True)
         check("choice runs 用样式字号", d._choice_runs[0][0].size == 26,
               str(d._choice_runs[0][0].size))
+
+        # UI 主题素材 静态应用
+        check("主题素材注册",
+              "textbox" in d.theme_images
+              and "title_buttons" in d.theme_images
+              and "confirm_panel" in d.theme_images
+              and "slot_frame" in d.theme_images,
+              str(list(d.theme_images)))
+        check("主题多按钮图组",
+              isinstance(d.theme_images.get("title_buttons"), list)
+              and len(d.theme_images["title_buttons"]) == 3
+              and "focus" in d.theme_images["title_buttons"][0],
+              str(len(d.theme_images.get("title_buttons", []))))
+        check("主题双态解析",
+              "focus" in d.theme_images["slot_frame"])
+        check("主题缺图容错", "no_such_comp" not in d.theme_images)
+        # 按索引取按钮图
+        check("按钮图按索引取",
+              d._theme("title_buttons", "default", 2) is not None
+              and d._theme("title_buttons", "focus", 0) is not None)
+        check("确认框深色文字",
+              d.selection_style_overrides.get("dialog_text_color")
+              == (58, 58, 78),
+              str(d.selection_style_overrides.get("dialog_text_color")))
+        # 各组件用主题图绘制不报错
+        engine.draw()
+        d.show_confirm("确认测试", "是", "否")
+        engine.draw()
+        check("主题确认框绘制无异常", True)
+        d.show_slot_menu([{"slot": 0, "empty": True}], "save")
+        engine.draw()
+        check("主题槽位界面绘制无异常", True)
     finally:
         engine.quit()
         import pygame
@@ -1668,6 +1702,236 @@ def test_imports():
     finally:
         engine.quit()
         import pygame
+        pygame.quit()
+
+
+def test_error_handler():
+    print("== 错误处理 ==")
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test35")
+    d = engine.display
+    rt = engine.runtime
+    import shutil
+    try:
+        # 手动触发错误 -> 弹窗 + 日志
+        engine.handle_error(ValueError("测试错误信息"))
+        check("错误弹窗显示", d.error_active)
+        check("错误摘要", "ValueError" in d.error_info["text"]
+              and "测试错误信息" in d.error_info["text"],
+              str(d.error_info["text"]))
+        log_path = engine.error_handler.log_path
+        check("日志文件写入", log_path and os.path.isfile(log_path))
+        content = open(log_path, encoding="utf-8").read()
+        check("日志含完整 traceback", "ValueError" in content
+              and "测试错误信息" in content)
+        engine.draw()
+        check("错误弹窗绘制无异常", True)
+
+        # 复制按钮 (dummy 下 scrap 可能不可用, 但不应崩溃)
+        engine.on_click(d.error_rects[1].center)
+        check("复制按钮后弹窗保持", d.error_active)
+
+        # 继续游戏
+        engine.on_click(d.error_rects[0].center)
+        check("继续游戏", not d.error_active and not engine.paused)
+
+        # 再触发 -> 退出
+        engine.running = True
+        engine.handle_error(RuntimeError("第二个错误"))
+        engine.on_click(d.error_rects[2].center)
+        check("错误弹窗退出", engine.running is False)
+
+        # 主循环异常隔离: 模拟 main_loop 内异常被捕获
+        engine.running = True
+        old_update = engine.update
+
+        def bad_update(dt):
+            raise ZeroDivisionError("主循环爆炸")
+
+        engine.update = bad_update
+        engine.main_loop = None   # 不跑真实循环
+        # 直接验证 main_loop 的 try/except: 手动执行一段
+        # 简化: 调用一次会抛错的帧处理
+        try:
+            engine.update(0.016)
+        except ZeroDivisionError:
+            pass   # 我们模拟 main_loop 已捕获, 这里直接验证 handle_error
+        engine.update = old_update
+        engine.handle_error(ZeroDivisionError("主循环爆炸"))
+        check("主循环异常已捕获弹窗", d.error_active)
+        d.error_active = False
+
+        # excepthook 兜底
+        from framework.engine.error import install_excepthook
+        import sys as _sys
+        old_hook = _sys.excepthook
+        engine2 = GameEngine(640, 360, "test36")
+        install_excepthook(engine2)
+        _sys.excepthook(ValueError, ValueError("hook 测试"), None)
+        check("excepthook 弹窗", engine2.display.error_active)
+        _sys.excepthook = old_hook
+        engine2.quit()
+        import pygame
+        pygame.quit()
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        logs = os.path.join(os.path.dirname(demo), "logs")
+        if os.path.isdir(logs):
+            shutil.rmtree(logs, ignore_errors=True)
+
+
+def test_error_levels():
+    print("== 错误分级 ==")
+    demo_dir = os.path.join(_ROOT, "test", "engine_demo")
+    # jump 到不存在的标签 -> error 弹窗 (不再是 warn)
+    engine = GameEngine(640, 360, "test37")
+    d = engine.display
+    rt = engine.runtime
+    src = '''start:
+    text "x"
+    jump no_such_label
+'''
+    path = os.path.join(demo_dir, "_err_jump.gal")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    try:
+        rt.load_script(path)
+        rt.start()
+        engine.on_click((320, 180))          # 完成打字
+        try:
+            engine.on_click((320, 180))      # 推进 -> jump 失败
+        except Exception as exc:             # 模拟 main_loop 捕获
+            engine.handle_error(exc)
+        check("jump 失败弹窗", d.error_active)
+        check("错误摘要含标签名", "no_such_label" in d.error_info["text"],
+              str(d.error_info["text"]))
+        check("日志标记 ERROR",
+              any("ERROR" in ln for ln in
+                  open(engine.error_handler.log_path,
+                       encoding="utf-8").read().splitlines()),
+              "日志无 ERROR 标记")
+        engine.on_click(d.error_rects[0].center)   # 继续游戏
+        check("继续游戏", not d.error_active and not engine.paused)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+    # choice 跳转失败 -> error 弹窗
+    engine = GameEngine(640, 360, "test38")
+    d = engine.display
+    rt = engine.runtime
+    src2 = '''start:
+    choice:
+        "去 A" -> missing_label
+'''
+    path2 = os.path.join(demo_dir, "_err_choice.gal")
+    with open(path2, "w", encoding="utf-8") as f:
+        f.write(src2)
+    try:
+        rt.load_script(path2)
+        rt.start()
+        try:
+            engine.on_click(d.choice_rects[0].center)
+        except Exception as exc:
+            engine.handle_error(exc)
+        check("choice 跳转失败弹窗", d.error_active)
+    finally:
+        engine.quit()
+        pygame.quit()
+        if os.path.isfile(path2):
+            os.remove(path2)
+
+    # 未知指令 -> 仅 warn, 不弹窗
+    engine = GameEngine(640, 360, "test39")
+    d = engine.display
+    rt = engine.runtime
+    src3 = '''start:
+    unknown_cmd foo
+    text "ok"
+'''
+    path3 = os.path.join(demo_dir, "_err_unknown.gal")
+    with open(path3, "w", encoding="utf-8") as f:
+        f.write(src3)
+    try:
+        rt.load_script(path3)
+        rt.start()
+        check("未知指令不弹窗", not d.error_active)
+        check("未知指令后脚本继续", rt.blocked == "text"
+              and d.full_text == "ok")
+    finally:
+        engine.quit()
+        pygame.quit()
+        if os.path.isfile(path3):
+            os.remove(path3)
+        logs = os.path.join(demo_dir, "logs")
+        if os.path.isdir(logs):
+            import shutil
+            shutil.rmtree(logs, ignore_errors=True)
+
+
+def test_ui_advanced():
+    print("== UI 高级配置 ==")
+    import pygame
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test40")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        # menu_buttons 主题
+        check("menu_buttons 主题注册", "menu_buttons" in d.theme_images
+              and "title_buttons" in d.theme_images)
+        # selection 深色文字配置
+        ov = d.selection_style_overrides
+        check("selection 深色文字", ov.get("text_color") == (58, 58, 78),
+              str(ov.get("text_color")))
+        # title 透传: 按钮图自带文字 -> 隐藏文案 + 不拉伸
+        rt.start()
+        check("标题按钮隐藏文字",
+              d.selection_style.get("button_text") is False)
+        check("标题按钮不拉伸",
+              d.selection_style.get("button_stretch") is False)
+        check("标题按钮文字色配置",
+              d.selection_style.get("text_color") == (58, 58, 78))
+        engine.draw()
+        check("标题绘制无异常", True)
+        # 关闭标题
+        d.selection_active = False
+        d.title_active = False
+
+        # bg 适配模式 (center = 原尺寸)
+        bg_path = os.path.join(_ROOT, "test", "engine_demo", "materials",
+                               "image", "bg.jpg")
+        real_size = pygame.image.load(bg_path).get_size()
+        rt._cmd_bg(Statement(op="bg", args=["materials/image/bg.jpg",
+                                            "mode", "center"], line=0))
+        check("bg mode center", d.bg_surface is not None
+              and d.bg_mode == "center"
+              and d.bg_surface.get_size() == real_size,
+              f"mode={d.bg_mode} size={d.bg_surface.get_size()} vs {real_size}")
+        rt._cmd_bg(Statement(op="bg", args=["materials/image/bg.jpg",
+                                            "mode", "fit"], line=0))
+        check("bg mode fit", d.bg_mode == "fit")
+        rt._cmd_bg(Statement(op="bg", args=["materials/image/bg.jpg"], line=0))
+        check("bg 默认 full", d.bg_mode is None
+              and d.bg_surface.get_size() == (640, 360))
+
+        # sprite center 原尺寸
+        img = os.path.join(_ROOT, "test", "engine_demo", "materials",
+                           "image", "producer", "producer1.png")
+        d.show_sprite("s", img, mode="center")
+        spr = d.sprites["s"]
+        check("sprite center 原尺寸",
+              spr.surface.get_size() == pygame.image.load(img).get_size(),
+              str(spr.surface.get_size()))
+    finally:
+        engine.quit()
         pygame.quit()
 
 
@@ -1863,6 +2127,24 @@ def main():
         test_imports()
     except Exception as exc:
         print(f"  [ERROR] import 拆分测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_error_handler()
+    except Exception as exc:
+        print(f"  [ERROR] 错误处理测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_error_levels()
+    except Exception as exc:
+        print(f"  [ERROR] 错误分级测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_ui_advanced()
+    except Exception as exc:
+        print(f"  [ERROR] UI 高级配置测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

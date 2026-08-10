@@ -239,9 +239,28 @@ start:
     use style my_theme                 # 切换样式 (存档记录当前样式名)
     use style default                  # 恢复默认
     selection_style                    # 选择列表全局样式补充:
-        button_image: "materials/image/ui/button.png"        # 按钮背景图
-        button_image_hover: "materials/image/ui/button.png"  # 悬停按钮图
-        dialog_image: "materials/image/ui/dialog.png"        # 对话框/槽位面板图
+        width: 400                     #   固定像素宽度 (优先于 width_ratio)
+        button_image: "..."            #   按钮背景图
+        button_image_hover: "..."
+        button_stretch: false          #   按钮图不拉伸 (原尺寸居中)
+        button_text: false             #   不渲染按钮文字 (图自带文字时)
+        text_color: "#3a3a4e"          #   按钮文字色 (亮色主题用深色)
+        text_color_hover: "#18182a"
+        dialog_image: "..."
+    ui                                 # UI 主题素材 (直接相对路径):
+        textbox: "materials/image/素材切片/对话/对话_adv对话框_llf.png"
+        title_buttons: "…/标题_开始游戏_默认_llf.png, …/标题_开始游戏_焦点_llf.png; …/标题_读取存档_默认_llf.png, …/标题_读取存档_焦点_llf.png; …/标题_退出游戏_默认_llf.png, …/标题_退出游戏_焦点_llf.png"
+        #   逗号 = 默认图,焦点图; 分号 = 多组按按钮索引取图 (不同按键不同图)
+        #   单个路径 = 无状态图
+        #   支持: textbox/choice_button/title_buttons/menu_button/
+        #         confirm_panel/confirm_button/slot_frame/slot_panel
+        #   style 图片键 (textbox_image 等) 优先级更高, 值为 none 禁用主题图
+
+    # 背景 / 立绘适配模式
+    bg school                            # 场景默认 (mode: 场景定义或指令指定)
+    bg "materials/image/bg.jpg" mode fit   # 适配: cover 铺满裁剪(默认) / fit 等比
+    bg school mode center                 #        center 原尺寸 / full,stretch 拉伸
+    sprite girl mode center               # 立绘同支持 (默认中心偏下 55% 高度)
 
     # 音频 / 转场 / 存档 / 结束
     music "bgm.mp3"             # 循环播放
@@ -374,6 +393,28 @@ class MyAction(Plugin):
 通用选择列表也可由插件/代码直接调用:
 `display.show_selection(items, caption, image, style)`,
 `style` 支持按钮宽高/配色/圆角/字号/锚点等 (见 DEFAULT_SELECTION_STYLE)。
+
+## 错误处理
+
+游戏运行中的任何未捕获异常都不会崩溃退出:
+
+* **主循环隔离**: 每帧 update/draw/事件处理包在 try/except 中
+* **全局兜底**: `sys.excepthook` 捕获主线程未处理异常 (启动器自动安装)
+* **温和弹窗**: 错误出现时游戏暂停, 弹出错误面板 (摘要 + 日志路径),
+  提供三个按钮: **继续游戏** (跳过出错帧) / **复制错误** (完整
+  traceback 到剪贴板) / **退出游戏**
+* **日志文件**: 完整 traceback 追加写入 `<项目目录>/logs/errors.log`
+  (含时间戳与错误编号), 方便事后排查
+
+**错误分级**:
+
+| 级别 | 处理 | 典型场景 |
+| --- | --- | --- |
+| `warn` | 仅记录日志 | 未知指令、资源缺失、show 不存在的对象 (兼容旧脚本) |
+| `error` | 记录 + 弹窗 | jump/call/choice 跳转到不存在的标签、条件表达式求值失败、脚本/插件异常 |
+
+引擎 API: `engine.handle_error(exc, level="error")` /
+`engine.copy_to_clipboard(text)`。
 
 ### 背景过渡效果
 

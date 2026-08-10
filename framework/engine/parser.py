@@ -266,10 +266,10 @@ class Parser:
         if op == "if" and rest and rest[-1] == ("sym", ":"):
             return self._parse_if(i, indent, lineno, content)
 
-        # ---- 对象创建: ... / plugins + 属性块
+        # ---- 对象创建: ... / plugins / ui + 属性块
         if op in ("weight", "sprite", "object", "char", "character",
                   "scene", "scenery", "window", "config", "title", "style",
-                  "selection_style", "plugins"):
+                  "selection_style", "plugins", "ui"):
             return self._parse_create(i, indent, lineno, content, op, rest)
 
         # ---- set: 保留字符串引号, 表达式部分重构 ----------------
@@ -380,7 +380,12 @@ class Parser:
                 break
             kv = cnt.split(":", 1)
             if len(kv) == 2:
-                kwargs[kv[0].strip()] = _unquote(kv[1])
+                val = kv[1]
+                # 支持行内注释: 值后跟 " #..." (空白+#)
+                comment = val.find(" #")
+                if comment != -1:
+                    val = val[:comment]
+                kwargs[kv[0].strip()] = _unquote(val)
             else:
                 log.warning(f"第{ln}行: 属性需为 key: value 形式, 已跳过: {cnt!r}")
             i += 1

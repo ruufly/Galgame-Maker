@@ -91,6 +91,7 @@ class Runtime:
             "use": self._cmd_use,
             "selection_style": self._cmd_selection_style,
             "import": self._cmd_pass,
+            "ui": self._cmd_ui,
         }
 
     # ==================================================================
@@ -118,11 +119,13 @@ class Runtime:
         from framework.engine.styles import BUILTIN_STYLES
         self.styles = dict(BUILTIN_STYLES)
         self.styles.update(self._scan_styles(script))
-        # selection 全局样式 (静态应用, 读档后仍生效)
+        # selection 全局样式 / UI 主题素材 (静态应用, 读档后仍生效)
         self.engine.display.selection_style_overrides.clear()
         for stmt in self._scan_statements(script):
             if stmt.op == "selection_style":
                 self._apply_selection_style_stmt(stmt)
+            elif stmt.op == "ui":
+                self._cmd_ui(stmt)
         self.engine.emit("script_load", path=path, name=script.name)
         log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
                  f"对象 {len(self.script_objects)} 个, "
@@ -202,8 +205,10 @@ class Runtime:
             props = dict(obj.get("props", {}))
             name = props.pop("name", sid)
             default = props.pop("default", None)
+            mode = props.pop("mode", None)
             self.scenes[sid] = {"id": sid, "name": name,
-                                "backgrounds": props, "default": default}
+                                "backgrounds": props, "default": default,
+                                "mode": mode}
 
     # ------------------------------------------------------------------
     def _scan_statements(self, script) -> list:
@@ -225,10 +230,12 @@ class Runtime:
 
     # ------------------------------------------------------------------
     _SEL_STYLE_COLOR_KEYS = {"button_bg", "button_bg_hover", "button_border",
-                             "button_border_hover"}
-    _SEL_STYLE_NUM_KEYS = {"width_ratio", "height", "gap", "caption_y",
-                           "caption_size", "dim_alpha", "text_size",
-                           "unhover_alpha"}
+                             "button_border_hover", "text_color",
+                             "text_color_hover", "dialog_text_color"}
+    _SEL_STYLE_NUM_KEYS = {"width_ratio", "width", "height", "gap",
+                           "caption_y", "caption_size", "dim_alpha",
+                           "text_size", "unhover_alpha"}
+    _SEL_STYLE_BOOL_KEYS = {"button_stretch", "button_text"}
     _SEL_STYLE_STR_KEYS = {"anchor_x", "caption_x", "anchor_y",
                            "button_image", "button_image_hover",
                            "dialog_image"}
@@ -246,6 +253,9 @@ class Runtime:
                     parsed[key] = float(value)
                 except (TypeError, ValueError):
                     pass
+            elif key in self._SEL_STYLE_BOOL_KEYS:
+                parsed[key] = str(value).lower() in ("true", "1", "yes",
+                                                     "on")
             elif key in self._SEL_STYLE_STR_KEYS:
                 parsed[key] = str(value)
         self.engine.display.apply_selection_style(parsed)
@@ -301,7 +311,10 @@ class Runtime:
         "choice_text_color_hover",
     }
     _STYLE_INT_KEYS = {"textbox_alpha", "textbox_border_width",
-                       "textbox_radius", "text_size", "choice_text_size"}
+                       "textbox_radius", "text_size", "choice_text_size",
+                       "choice_height"}
+    _STYLE_FLOAT_KEYS = {"choice_width_ratio"}
+    _STYLE_BOOL_KEYS = {"choice_fit_image"}
     _STYLE_STR_KEYS = {"textbox_image", "speaker_image", "choice_image",
                        "choice_image_hover"}
 
@@ -319,6 +332,13 @@ class Runtime:
                     out[key] = int(float(value))
                 except (TypeError, ValueError):
                     pass
+            elif key in self._STYLE_FLOAT_KEYS:
+                try:
+                    out[key] = float(value)
+                except (TypeError, ValueError):
+                    pass
+            elif key in self._STYLE_BOOL_KEYS:
+                out[key] = str(value).lower() in ("true", "1", "yes", "on")
             elif key in self._STYLE_STR_KEYS:
                 out[key] = str(value)
         return out
@@ -522,6 +542,12 @@ class Runtime:
             if idx + 1 < len(args):
                 effect = args[idx + 1]
             args = args[:idx]
+        mode = None
+        if "mode" in args:
+            idx = args.index("mode")
+            if idx + 1 < len(args):
+                mode = args[idx + 1]
+            del args[idx:idx + 2]
         if not args:
             return None
         target = self._interp(args[0])
@@ -539,7 +565,7 @@ class Runtime:
             if img is None:
                 img = scene.get("default")
             if img:
-                d.set_bg(img, effect)
+                d.set_bg(img, effect, mode or scene.get("mode"))
                 d.bg_scene = target
                 d.bg_pose = pose
                 d.bg_id = None
@@ -547,7 +573,7 @@ class Runtime:
                                  name=scene["name"], background=img, pose=pose)
             return None
         # 直接路径
-        d.set_bg(target, effect)
+        d.set_bg(target, effect, mode)
         d.bg_scene = None
         d.bg_pose = None
         d.bg_id = None
@@ -878,6 +904,44 @@ class Runtime:
                 base_color=d.style["text_color"])
         self.engine.emit("style_change", name=name)
         return None
+
+    def _cmd_ui(self, stmt):
+        """配置 UI 主题素材图 (直接相对路径)。
+
+        ui
+            textbox: "materials/image/素材切片/对话/对话_adv对话框_llf.png"
+            title_buttons: "图1_默认.png, 图1_焦点.png; 图2_默认.png, 图2_焦点.png"
+            slot_panel: "path_llf.png"
+
+        值 = 相对脚本目录的图片路径; 单组用逗号分隔 默认,焦点 (单个即无状态);
+        分号分隔多组时按按钮索引依次取图 (不同按键不同图)。
+        """
+        if not stmt.kwargs:
+            return None
+        for comp, value in stmt.kwargs.items():
+            groups = [g.strip() for g in str(value).split(";") if g.strip()]
+            if len(groups) <= 1:
+                parts = [p.strip() for p in groups[0].split(",")
+                         if p.strip()] if groups else []
+                if not parts:
+                    continue
+                paths = {"default": os.path.join(self.script_dir, parts[0])}
+                if len(parts) > 1:
+                    paths["focus"] = os.path.join(self.script_dir, parts[1])
+                self.engine.display.set_theme_image(comp, paths)
+            else:
+                items = []
+                for g in groups:
+                    parts = [p.strip() for p in g.split(",") if p.strip()]
+                    if not parts:
+                        continue
+                    item = {"default": os.path.join(self.script_dir, parts[0])}
+                    if len(parts) > 1:
+                        item["focus"] = os.path.join(self.script_dir, parts[1])
+                    items.append(item)
+                self.engine.display.set_theme_image(comp, items)
+        return None
+
     def _cmd_title(self, stmt):
         """显示标题画面 (阻塞直到玩家选择)。
 
@@ -904,6 +968,10 @@ class Runtime:
             "button_x": props.get("button_x", "center"),
             "button_y": props.get("button_y"),
         }
+        for bool_key in ("button_stretch", "button_text"):
+            if bool_key in props:
+                pos[bool_key] = str(props[bool_key]).lower() in (
+                    "true", "1", "yes", "on")
         items = []
         start_label = props.get("start")
         if start_label:
@@ -940,10 +1008,8 @@ class Runtime:
         self.release("choice")
         self.engine.display.clear_text()
         if label:
-            try:
-                self._jump_to(label)
-            except RuntimeError_ as exc:
-                log.warning(str(exc))
+            # 跳转失败抛 RuntimeError_, 由引擎按 error 处理 (弹窗)
+            self._jump_to(label)
         self.advance()
 
     # -- 变量与条件 -----------------------------------------------------
@@ -962,12 +1028,9 @@ class Runtime:
         branches = stmt.kwargs.get("branches", [])
         else_body = stmt.kwargs.get("else")
         for cond_expr, body in branches:
-            try:
-                if self.evaluate(cond_expr):
-                    self._push_block(body)
-                    return None
-            except RuntimeError_ as exc:
-                log.warning(f"第{stmt.line}行: 条件求值失败 {cond_expr!r}: {exc}")
+            # 条件求值失败抛 RuntimeError_, 由引擎按 error 处理 (弹窗)
+            if self.evaluate(cond_expr):
+                self._push_block(body)
                 return None
         if else_body:
             self._push_block(else_body)

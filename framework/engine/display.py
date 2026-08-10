@@ -298,6 +298,9 @@ DEFAULT_STYLE = {
     "choice_text_size": 28,
     "choice_text_color": (230, 230, 235),
     "choice_text_color_hover": (255, 255, 255),
+    "choice_width_ratio": 0.34,   # 选择支按钮宽度占窗口比例
+    "choice_fit_image": True,     # 按钮高度按素材图比例 (避免拉伸变形)
+    "choice_height": 56,          # 无图/禁用适配时的按钮高度
 }
 
 # 通用选择列表 (selection) 的默认外观
@@ -320,7 +323,12 @@ DEFAULT_SELECTION_STYLE = {
     "unhover_alpha": 215,       # 未悬停按钮文字透明度
     "button_image": None,       # 按钮背景图 (9-slice), 优先于纯色
     "button_image_hover": None, # 悬停按钮背景图
+    "button_stretch": True,     # 按钮图是否拉伸 (False=原尺寸居中)
+    "button_text": True,        # 是否渲染按钮文字 (图片自带文字时可关)
+    "text_color": (245, 245, 245),      # 按钮文字色
+    "text_color_hover": (255, 255, 255),
     "dialog_image": None,       # 对话框/槽位面板背景图
+    "dialog_text_color": (245, 245, 245),  # 确认框文字色 (亮色主题用深色)
 }
 
 
@@ -386,6 +394,7 @@ class Display:
         self.selection_style = {}
         self.selection_style_overrides = {}   # 脚本 selection_style 语句的全局覆盖
         self._ui_cache = {}                   # UI 图片缓存 (path -> surface)
+        self.theme_images = {}                # UI 主题素材: 组件 -> {default/focus: surface}
 
         # 确认对话框 (退出确认等)
         self.confirm_active = False
@@ -406,6 +415,12 @@ class Display:
         self.slot_menu_slots = []     # [{slot, time, label, preview, empty}]
         self.slot_menu_rects = []
         self.slot_menu_back_rect = pygame.Rect(0, 0, 0, 0)
+
+        # 错误弹窗 (运行时错误温和提示)
+        self.error_active = False
+        self.error_info = None        # ErrorHandler 快照
+        self.error_panel = pygame.Rect(0, 0, 0, 0)
+        self.error_rects = []         # [继续游戏, 复制错误, 退出游戏]
 
         # 全局黑幕 (fadeout / fade)
         self.fade_alpha = 0.0
@@ -486,6 +501,65 @@ class Display:
         return rect
 
     # ==================================================================
+    # UI 主题素材 (素材切片)
+    # ==================================================================
+    def set_theme_image(self, comp: str, paths) -> None:
+        """设置主题组件图。
+
+        paths: {"default": 路径, "focus": 路径} 单组;
+               或 [{...}, {...}] 列表 (按按钮索引取图)。
+        """
+        if isinstance(paths, list):
+            items = []
+            for group in paths:
+                imgs = {}
+                for state, p in group.items():
+                    img = self._ui_image(p)
+                    if img is not None:
+                        imgs[state] = img
+                if imgs:
+                    items.append(imgs)
+            if items:
+                self.theme_images[comp] = items
+            return
+        imgs = {}
+        for state, p in paths.items():
+            img = self._ui_image(p)
+            if img is not None:
+                imgs[state] = img
+        if imgs:
+            self.theme_images[comp] = imgs
+
+    def _theme(self, comp: str, state: str = "default", index: int = None):
+        """取主题组件图 (无则 None)。
+
+        comp 配置为列表时按 index 取对应按钮的图组 (不同按键不同图)。
+        """
+        d = self.theme_images.get(comp)
+        if isinstance(d, list):
+            if index is None or not d:
+                return None
+            item = d[min(index, len(d) - 1)] or {}
+            return item.get(state) or item.get("default")
+        d = d or {}
+        img = d.get(state)
+        if img is None and state != "default":
+            img = d.get("default")
+        return img
+
+    def _style_image_or_theme(self, style_key: str, theme_comp: str):
+        """组件背景图取值: style 键 (none=禁用 / 路径=该图) > 主题图 > None。
+
+        用于文本框/名字框等 (style 的 textbox_image 等键)。
+        """
+        opt = self.style.get(style_key)
+        if opt == "none":
+            return None
+        if opt:
+            return self._ui_image(opt)
+        return self._theme(theme_comp)
+
+    # ==================================================================
     # 图片与坐标
     # ==================================================================
     def load_image(self, path: str):
@@ -502,7 +576,11 @@ class Display:
         return img
 
     def _fit(self, img, mode=None, scale=None):
-        """根据 mode/scale 把图片缩放到合适的尺寸。"""
+        """根据 mode/scale 把图片缩放到合适的尺寸。
+
+        mode: fit 等比适配 / full,stretch 拉伸铺满 / center 原尺寸 / 其它原图
+        scale: 数字倍率 (优先于 mode)
+        """
         w, h = img.get_size()
         if scale is not None:
             try:
@@ -511,18 +589,27 @@ class Display:
             except (TypeError, ValueError):
                 pass
         mode = (mode or "fit").lower()
-        if mode == "full":
+        if mode == "full" or mode == "stretch":
             return pygame.transform.smoothscale(img, (self.width, self.height))
+        if mode == "center":
+            return img
+        if mode == "cover":
+            # 等比缩放铺满并居中裁剪 (不留边, 不变形)
+            ratio = max(self.width / w, self.height / h)
+            sw, sh = max(1, int(w * ratio)), max(1, int(h * ratio))
+            scaled = pygame.transform.smoothscale(img, (sw, sh))
+            x = (sw - self.width) // 2
+            y = (sh - self.height) // 2
+            return scaled.subsurface((x, y, self.width, self.height)).copy()
         if mode == "fit":
             ratio = min(self.width / w, self.height / h)
             return pygame.transform.smoothscale(img, (max(1, int(w * ratio)), max(1, int(h * ratio))))
-        if mode == "stretch":
-            return pygame.transform.smoothscale(img, (self.width, self.height))
         return img
 
     def _pos_to_xy(self, pos, img_w, img_h):
         """把 pos 参数解析成图片左上角坐标。"""
         w, h = self.width, self.height
+        cy = h * 0.55          # 立绘默认中心偏下 (视觉居中)
         if isinstance(pos, (list, tuple)) and len(pos) == 2:
             try:
                 return float(pos[0]) - img_w / 2, float(pos[1]) - img_h / 2
@@ -530,18 +617,19 @@ class Display:
                 pass
         pos = str(pos or "center").lower()
         if pos == "left":
-            return w * 0.25 - img_w / 2, h / 2 - img_h / 2
+            return w * 0.25 - img_w / 2, cy - img_h / 2
         if pos == "right":
-            return w * 0.75 - img_w / 2, h / 2 - img_h / 2
+            return w * 0.75 - img_w / 2, cy - img_h / 2
         if pos == "top":
-            return w / 2 - img_w / 2, h * 0.2 - img_h / 2
+            return w / 2 - img_w / 2, h * 0.25 - img_h / 2
         if pos == "bottom":
-            return w / 2 - img_w / 2, h * 0.8 - img_h / 2
-        return w / 2 - img_w / 2, h / 2 - img_h / 2
+            return w / 2 - img_w / 2, h * 0.85 - img_h / 2
+        return w / 2 - img_w / 2, cy - img_h / 2
 
     def _resolve_center(self, spr, pos):
         """把 pos 参数解析成立绘中心点坐标 (窗口坐标, 数字坐标为直接值)。"""
         w, h = self.width, self.height
+        cy = h * 0.55          # 立绘默认中心偏下
         if isinstance(pos, (list, tuple)) and len(pos) == 2:
             try:
                 return float(pos[0]), float(pos[1])
@@ -549,14 +637,14 @@ class Display:
                 pass
         p = str(pos or "center").lower()
         if p == "left":
-            return w * 0.25, h / 2
+            return w * 0.25, cy
         if p == "right":
-            return w * 0.75, h / 2
+            return w * 0.75, cy
         if p == "top":
-            return w / 2, h * 0.2
+            return w / 2, h * 0.25
         if p == "bottom":
-            return w / 2, h * 0.8
-        return w / 2, h / 2
+            return w / 2, h * 0.85
+        return w / 2, cy
 
     # ==================================================================
     # 背景
@@ -569,17 +657,18 @@ class Display:
         self.transitions[name] = transition_cls
         log.info(f"过渡效果已注册: {name}")
 
-    def set_bg(self, path: str, effect: str = None) -> None:
+    def set_bg(self, path: str, effect: str = None, mode: str = None) -> None:
         """设置背景。
 
         effect: None/"none" 直接切换; 否则按注册表找过渡效果
-                ("fade" / "dissolve" / "blinds" / 插件自定义)。
+        mode: 适配模式 fit/full/center/stretch/数字倍率 (None=full)
         """
         img = self.load_image(path)
         if img is None:
             return
-        new_surface = self._fit(img, mode="full")
+        new_surface = self._fit(img, mode=mode or "cover")
         self.bg_path = path
+        self.bg_mode = mode
         cls = self.transitions.get(effect) if effect else None
         if cls is None:
             # 直接切换 (含 effect="none")
@@ -885,7 +974,19 @@ class Display:
         self.choice_active = True
         self.hover_index = -1
         n = len(self.choices)
-        bw, bh = int(self.width * 0.5), 56
+        st = self.style
+        bw = int(self.width * st.get("choice_width_ratio", 0.34))
+        # 按钮高度: 有素材图时按图片比例 (不拉伸变形)
+        img = None
+        opt = st["choice_image_hover"] or st["choice_image"]
+        if opt and opt != "none":
+            img = self._ui_image(opt)
+        elif not opt:
+            img = self._theme("choice_button")
+        if img is not None and st.get("choice_fit_image", True):
+            bh = max(40, int(bw * img.get_height() / img.get_width()))
+        else:
+            bh = st.get("choice_height", 56)
         gap = 16
         total = n * bh + (n - 1) * gap
         start_y = (self.height - total) / 2
@@ -953,7 +1054,7 @@ class Display:
         )
         # 按钮区
         n = len(items)
-        bw = int(w * st["width_ratio"])
+        bw = int(st.get("width") or w * st["width_ratio"])
         bh = st["height"]
         gap = st["gap"]
         bx = self._resolve_title_x(st.get("anchor_x", "center"))
@@ -1015,21 +1116,38 @@ class Display:
         for idx, (label, action) in enumerate(self.selection_items):
             rect = self.selection_rects[idx]
             hovered = rect.collidepoint(mouse)
-            img = self._ui_image(st.get("button_image_hover") if hovered
-                                 else st.get("button_image"))
-            self._panel_or_image(buf, rect, img,
-                                 bg_color=st["button_bg_hover"] if hovered
-                                 else st["button_bg"],
-                                 border_color=st["button_border_hover"]
-                                 if hovered else st["button_border"],
-                                 border_width=2,
-                                 radius=st.get("button_radius", 6))
-            runs_b = self._rich.parse(str(label),
-                                      base_size=st.get("text_size", 28))
-            self._rich.draw_centered(buf, runs_b, rect.centerx,
-                                     rect.centery,
-                                     alpha=255 if hovered
-                                     else st.get("unhover_alpha", 215))
+            # 标题画面用 title_button 主题图 (常自带文字, 可不拉伸不写字),
+            # ESC 菜单用 menu_button 主题图 (通常为无字按钮)
+            # 标题画面用 title_buttons 主题图 (多按钮图组, 按索引取),
+            # ESC 菜单用 menu_buttons 主题图
+            theme_comp = ("title_buttons" if self.title_active
+                          else "menu_buttons")
+            img = (self._theme(theme_comp, "focus" if hovered
+                               else "default", index=idx)
+                   or self._ui_image(st.get("button_image_hover") if hovered
+                                     else st.get("button_image")))
+            if img is not None:
+                if st.get("button_stretch", True):
+                    buf.blit(ui.nine_slice(img, rect), rect.topleft)
+                else:
+                    # 原尺寸居中 (按钮图自带文字时)
+                    buf.blit(img, img.get_rect(center=rect.center))
+            else:
+                ui.panel(buf, rect,
+                         bg_color=st["button_bg_hover"] if hovered
+                         else st["button_bg"],
+                         border_color=st["button_border_hover"] if hovered
+                         else st["button_border"],
+                         border_width=2, radius=st.get("button_radius", 6))
+            if st.get("button_text", True):
+                runs_b = self._rich.parse(
+                    str(label), base_size=st.get("text_size", 28),
+                    base_color=st.get("text_color_hover") if hovered
+                    else st.get("text_color", (245, 245, 245)))
+                self._rich.draw_centered(buf, runs_b, rect.centerx,
+                                         rect.centery,
+                                         alpha=255 if hovered
+                                         else st.get("unhover_alpha", 215))
 
     # ==================================================================
     # 标题画面 (基于通用 selection)
@@ -1051,6 +1169,11 @@ class Display:
             "anchor_x": pos.get("button_x", "center"),
             "anchor_y": pos.get("button_y"),
         }
+        # title 块可覆盖按钮行为 (图片自带文字时关掉文案与拉伸)
+        for bool_key in ("button_stretch", "button_text"):
+            if bool_key in pos:
+                style[bool_key] = str(pos[bool_key]).lower() in (
+                    "true", "1", "yes", "on")
         self.show_selection(items, caption, image, style)
         self.title_anchor = self.selection_anchor
         self.title_image = self.selection_image
@@ -1091,6 +1214,82 @@ class Display:
             if rect.collidepoint(pos):
                 return idx
         return -1
+
+    # ==================================================================
+    # 错误弹窗
+    # ==================================================================
+    def show_error(self, info: dict) -> None:
+        """显示运行时错误弹窗 (ErrorHandler 快照)。"""
+        self.error_active = True
+        self.error_info = info
+        w, h = self.width, self.height
+        pw, ph = int(w * 0.72), int(h * 0.60)
+        self.error_panel = pygame.Rect((w - pw) // 2, (h - ph) // 2, pw, ph)
+        bw, bh = int(pw * 0.26), 44
+        gap = 16
+        total = bw * 3 + gap * 2
+        x0 = self.error_panel.centerx - total // 2
+        y = self.error_panel.bottom - bh - 20
+        self.error_rects = [
+            pygame.Rect(x0 + i * (bw + gap), y, bw, bh) for i in range(3)
+        ]
+        self.engine.emit("error_show", text=info.get("text"))
+
+    def hit_error(self, pos) -> int:
+        if not self.error_active:
+            return -1
+        for idx, rect in enumerate(self.error_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return -1
+
+    def _draw_error(self, buf) -> None:
+        ui.dim_overlay(buf, 175)
+        dlg_img = (self._theme("slot_panel")
+                   or self._ui_image(
+                       self.selection_style_overrides.get("dialog_image")))
+        self._panel_or_image(buf, self.error_panel, dlg_img,
+                             bg_color=(40, 15, 15, 248),
+                             border_color=(255, 90, 90),
+                             border_width=3, radius=10)
+        pw = self.error_panel.w
+        pad = 26
+        # 标题
+        runs_t = self._rich.parse("{c=#ff6060}⚠ 运行时错误{/c}",
+                                  base_size=30)
+        self._rich.draw(buf, runs_t, self.error_panel.x + pad,
+                        self.error_panel.y + 18, pw - pad * 2)
+        # 错误摘要 (截断)
+        text = str(self.error_info.get("text", "未知错误"))
+        if len(text) > 400:
+            text = text[:400] + " ……"
+        runs = self._rich.parse(text, base_size=20)
+        self._rich.draw(buf, runs, self.error_panel.x + pad,
+                        self.error_panel.y + 62, pw - pad * 2,
+                        max_lines=8)
+        # 日志提示
+        file_hint = (f"完整报错已写入: {self.error_info.get('file')}"
+                     if self.error_info.get("file") else "")
+        runs_h = self._rich.parse(file_hint, base_size=16,
+                                  base_color=(200, 180, 160))
+        self._rich.draw(buf, runs_h, self.error_panel.x + pad,
+                        self.error_panel.y + self.error_panel.h - 78,
+                        pw - pad * 2, max_lines=2)
+        # 按钮
+        mouse = pygame.mouse.get_pos()
+        labels = ("继续游戏", "复制错误", "退出游戏")
+        for idx, label in enumerate(labels):
+            rect = self.error_rects[idx]
+            hovered = rect.collidepoint(mouse)
+            accent = ((0, 150, 90), (120, 110, 40), (170, 50, 50))[idx]
+            self._panel_or_image(
+                buf, rect, None,
+                bg_color=(*accent, 250) if hovered else (*accent, 205),
+                border_color=(255, 255, 255, 200) if hovered
+                else (0, 0, 0, 120), border_width=2, radius=6)
+            runs_b = self._rich.parse(label, base_size=20)
+            self._rich.draw_centered(buf, runs_b, rect.centerx,
+                                     rect.centery)
 
     # ==================================================================
     # 系统菜单 (ESC) / 存档槽位选择
@@ -1162,12 +1361,15 @@ class Display:
             rect = self.slot_menu_rects[idx]
             hovered = rect.collidepoint(mouse)
             empty = info.get("empty")
-            ui.panel(buf, rect,
-                     bg_color=(55, 55, 75, 235) if hovered
-                     else (40, 40, 55, 220),
-                     border_color=(255, 220, 120) if hovered
-                     else (140, 140, 160),
-                     border_width=2, radius=8)
+            img = self._theme("slot_frame", "focus" if hovered
+                              else "default")
+            self._panel_or_image(
+                buf, rect, img,
+                bg_color=(55, 55, 75, 235) if hovered
+                else (40, 40, 55, 220),
+                border_color=(255, 220, 120) if hovered
+                else (140, 140, 160),
+                border_width=2, radius=8)
             slot_no = info.get("slot", idx) + 1
             if empty:
                 text1 = f"槽位 {slot_no}"
@@ -1194,14 +1396,18 @@ class Display:
 
     def _draw_confirm(self, buf) -> None:
         ui.dim_overlay(buf, 170)
-        dlg_img = self._ui_image(
-            self.selection_style_overrides.get("dialog_image"))
+        dlg_img = (self._theme("confirm_panel")
+                   or self._ui_image(
+                       self.selection_style_overrides.get("dialog_image")))
         self._panel_or_image(buf, self.confirm_panel, dlg_img,
                              bg_color=(25, 25, 38, 245),
                              border_color=(200, 200, 220),
                              border_width=2, radius=10)
-        # 提示文本 (富文本, 居中换行)
-        runs = self._rich.parse(str(self.confirm_text), base_size=28)
+        # 提示文本 (富文本, 居中换行; 颜色用 dialog_text_color)
+        dlg_color = self.selection_style_overrides.get(
+            "dialog_text_color", (245, 245, 245))
+        runs = self._rich.parse(str(self.confirm_text), base_size=28,
+                                base_color=dlg_color)
         pad = 24
         self._rich.draw(buf, runs, self.confirm_panel.x + pad,
                         self.confirm_panel.y + 30,
@@ -1212,12 +1418,16 @@ class Display:
             rect = self.confirm_rects[idx]
             hovered = rect.collidepoint(mouse)
             accent = (0, 170, 90) if idx == 0 else (170, 60, 60)
-            ui.panel(buf, rect,
-                     bg_color=(*accent, 235) if hovered else (*accent, 200),
-                     border_color=(255, 255, 255, 160) if hovered
-                     else (0, 0, 0, 120),
-                     border_width=2, radius=6)
-            runs_b = self._rich.parse(str(label), base_size=24)
+            img = self._theme("confirm_button", "focus" if hovered
+                              else "default")
+            self._panel_or_image(
+                buf, rect, img,
+                bg_color=(*accent, 235) if hovered else (*accent, 200),
+                border_color=(255, 255, 255, 160) if hovered
+                else (0, 0, 0, 120),
+                border_width=2, radius=6)
+            runs_b = self._rich.parse(str(label), base_size=24,
+                                      base_color=dlg_color)
             self._rich.draw_centered(buf, runs_b, rect.centerx,
                                      rect.centery)
 
@@ -1338,7 +1548,9 @@ class Display:
             black.set_alpha(int(min(255, self.fade_alpha)))
             buf.blit(black, (0, 0))
 
-        if self.confirm_active:
+        if self.error_active:
+            self._draw_error(buf)
+        elif self.confirm_active:
             self._draw_confirm(buf)
         elif self.slot_menu_active:
             self._draw_slot_menu(buf)
@@ -1376,12 +1588,13 @@ class Display:
         st = self.style
 
         bg = st["textbox_bg"]
-        self._panel_or_image(buf, (box_x, box_y, box_w, box_h),
-                             self._ui_image(st.get("textbox_image")),
-                             bg_color=(*bg, st["textbox_alpha"]),
-                             border_color=st["textbox_border"],
-                             border_width=st["textbox_border_width"],
-                             radius=st["textbox_radius"])
+        self._panel_or_image(
+            buf, (box_x, box_y, box_w, box_h),
+            self._style_image_or_theme("textbox_image", "textbox"),
+            bg_color=(*bg, st["textbox_alpha"]),
+            border_color=st["textbox_border"],
+            border_width=st["textbox_border_width"],
+            radius=st["textbox_radius"])
 
         text_x = box_x + 24
         text_y = box_y + 24
@@ -1397,7 +1610,8 @@ class Display:
                                  (text_x - 6, text_y - 14,
                                   name_surf.get_width() + 24,
                                   name_surf.get_height() + 12),
-                                 self._ui_image(st.get("speaker_image")),
+                                 self._style_image_or_theme(
+                                     "speaker_image", "speaker"),
                                  bg_color=st["speaker_bg"])
             buf.blit(name_surf, (text_x, text_y - 8))
             name_h = name_surf.get_height() + 8
@@ -1427,8 +1641,15 @@ class Display:
             hovered = rect.collidepoint(mouse)
             if hovered:
                 self.hover_index = idx
-            img = self._ui_image(st["choice_image_hover"] if hovered
-                                 else st["choice_image"])
+            img = None
+            opt = st["choice_image_hover" if hovered else "choice_image"]
+            if opt == "none":
+                img = None
+            elif opt:
+                img = self._ui_image(opt)
+            else:
+                img = self._theme("choice_button", "focus" if hovered
+                                  else "default")
             self._panel_or_image(buf, rect, img,
                                  bg_color=st["choice_bg_hover"] if hovered
                                  else st["choice_bg"],

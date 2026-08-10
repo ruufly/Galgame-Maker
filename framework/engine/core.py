@@ -95,6 +95,10 @@ class GameEngine:
         self._confirm_callback = None
         self.paused = False          # 系统菜单打开时暂停游戏
 
+        # 错误处理: 记录日志 + 游戏内弹窗
+        from framework.engine.error import ErrorHandler
+        self.error_handler = ErrorHandler(self)
+
         # 对话框 (dialog) 配置: 退出/读档/返回标题等确认框统一归并
         self.dialogs = {
             "quit": {"enabled": self.confirm_quit_enabled,
@@ -233,11 +237,14 @@ class GameEngine:
     # ==================================================================
     def main_loop(self) -> None:
         while self.running:
-            dt = self.clock.tick(self.fps) / 1000.0
-            for event in pygame.event.get():
-                self.handle_event(event)
-            self.update(dt)
-            self.draw()
+            try:
+                dt = self.clock.tick(self.fps) / 1000.0
+                for event in pygame.event.get():
+                    self.handle_event(event)
+                self.update(dt)
+                self.draw()
+            except Exception as exc:
+                self.handle_error(exc)   # 记录 + 弹窗, 不崩溃
 
     def handle_event(self, event) -> None:
         if event.type == pygame.QUIT:
@@ -328,9 +335,28 @@ class GameEngine:
     # 点击推进逻辑
     # ==================================================================
     def on_click(self, pos) -> None:
-        """处理一次点击: 确认框 -> 槽位界面 -> 系统菜单 -> 标题 -> 选择支等。"""
+        """处理一次点击: 错误弹窗 -> 确认框 -> 槽位界面 -> 选择列表..."""
         d = self.display
-        # 0) 确认对话框 (最高优先级)
+        # 0) 错误弹窗 (最高优先级)
+        if d.error_active:
+            idx = d.hit_error(pos)
+            if idx < 0:
+                return
+            if idx == 0:      # 继续游戏
+                d.error_active = False
+                d.error_info = None
+                self.paused = False
+            elif idx == 1:    # 复制完整报错
+                text = d.error_info.get("traceback") \
+                    if d.error_info else ""
+                if self.copy_to_clipboard(text):
+                    d.show_notice("完整报错已复制到剪贴板", 2.0)
+                else:
+                    d.show_notice("复制失败, 请从日志文件复制", 2.0)
+            elif idx == 2:    # 退出游戏
+                self.quit()
+            return
+        # 1) 确认对话框 (最高优先级)
         if d.confirm_active:
             idx = d.hit_confirm(pos)
             if idx < 0:
@@ -626,6 +652,35 @@ class GameEngine:
     def request_quit(self) -> None:
         """请求退出: 按 quit 对话框配置弹确认, 否则直接退出。"""
         self.ask_dialog("quit", self.quit)
+
+    # ==================================================================
+    # 错误处理
+    # ==================================================================
+    def handle_error(self, error, level: str = "error") -> None:
+        """记录错误到日志并弹出温和提示 (不崩溃)。
+
+        level: "error" 弹窗提示; "warn" 仅记录日志。
+        """
+        try:
+            info = self.error_handler.record(error, level)
+            if level != "warn":
+                self.display.show_error(info)
+                self.paused = True   # 弹窗期间暂停游戏
+        except Exception as exc:
+            log.error(f"错误处理失败: {exc}")
+
+    def copy_to_clipboard(self, text: str) -> bool:
+        """把文本复制到系统剪贴板 (pygame.scrap)。"""
+        if not text:
+            return False
+        try:
+            if not pygame.scrap.get_init():
+                pygame.scrap.init()
+            pygame.scrap.put(pygame.SCRAP_TEXT, text.encode("utf-8"))
+            return True
+        except Exception as exc:
+            log.warning(f"复制到剪贴板失败: {exc}")
+            return False
 
     # ==================================================================
     # 存档快捷方式

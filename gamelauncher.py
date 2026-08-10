@@ -73,6 +73,9 @@ def launch(gal_file: str) -> int:
     log.info(f"窗口配置: {width}x{height} fps={fps} title={title!r}"
              f" fullscreen={fullscreen}")
     engine = GameEngine(width, height, title, fps, fullscreen=fullscreen)
+    # 全局未捕获异常 -> 弹窗 (不崩溃)
+    from framework.engine.error import install_excepthook
+    install_excepthook(engine)
     engine.apply_config(cfg)   # 运行时选项 (退出确认等)
     if icon:
         engine.script_dir = os.path.dirname(gal_file)
