@@ -90,12 +90,11 @@ window
     confirm_title_text: "确定要返回标题画面吗？"
     confirm_title_yes: "返回标题"
     confirm_title_no: "取消"
-    menu_continue: "继续游戏"            # ESC 系统菜单文案
-    menu_save: "存档"
-    menu_load: "读取存档"
-    menu_title: "返回标题"
-    menu_quit: "退出游戏"
-```
+    key_up: "up, w"                # 菜单键盘导航: 上移 (可自定义多键)
+    key_down: "down, s"            # 下移
+    key_confirm: "return, space"   # 确认活动选项 (开始/ESC/选择支菜单通用)
+    # 活动选项由 键盘移动 或 鼠标悬停 激活; 初始无活动项 (-1) 不高亮,
+    # 无活动项时 Enter/空格 不触发确认 (文本推进仅限无菜单时)
 
 引擎最小用法 (Python):
 
@@ -277,6 +276,23 @@ start:
     # 按键属性: text / image(默认,焦点) / width / height / stretch /
     #           text_visible / action (无名参数按类型映射: start->label,
     #           slot_menu->mode, save/load->slot; 自定义动作默认 label)
+
+    # 立绘登场/退场效果
+    show producer with bounce          # 登场效果 (fade/slide_left/slide_right/
+    show producer normal with slide_right  # slide_up/slide_down/zoom/drop/bounce/spin)
+    hide producer with slide_left      # 退场效果 (动画播完自动隐藏)
+    # 插件可注册自定义效果 (display.register_sprite_effect):
+    #   apply_func(sprite, t, direction, display), t∈[0,1]
+    #   可修改 sprite 的 center/alpha/scale/angle
+
+    # 对话框文字显示模式 (typing 切换)
+    typing typewriter                 # 默认: 打字机逐字符
+    typing instant                    # 整段直接出现
+    typing terminal                   # 终端: 逐字输入 + 行尾闪烁光标
+    typing lines                      # 逐行显示 + 节奏停顿
+    typing wave                       # 插件自定义模式 (display.register_text_mode)
+    # 插件 API: register_text_mode(name, {"reset": fn(display),
+    #                                     "update": fn(display, dt)})
 
     # 音频 / 转场 / 存档 / 结束
     music "bgm.mp3"             # 循环播放

@@ -95,6 +95,11 @@ class GameEngine:
         self._confirm_callback = None
         self.paused = False          # 系统菜单打开时暂停游戏
 
+        # 键盘导航键位 (window 配置可自定义: key_up/key_down/key_confirm)
+        self.key_up = [pygame.K_UP]
+        self.key_down = [pygame.K_DOWN]
+        self.key_confirm = [pygame.K_RETURN, pygame.K_SPACE]
+
         # 错误处理: 记录日志 + 游戏内弹窗
         from framework.engine.error import ErrorHandler
         self.error_handler = ErrorHandler(self)
@@ -255,8 +260,24 @@ class GameEngine:
             self.on_click(event.pos)
 
     def _handle_key(self, key) -> None:
-        if key in (pygame.K_SPACE, pygame.K_RETURN):
-            self.on_click((self.width // 2, self.height // 2))
+        if key in self.key_up:
+            self.display.move_active(-1)
+        elif key in self.key_down:
+            self.display.move_active(1)
+        elif key in self.key_confirm:
+            d = self.display
+            if d.selection_active:
+                # 确认活动选项 (无活动项时忽略)
+                if d.active_index >= 0 and d.selection_rects:
+                    self.on_click(d.selection_rects[d.active_index].center)
+                return
+            elif d.choice_active:
+                if d.active_index >= 0 and d.choice_rects:
+                    self.on_click(d.choice_rects[d.active_index].center)
+                return
+            else:
+                # 无活动界面: 推进文本
+                self.on_click((self.width // 2, self.height // 2))
         elif key == pygame.K_ESCAPE:
             self.on_escape()
 
@@ -404,6 +425,7 @@ class GameEngine:
             if idx < 0:
                 return
             text, action, _item_cfg = d.selection_items[idx]
+            d.active_index = idx
             source = "title" if d.title_active else "menu"
             self.emit("selection_choice", index=idx, text=text,
                       action=action, source=source)
@@ -414,6 +436,7 @@ class GameEngine:
             idx = d.hit_choice(pos)
             if idx < 0:
                 return
+            d.active_index = idx
             text, label = d.choices[idx]
             self.emit("choice_made", index=idx, label=label, text=text)
             d.choice_active = False
@@ -438,6 +461,8 @@ class GameEngine:
     # ==================================================================
     def update(self, dt: float) -> None:
         if self.paused:
+            # 暂停期间仍同步鼠标活动项 (ESC 菜单键盘/鼠标一致)
+            self.display.sync_mouse_active()
             return   # 系统菜单打开时暂停游戏逻辑 (菜单绘制仍进行)
         self.display.update(dt)
         self.runtime.tick(dt)
@@ -516,6 +541,29 @@ class GameEngine:
             log.warning(f"解析插件配置失败: {exc}")
         return {}
 
+    _KEY_NAMES = {
+        "up": pygame.K_UP, "down": pygame.K_DOWN, "left": pygame.K_LEFT,
+        "right": pygame.K_RIGHT, "return": pygame.K_RETURN,
+        "enter": pygame.K_RETURN, "space": pygame.K_SPACE,
+        "esc": pygame.K_ESCAPE, "escape": pygame.K_ESCAPE,
+        "tab": pygame.K_TAB, "backspace": pygame.K_BACKSPACE,
+        "delete": pygame.K_DELETE, "home": pygame.K_HOME, "end": pygame.K_END,
+    }
+
+    def _parse_keys(self, value) -> list:
+        """解析键位配置字符串: "up, w" / "return, space" -> [K_UP, K_w]"""
+        out = []
+        for part in str(value).split(","):
+            name = part.strip().lower()
+            if not name:
+                continue
+            k = self._KEY_NAMES.get(name)
+            if k is None and len(name) == 1 and name.isalnum():
+                k = getattr(pygame, f"K_{name}", None)
+            if k is not None and k not in out:
+                out.append(k)
+        return out
+
     def apply_config(self, cfg: dict) -> None:
         """应用脚本 window 配置中的运行时选项 (窗口已在构造时创建)。
 
@@ -544,6 +592,13 @@ class GameEngine:
         self.confirm_load_text = self.dialogs["load"]["text"]
         self.confirm_load_yes = self.dialogs["load"]["yes"]
         self.confirm_load_no = self.dialogs["load"]["no"]
+        # 键盘导航键位 (key_up/key_down/key_confirm, 逗号分隔多键)
+        for attr, cfg_key in (("key_up", "key_up"), ("key_down", "key_down"),
+                              ("key_confirm", "key_confirm")):
+            if cfg_key in cfg:
+                parsed = self._parse_keys(cfg[cfg_key])
+                if parsed:
+                    setattr(self, attr, parsed)
         # ESC 菜单文案
         for key in self.menu_texts:
             if f"menu_{key}" in cfg:

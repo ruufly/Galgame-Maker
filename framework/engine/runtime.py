@@ -94,6 +94,7 @@ class Runtime:
             "import": self._cmd_pass,
             "ui": self._cmd_ui,
             "menu": self._cmd_menu,
+            "typing": self._cmd_typing,
         }
 
     # ==================================================================
@@ -672,11 +673,17 @@ class Runtime:
         return None
 
     def _cmd_hide(self, stmt):
+        """hide <id> [with 效果] —— 隐藏立绘 (带效果则播放退场动画)。"""
         if not stmt.args:
             return None
         sid = stmt.args[0]
+        effect = None
+        if "with" in stmt.args:
+            idx = stmt.args.index("with")
+            if idx + 1 < len(stmt.args):
+                effect = stmt.args[idx + 1]
         if sid in self.engine.display.sprites:
-            self.engine.display.hide_sprite(sid)
+            self.engine.display.hide_sprite(sid, effect)
         else:
             log.warning(f"第{stmt.line}行: hide 的对象 {sid!r} 不存在")
         return None
@@ -1039,6 +1046,17 @@ class Runtime:
                 action = {"type": "close"}
             out.append((it["text"], action, it["cfg"]))
         return out
+
+    def _cmd_typing(self, stmt):
+        """切换对话框文字显示模式: typing <模式名>
+
+        预设: typewriter (默认打字机) / instant (直接出现) / terminal (终端)
+        插件可注册自定义模式 (display.register_text_mode)。
+        """
+        if not stmt.args:
+            return None
+        self.engine.display.set_text_mode(self._interp(stmt.args[0]))
+        return None
 
     def _cmd_title(self, stmt):
         """显示标题画面 (阻塞直到玩家选择)。

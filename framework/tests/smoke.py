@@ -1997,6 +1997,265 @@ def test_menu_block():
         pygame.quit()
 
 
+def test_sprite_effects():
+    print("== 立绘登场/退场效果 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    img = os.path.join(_ROOT, "test", "engine_demo", "materials",
+                       "image", "producer", "producer1.png")
+    engine = GameEngine(640, 360, "test42")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        # 预设注册
+        for name in ("fade", "slide_left", "slide_right", "slide_up",
+                     "slide_down", "zoom", "drop", "bounce", "spin"):
+            check(f"预设效果 {name}", name in d.sprite_effects)
+
+        # show with slide_left: 从屏幕外滑入
+        d.show_sprite("p", img, "center", effect="slide_left")
+        spr = d.sprites["p"]
+        check("登场效果启动", spr.effect is not None
+              and spr.effect[1] == "enter" and spr.effect[0] == "slide_left")
+        d.update(1 / 60)   # 应用首帧 (立绘滑出屏外)
+        check("登场从屏外开始", spr.center[0] < 0,
+              f"x={spr.center[0]:.0f}")
+        for _ in range(50):
+            d.update(1 / 60)
+        check("滑入到位", abs(spr.center[0] - 320) < 2
+              and spr.alpha >= 255 and spr.effect is None,
+              f"x={spr.center[0]:.0f} a={spr.alpha}")
+
+        # hide with fade: 退场动画后不可见
+        d.hide_sprite("p", effect="fade")
+        check("退场效果启动", spr.effect is not None
+              and spr.effect[1] == "exit")
+        for _ in range(50):
+            d.update(1 / 60)
+        check("退场后隐藏", spr.effect is None and not spr.visible)
+
+        # zoom 缩放登场
+        d.show_sprite("p", img, "center", effect="zoom")
+        spr = d.sprites["p"]
+        for _ in range(40):
+            d.update(1 / 60)
+        check("zoom 登场完成", spr.effect is None and spr.alpha == 255
+              and abs(spr.scale - 1.0) < 0.05)
+
+        # 回归: 带入场效果的 show 后立绘立即位于起始位置 (不闪现)
+        d.show_sprite("p", img, "center", effect="slide_right")
+        spr = d.sprites["p"]
+        check("入场立即在屏外", spr.center[0] > 640 and spr.visible,
+              f"x={spr.center[0]:.0f}")
+
+        # DSL 解析
+        rt._cmd_hide(Statement(op="hide",
+                               args=["p", "with", "slide_right"], line=0))
+        check("hide with 解析", spr.effect is not None
+              and spr.effect[1] == "exit")
+        for _ in range(50):
+            d.update(1 / 60)
+        check("hide 效果后不可见", not spr.visible)
+
+        # 插件自定义效果
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        check("插件效果注册", "wobble" in d.sprite_effects)
+        d.show_sprite("p", img, "center", effect="wobble")
+        spr = d.sprites["p"]
+        check("wobble 效果启动", spr.effect is not None
+              and spr.effect[0] == "wobble")
+        for _ in range(60):
+            d.update(1 / 60)
+        check("wobble 完成", spr.effect is None and spr.alpha == 255)
+
+        # 回归: 返回标题 -> 重新开始 -> 立绘应重新显示 (sprite_order 重建)
+        engine.goto_title()
+        engine.on_click(d.selection_rects[0].center)   # 开始游戏
+        check("重开后立绘显示",
+              "producer" in d.sprites
+              and d.sprites["producer"].visible
+              and "producer" in d.sprite_order,
+              f"order={d.sprite_order}")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_text_modes():
+    print("== 文字显示模式 ==")
+    from framework.engine.parser import Statement
+    engine = GameEngine(640, 360, "test43")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(os.path.join(_ROOT, "test", "engine_demo", "demo.gal"))
+        for name in ("typewriter", "instant", "terminal", "lines"):
+            check(f"预设模式 {name}", name in d.text_modes)
+
+        # 默认打字机
+        check("默认打字机", d.text_mode == "typewriter")
+        d.show_text("打字机测试文字这是一个比较长的句子用于验证逐字推进")
+        d.update(0.05)
+        r1 = d.reveal
+        d.update(0.05)
+        check("打字机逐字推进",
+              d.reveal > r1 and d.reveal < len(d.full_text),
+              f"{r1:.1f}->{d.reveal:.1f} / {len(d.full_text)}")
+
+        # typing 指令切换 instant
+        rt._cmd_typing(Statement(op="typing", args=["instant"], line=0))
+        check("typing 切换", d.text_mode == "instant")
+        d.show_text("立即出现的整段文字")
+        check("instant 全文显示", d.reveal == len(d.full_text))
+
+        # terminal = 逐字输入 (与打字机同速)
+        rt._cmd_typing(Statement(op="typing", args=["terminal"], line=0))
+        d.show_text("终端模式逐字输入测试文字内容")
+        d.update(0.05)
+        check("terminal 逐字推进", 0 < d.reveal < len(d.full_text),
+              f"reveal={d.reveal:.1f}")
+        for _ in range(200):
+            d.update(1 / 60)
+        check("terminal 完成", d.reveal >= len(d.full_text))
+
+        # lines = 逐行出现
+        rt._cmd_typing(Statement(op="typing", args=["lines"], line=0))
+        d.show_text("第一行内容第二行内容第三行内容")
+        check("lines 逐行推进", d.reveal < len(d.full_text))
+        for _ in range(150):
+            d.update(1 / 60)
+        check("lines 完成", d.reveal >= len(d.full_text))
+
+        # 未知模式不切换
+        rt._cmd_typing(Statement(op="typing", args=["nope"], line=0))
+        check("未知模式不切换", d.text_mode == "lines")
+
+        # 插件自定义模式 wave
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        check("插件模式注册", "wave" in d.text_modes)
+        rt._cmd_typing(Statement(op="typing", args=["wave"], line=0))
+        d.show_text("波浪模式文字")
+        d.update(0.1)
+        r1 = d.reveal
+        d.update(0.1)
+        check("wave 推进", d.reveal > r1)
+        # 切回默认
+        rt._cmd_typing(Statement(op="typing", args=["typewriter"], line=0))
+        check("切回打字机", d.text_mode == "typewriter")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_key_nav():
+    print("== 键盘导航 ==")
+    import pygame
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test44")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        # 键位解析
+        engine.apply_config({"key_up": "up, w", "key_down": "down, s",
+                             "key_confirm": "return, space"})
+        check("键位解析", engine.key_up == [pygame.K_UP, pygame.K_w]
+              and engine.key_down == [pygame.K_DOWN, pygame.K_s]
+              and pygame.K_RETURN in engine.key_confirm
+              and pygame.K_SPACE in engine.key_confirm,
+              f"up={engine.key_up} down={engine.key_down}")
+
+        rt.load_script(demo)
+        rt.start()
+        # 标题菜单: 初始无活动项, 鼠标/键盘均可激活
+        check("初始无活动项", d.active_index == -1)
+        # 无活动项时 Enter 忽略 (不确认)
+        engine._handle_key(pygame.K_RETURN)
+        check("无活动项 Enter 忽略", d.title_active and d.active_index == -1)
+        # 鼠标悬停同步活动项 (monkeypatch get_pos)
+        _orig_pos = pygame.mouse.get_pos
+        pygame.mouse.get_pos = lambda: d.selection_rects[1].center
+        try:
+            d.update(0.016)
+        finally:
+            pygame.mouse.get_pos = _orig_pos
+        check("鼠标悬停同步", d.active_index == 1)
+        engine.draw()
+        check("悬停项高亮绘制无异常", True)
+        # 键盘移动: 无活动时激活第一项
+        d.active_index = -1
+        engine._handle_key(pygame.K_DOWN)
+        check("键盘激活第一项", d.active_index == 0)
+        engine._handle_key(pygame.K_DOWN)
+        check("下移", d.active_index == 1)
+        engine._handle_key(pygame.K_DOWN)
+        engine._handle_key(pygame.K_DOWN)
+        check("循环到首项", d.active_index == 0)
+        engine._handle_key(pygame.K_UP)
+        check("上移循环", d.active_index == 2)
+        # W/S 键移动 (自定义)
+        engine._handle_key(pygame.K_s)
+        check("S 键下移", d.active_index == 0)
+        engine._handle_key(pygame.K_w)
+        check("W 键上移", d.active_index == 2)
+        engine._handle_key(pygame.K_w)
+        engine._handle_key(pygame.K_w)
+        check("回到首项", d.active_index == 0)
+        # Enter 确认活动项 -> 开始游戏
+        engine._handle_key(pygame.K_RETURN)
+        check("Enter 确认开始", rt.current_label == "game_start"
+              and not d.title_active)
+        # 无活动界面时 Space 推进文本 (完成打字)
+        engine._handle_key(pygame.K_SPACE)
+        check("Space 推进文本", d.text_active)
+
+        # 选择支键盘导航: 推进 demo 到 choice
+        for _ in range(20):
+            if d.choice_active:
+                break
+            engine.on_click((320, 180))
+            if d.text_active:
+                engine.on_click((320, 180))
+        check("到达选择支", d.choice_active)
+        check("choice 初始无活动", d.active_index == -1)
+        engine._handle_key(pygame.K_DOWN)
+        check("choice 键盘激活", d.active_index == 0)
+        engine._handle_key(pygame.K_DOWN)
+        check("choice 下移", d.active_index == 1)
+        # Enter 确认活动项 -> 选择 "还行吧" -> neutral
+        engine._handle_key(pygame.K_RETURN)
+        check("choice 键盘确认选中", rt.current_label == "neutral"
+              and not d.choice_active,
+              f"label={rt.current_label}")
+
+        # ESC 菜单 (暂停) 下鼠标悬停仍同步活动项
+        engine.on_escape()
+        check("ESC 菜单打开", engine.paused and d.selection_active)
+        check("ESC 菜单初始无活动", d.active_index == -1)
+        _orig = pygame.mouse.get_pos
+        pygame.mouse.get_pos = lambda: d.selection_rects[3].center
+        try:
+            engine.update(0.016)   # paused 下仍同步
+        finally:
+            pygame.mouse.get_pos = _orig
+        check("ESC 菜单鼠标悬停同步", d.active_index == 3,
+              str(d.active_index))
+        # 键盘确认活动项 (index 3 = 返回标题; 未启用确认框则直接回标题)
+        engine._handle_key(pygame.K_RETURN)
+        check("ESC 键盘确认", d.title_active or d.confirm_active,
+              f"title={d.title_active} confirm={d.confirm_active}")
+        if d.confirm_active:
+            d.confirm_active = False
+        engine.close_system_menu()
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -2213,6 +2472,24 @@ def main():
         test_menu_block()
     except Exception as exc:
         print(f"  [ERROR] 菜单块测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_sprite_effects()
+    except Exception as exc:
+        print(f"  [ERROR] 立绘效果测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_text_modes()
+    except Exception as exc:
+        print(f"  [ERROR] 文字模式测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_key_nav()
+    except Exception as exc:
+        print(f"  [ERROR] 键盘导航测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

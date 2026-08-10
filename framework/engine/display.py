@@ -17,6 +17,170 @@ from framework.engine import log, ui
 # ======================================================================
 # 背景过渡效果 (Transition)
 # ======================================================================
+
+# ======================================================================
+# 立绘登场/退场效果 (Sprite Effects)
+# ======================================================================
+def _ease_out_back(t):
+    c1, c3 = 1.70158, 2.70158
+    return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2
+
+
+def _eff_fade(spr, t, direction, display):
+    """淡入 / 淡出。"""
+    spr.alpha = int(255 * (t if direction == "enter" else 1 - t))
+    spr.surface.set_alpha(spr.alpha)
+
+
+def _eff_slide(spr, t, direction, display, side="left"):
+    """滑入 / 滑出。side: left/right/up/down (从对应屏幕方向)。"""
+    p = t if direction == "enter" else 1 - t
+    base = spr.effect[4]
+    dx = dy = 0.0
+    if side == "left":
+        dx = (1 - p) * -display.width
+    elif side == "right":
+        dx = (1 - p) * display.width
+    elif side == "up":
+        dy = (1 - p) * display.height
+    else:
+        dy = (1 - p) * -display.height
+    spr.center = [base[0] + dx, base[1] + dy]
+    spr.rect.center = (int(round(spr.center[0])), int(round(spr.center[1])))
+    spr.alpha = int(255 * min(1.0, p * 1.8))
+    spr.surface.set_alpha(spr.alpha)
+
+
+def _eff_slide_left(spr, t, direction, display):
+    _eff_slide(spr, t, direction, display, "left")
+
+
+def _eff_slide_right(spr, t, direction, display):
+    _eff_slide(spr, t, direction, display, "right")
+
+
+def _eff_slide_up(spr, t, direction, display):
+    _eff_slide(spr, t, direction, display, "up")
+
+
+def _eff_slide_down(spr, t, direction, display):
+    _eff_slide(spr, t, direction, display, "down")
+
+
+def _eff_zoom(spr, t, direction, display):
+    """缩放淡入 / 缩小淡出。"""
+    if direction == "enter":
+        s = 0.3 + 0.7 * t
+        spr.alpha = int(255 * t)
+    else:
+        s = 1.0 - 0.7 * t
+        spr.alpha = int(255 * (1 - t))
+    spr.scale = s
+    spr.surface.set_alpha(spr.alpha)
+    spr._recalc()
+
+
+def _eff_drop(spr, t, direction, display):
+    """从上方掉落 (缓动落地) / 下沉退场。"""
+    base = spr.effect[4]
+    if direction == "enter":
+        p = 1 - (1 - t) ** 2          # ease out
+        dy = (1 - p) * -display.height * 0.7
+    else:
+        p = 1 - (1 - t) ** 3
+        dy = p * display.height * 0.7
+    spr.center = [base[0], base[1] + dy]
+    spr.rect.center = (int(round(spr.center[0])), int(round(spr.center[1])))
+    spr.alpha = int(255 * min(1.0, t * 1.6))
+    spr.surface.set_alpha(spr.alpha)
+
+
+def _eff_bounce(spr, t, direction, display):
+    """带过冲回弹的滑入 (从底部上浮) / 回弹式退场。"""
+    base = spr.effect[4]
+    if direction == "enter":
+        p = _ease_out_back(t)
+        dy = (1 - p) * display.height
+    else:
+        p = _ease_out_back(1 - t)
+        dy = -p * display.height
+    spr.center = [base[0], base[1] + dy]
+    spr.rect.center = (int(round(spr.center[0])), int(round(spr.center[1])))
+    spr.alpha = int(255 * min(1.0, t * 1.5))
+    spr.surface.set_alpha(spr.alpha)
+
+
+def _eff_spin(spr, t, direction, display):
+    """旋转入场 (360°->0°) / 旋转退场。"""
+    if direction == "enter":
+        spr.angle = 360 * (1 - t)
+        spr.alpha = int(255 * t)
+    else:
+        spr.angle = 360 * t
+        spr.alpha = int(255 * (1 - t))
+    spr.surface.set_alpha(spr.alpha)
+    spr._recalc()
+
+
+# 预设效果注册表 (插件可通过 display.register_sprite_effect 扩展)
+# ======================================================================
+# 对话框文字显示模式 (Text Reveal Modes)
+# ======================================================================
+def _tm_typewriter(d, dt):
+    """默认: 打字机逐字符。"""
+    d.reveal += d.TYPE_SPEED * dt
+
+
+def _tm_instant_reset(d):
+    """整段直接出现。"""
+    d.reveal = len(d.full_text)
+
+
+def _tm_lines_reset(d):
+    """逐行显示: 每行一次性出现 + 节奏停顿。"""
+    lines = ui.wrap_text(d._font_text, d.full_text, d.width - 96)
+    d.text_mode_state = {"lines": lines, "line": 0, "timer": 0.0}
+    d.reveal = 0.0
+
+
+def _tm_lines_update(d, dt):
+    st = d.text_mode_state
+    lines = st.get("lines") or []
+    if not lines:
+        d.reveal = len(d.full_text)
+        return
+    st["timer"] += dt
+    delay = 0.35 if st["line"] == 0 else 0.12
+    if st["timer"] >= delay:
+        st["timer"] = 0.0
+        st["line"] += 1
+        if st["line"] >= len(lines):
+            d.reveal = len(d.full_text)
+        else:
+            d.reveal = sum(len(x) for x in lines[: st["line"] + 1])
+
+
+TEXT_MODES = {
+    "typewriter": {"update": _tm_typewriter},
+    "instant": {"reset": _tm_instant_reset},
+    "terminal": {"update": _tm_typewriter},   # 逐字 + 行尾光标 (绘制层)
+    "lines": {"reset": _tm_lines_reset, "update": _tm_lines_update},
+}
+
+
+SPRITE_EFFECTS = {
+    "fade": (_eff_fade, 0.6),
+    "slide_left": (_eff_slide_left, 0.7),
+    "slide_right": (_eff_slide_right, 0.7),
+    "slide_up": (_eff_slide_up, 0.7),
+    "slide_down": (_eff_slide_down, 0.7),
+    "zoom": (_eff_zoom, 0.6),
+    "drop": (_eff_drop, 0.6),
+    "bounce": (_eff_bounce, 0.8),
+    "spin": (_eff_spin, 0.7),
+}
+
+
 class Transition:
     """背景过渡基类。子类实现 draw_bg (背景层) 与可选的 draw_overlay
     (全屏覆盖层, 如 fade 的黑幕)。
@@ -205,13 +369,15 @@ _EASE_FUNCS = {
 class _Sprite:
     """立绘精灵。
 
-    位置真相源是 center (浮点, 动画平滑); 旋转/翻转作用于 base_surface,
-    渲染面 surface 由 _recalc 生成, rect 始终以 center 为锚点。
+    位置真相源是 center (浮点, 动画平滑); 旋转/翻转/缩放作用于
+    base_surface, 渲染面 surface 由 _recalc 生成, rect 以 center 为锚点。
+    effect: 登场/退场动画 [kind, direction, t, duration, base_center, alpha0]
     """
 
     __slots__ = ("id", "base_surface", "surface", "center", "angle",
                  "flip_h", "flip_v", "alpha", "target_alpha", "fade_speed",
-                 "visible", "props", "rect", "anim_move", "anim_rotate")
+                 "visible", "props", "rect", "anim_move", "anim_rotate",
+                 "scale", "effect")
 
     def __init__(self, sid, base_surface, center, props=None):
         self.id = sid
@@ -229,11 +395,17 @@ class _Sprite:
         self.rect = pygame.Rect(0, 0, 0, 0)
         self.anim_move = None    # [kind, t, duration, start, target, ease]
         self.anim_rotate = None  # 同上 (move 与 rotate 并行, 同类互相覆盖)
+        self.scale = 1.0         # 渲染缩放 (效果用)
+        self.effect = None       # [kind, direction, t, duration, base_center, alpha0]
         self._recalc()
 
     def _recalc(self):
-        """重新生成渲染面 (旋转/翻转), 并按中心点重算 rect。"""
+        """重新生成渲染面 (缩放/旋转/翻转), 并按中心点重算 rect。"""
         surf = self.base_surface
+        if self.scale != 1.0:
+            sw = max(1, int(surf.get_width() * self.scale))
+            sh = max(1, int(surf.get_height() * self.scale))
+            surf = pygame.transform.smoothscale(surf, (sw, sh))
         if self.angle:
             surf = pygame.transform.rotate(surf, self.angle)
         if self.flip_h or self.flip_v:
@@ -242,6 +414,15 @@ class _Sprite:
         self.surface.set_alpha(int(self.alpha))
         self.rect = surf.get_rect(center=(int(round(self.center[0])),
                                           int(round(self.center[1]))))
+
+    def _start_effect(self, kind: str, direction: str, duration: float) -> None:
+        """启动登场/退场效果。"""
+        self.effect = [kind, direction, 0.0, duration,
+                       (self.center[0], self.center[1]), self.alpha]
+        if direction == "enter":
+            self.scale = 1.0
+            self.angle = 0.0
+            self._recalc()
 
     def update(self, dt):
         # 淡入
@@ -395,6 +576,13 @@ class Display:
         self.selection_style_overrides = {}   # 脚本 selection_style 语句的全局覆盖
         self._ui_cache = {}                   # UI 图片缓存 (path -> surface)
         self.theme_images = {}                # UI 主题素材: 组件 -> {default/focus: surface}
+        self.sprite_effects = {k: v[0] for k, v in SPRITE_EFFECTS.items()}
+        self.sprite_effect_durations = {k: v[1] for k, v in SPRITE_EFFECTS.items()}
+        # 文字显示模式 (typing 指令切换)
+        self.text_modes = dict(TEXT_MODES)
+        self.text_mode = "typewriter"    # 当前模式
+        self.text_mode_state = {}        # 模式私有状态
+        self.active_index = -1           # 键盘导航: 当前活动选项 (-1=无)
 
         # 确认对话框 (退出确认等)
         self.confirm_active = False
@@ -547,6 +735,24 @@ class Display:
             img = d.get("default")
         return img
 
+    def _update_sprite_effect(self, spr, dt: float) -> None:
+        """推进立绘登场/退场效果, 退场完成后隐藏。"""
+        if spr.effect is None:
+            return
+        kind, direction, t, duration, base, a0 = spr.effect
+        t += dt
+        k = min(1.0, t / duration) if duration > 0 else 1.0
+        func = self.sprite_effects.get(kind)
+        if func:
+            func(spr, k, direction, self)
+        if k >= 1.0:
+            spr.effect = None
+            if direction == "exit":
+                spr.visible = False
+                self.engine.emit("sprite_hide", id=spr.id)
+        else:
+            spr.effect[2] = t
+
     def _style_image_or_theme(self, style_key: str, theme_comp: str):
         """组件背景图取值: style 键 (none=禁用 / 路径=该图) > 主题图 > None。
 
@@ -649,6 +855,38 @@ class Display:
     # ==================================================================
     # 背景
     # ==================================================================
+    def register_sprite_effect(self, name: str, apply_func,
+                              duration: float = 0.6) -> None:
+        """注册自定义立绘登场/退场效果 (插件 API)。
+
+        apply_func(sprite, t, direction, display):
+            t ∈ [0,1] 进度; direction ∈ "enter"/"exit";
+            可修改 sprite 的 center/alpha/scale/angle 并调用 _recalc()。
+        """
+        self.sprite_effects[name] = apply_func
+        self.sprite_effect_durations[name] = duration
+        log.info(f"立绘效果已注册: {name}")
+
+    def set_text_mode(self, name: str) -> bool:
+        """切换对话框文字显示模式 (typing 指令)。"""
+        if name not in self.text_modes:
+            log.warning(f"文字模式 {name!r} 未注册")
+            return False
+        self.text_mode = name
+        self.text_mode_state = {}
+        self.engine.emit("text_mode_change", mode=name)
+        return True
+
+    def register_text_mode(self, name: str, mode: dict) -> None:
+        """注册自定义文字显示模式 (插件 API)。
+
+        mode: {"reset": fn(display), "update": fn(display, dt)}
+            reset  开始显示时调用 (可设 display.reveal 等)
+            update 每帧推进显示
+        """
+        self.text_modes[name] = mode
+        log.info(f"文字模式已注册: {name}")
+
     def register_transition(self, name: str, transition_cls) -> None:
         """注册自定义背景过渡效果 (供插件使用)。
 
@@ -707,10 +945,10 @@ class Display:
                 old.center = [cx, cy]
                 old.rect.center = (int(round(cx)), int(round(cy)))
                 old.props["pos"] = pos
-            if effect == "fade":
-                old.alpha = 0
-                old.target_alpha = 255
-                old.fade_speed = 255.0 / self.FADE_DURATION
+            if effect and effect in self.sprite_effects:
+                old._start_effect(
+                    effect, "enter",
+                    self.sprite_effect_durations.get(effect, 0.6))
             old.visible = True
             self.engine.emit("sprite_show", id=sid, path=old.props.get("image"))
             return True
@@ -732,11 +970,15 @@ class Display:
         spr = _Sprite(sid, img, (cx, cy),
                       props={"image": path, "pos": pos, "scale": scale,
                              "mode": mode, "pose": None})
-        if effect == "fade":
-            spr.alpha = 0
-            spr.target_alpha = 255
-            spr.fade_speed = 255.0 / self.FADE_DURATION
-        if sid not in self.sprites:
+        if effect and effect in self.sprite_effects:
+            spr._start_effect(
+                effect, "enter",
+                self.sprite_effect_durations.get(effect, 0.6))
+            # 立即应用起始状态, 避免首帧在目标位置闪现
+            self.sprite_effects[effect](spr, 0.0, "enter", self)
+        # 用 sprite_order 判断 (clear_sprites 会清 order 但保留 sprites 字典,
+        # 保证回标题/重开等场景下立绘能重新入绘制顺序)
+        if sid not in self.sprite_order:
             self.sprite_order.append(sid)
         self.sprites[sid] = spr
         spr.visible = True
@@ -798,10 +1040,16 @@ class Display:
                          vertical=vertical)
         return True
 
-    def hide_sprite(self, sid: str) -> bool:
+    def hide_sprite(self, sid: str, effect: str = None) -> bool:
         spr = self.sprites.get(sid)
         if spr is None:
             return False
+        if effect and effect in self.sprite_effects:
+            # 退场动画 (完成后自动隐藏)
+            spr._start_effect(
+                effect, "exit",
+                self.sprite_effect_durations.get(effect, 0.6))
+            return True
         spr.visible = False
         self.engine.emit("sprite_hide", id=sid)
         return True
@@ -944,6 +1192,11 @@ class Display:
         self._runs = self._rich.parse(text, base_size=st["text_size"],
                                       base_color=st["text_color"])
         self.reveal = 0.0
+        self.text_mode_state = {}
+        # 按当前文字模式初始化 (如 instant 直接显示全文)
+        mode = self.text_modes.get(self.text_mode)
+        if mode and mode.get("reset"):
+            mode["reset"](self)
         self.engine.emit("text_show", text=text, speaker=speaker)
 
     def clear_text(self) -> None:
@@ -972,6 +1225,7 @@ class Display:
             for t, _ in options
         ]
         self.choice_active = True
+        self.active_index = -1
         self.hover_index = -1
         n = len(self.choices)
         st = self.style
@@ -1083,6 +1337,7 @@ class Display:
         self.selection_caption = caption or ""
         self.selection_image = self.load_image(image) if image else None
         self.selection_active = True
+        self.active_index = -1
         w, h = self.width, self.height
         self.selection_anchor = (
             self._resolve_title_x(st.get("caption_x", "center")),
@@ -1124,6 +1379,35 @@ class Display:
                 return idx
         return -1
 
+    def move_active(self, delta: int) -> None:
+        """键盘导航: 上下移动活动选项 (循环; 无活动项时激活第一项)。"""
+        if self.selection_active and self.selection_rects:
+            n = len(self.selection_rects)
+        elif self.choice_active and self.choice_rects:
+            n = len(self.choice_rects)
+        else:
+            return
+        if n <= 0:
+            return
+        if self.active_index < 0:
+            self.active_index = 0
+        else:
+            self.active_index = (self.active_index + delta) % n
+
+    def sync_mouse_active(self) -> None:
+        """鼠标悬停同步活动选项 (键盘/鼠标状态一致)。
+
+        需在暂停状态下也调用 (ESC 菜单等), 故独立成方法。
+        """
+        if self.selection_active or self.choice_active:
+            mouse = pygame.mouse.get_pos()
+            if self.selection_active:
+                idx = self.hit_selection(mouse)
+            else:
+                idx = self.hit_choice(mouse)
+            if idx >= 0:
+                self.active_index = idx
+
     def close_selection(self) -> None:
         self.selection_active = False
         self.selection_items = []
@@ -1156,7 +1440,7 @@ class Display:
         mouse = pygame.mouse.get_pos()
         for idx, (label, action, cfg) in enumerate(self.selection_items):
             rect = self.selection_rects[idx]
-            hovered = rect.collidepoint(mouse)
+            hovered = rect.collidepoint(mouse) or idx == self.active_index
             # 标题画面用 title_buttons 主题图 (多按钮图组, 按索引取),
             # ESC 菜单用 menu_buttons 主题图; cfg 的 image 优先
             theme_comp = ("title_buttons" if self.title_active
@@ -1477,12 +1761,17 @@ class Display:
             if self.bg_alpha >= 255:
                 self.bg_alpha = 255
                 self.bg_fading = False
-        # 立绘
+        self.sync_mouse_active()
+
+        # 立绘 (登场/退场效果 + 移动/旋转动画)
         for spr in self.sprites.values():
+            self._update_sprite_effect(spr, dt)
             spr.update(dt)
-        # 打字机
+        # 文字显示 (按模式推进)
         if self.text_active and self.reveal < len(self.full_text):
-            self.reveal += self.TYPE_SPEED * dt
+            mode = self.text_modes.get(self.text_mode)
+            if mode and mode.get("update"):
+                mode["update"](self, dt)
             if self.reveal >= len(self.full_text):
                 self.engine.emit("text_complete")
         # 黑幕
@@ -1619,6 +1908,18 @@ class Display:
                         line_height=line_h,
                         max_lines=max(1, avail_h // line_h))
 
+        # terminal 光标: 逐字输入中, 已输入文本末尾闪烁竖条
+        if self.text_mode == "terminal" and self.reveal < len(self.full_text):
+            shown_runs = self._rich.truncate(self._runs, int(self.reveal))
+            lines = self._rich.layout(shown_runs, avail_w)
+            if lines:
+                last_w = self._rich.measure_line(lines[-1])
+                ly = text_y + name_h + (len(lines) - 1) * line_h
+                lx = text_x + last_w
+                if int(pygame.time.get_ticks() / 400) % 2 == 0:
+                    pygame.draw.rect(buf, st["arrow_color"],
+                                     (int(lx), int(ly), 2, line_h))
+
         # 推进箭头
         if self.reveal >= len(self.full_text):
             t = pygame.time.get_ticks() / 500
@@ -1634,7 +1935,7 @@ class Display:
         self.hover_index = -1
         for idx, (text, label) in enumerate(self.choices):
             rect = self.choice_rects[idx]
-            hovered = rect.collidepoint(mouse)
+            hovered = rect.collidepoint(mouse) or idx == self.active_index
             if hovered:
                 self.hover_index = idx
             img = None
