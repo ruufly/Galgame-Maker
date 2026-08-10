@@ -25,7 +25,9 @@ class RuntimeError_(Exception):
 class Runtime:
     def __init__(self, engine) -> None:
         self.engine = engine
-        self.vars = {}
+        self.vars = {}                # 游戏变量 (main:: 域默认, 键为裸名)
+        self.builtin_vars = {}        # 内置变量 (builtin:: 域, 引擎预置)
+        self.using_ns = set()         # using 导入的命名空间 (插件名)
         self.labels = {}
         self.statements = []          # 当前执行块
         self.ip = 0
@@ -101,6 +103,8 @@ class Runtime:
             "pause": self._cmd_pause,
             "resume": self._cmd_resume,
             "volume": self._cmd_volume,
+            "using": self._cmd_using,
+            "plugin": self._cmd_plugin,
         }
 
     # ==================================================================
@@ -139,6 +143,9 @@ class Runtime:
                 self._cmd_menu(stmt)
             elif stmt.op == "sound":
                 self._cmd_sound(stmt)
+            elif stmt.op == "using":
+                # 命名空间声明: 加载即生效 (顶层 using 不依赖执行流程)
+                self._cmd_using(stmt)
         self.engine.emit("script_load", path=path, name=script.name)
         log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
                  f"对象 {len(self.script_objects)} 个, "
@@ -453,18 +460,45 @@ class Runtime:
                 return
 
     def _dispatch(self, stmt: Statement):
-        handler = self._builtins.get(stmt.op)
+        op = stmt.op
+        # 显式命名空间: builtin::text / shake::shake
+        if "::" in op:
+            ns, name = op.split("::", 1)
+            if ns == "builtin":
+                handler = self._builtins.get(name)
+                if handler is not None:
+                    return handler(stmt)
+            else:
+                handler = self.engine.commands.get(name, ns)
+                if handler is not None:
+                    return handler(self.engine, stmt)
+            log.warning(f"第{stmt.line}行: 未知指令 {op!r}, 已跳过")
+            return None
+        # 无命名空间: builtin:: 优先
+        handler = self._builtins.get(op)
         if handler is not None:
             return handler(stmt)
-        # 插件自定义指令
-        if self.engine.commands.has(stmt.op):
-            result = self.engine.commands.call(stmt.op, stmt)
-            return result if result == BLOCK else None
+        # main:: 域 (引擎 API 直接注册)
+        handler = self.engine.commands.get(op, "main")
+        if handler is not None:
+            return handler(self.engine, stmt)
+        # 已 using 导入的插件命名空间
+        for ns in list(self.using_ns):
+            handler = self.engine.commands.get(op, ns)
+            if handler is not None:
+                return handler(self.engine, stmt)
         # 裸词: 尝试 widgets 模板实例化
-        if not stmt.args and not stmt.kwargs and stmt.op in self.widgets_templates:
-            self._instantiate_widget(stmt.op)
+        if not stmt.args and not stmt.kwargs and op in self.widgets_templates:
+            self._instantiate_widget(op)
             return None
-        log.warning(f"第{stmt.line}行: 未知指令 {stmt.op!r}, 已跳过")
+        # 报错: 插件指令需 using 或显式命名空间
+        loc = self.engine.commands.find(op)
+        if loc:
+            hint = "、".join(f"{ns}::{op}" for ns, _ in loc)
+            log.warning(f"第{stmt.line}行: 指令 {op!r} 位于 {hint}, "
+                        f"需 using 对应命名空间或用完整命名空间调用")
+        else:
+            log.warning(f"第{stmt.line}行: 未知指令 {op!r}, 已跳过")
         return None
 
     def _end_script(self) -> None:
@@ -1325,11 +1359,91 @@ class Runtime:
         self.advance()
 
     # -- 变量与条件 -----------------------------------------------------
+    # ==================================================================
+    # 命名空间系统
+    # ==================================================================
+    _NS_RE = r"[A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*(?:::[A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)?"
+
+    def _cmd_using(self, stmt):
+        """using <命名空间> [...] —— 导入命名空间 (类似 C++ using)。
+
+        之后该命名空间的指令可省略前缀直接调用。示例: ``using shake``
+        """
+        for arg in stmt.args:
+            ns = str(arg).strip()
+            if ns:
+                self.using_ns.add(ns)
+        self.engine.emit("using", namespaces=list(self.using_ns))
+        return None
+
+    def _cmd_plugin(self, stmt):
+        """运行时插件管理: plugin load <插件名...> / plugin unload <插件名...>
+        / plugin list
+
+        装载后自动加入 using 命名空间; 卸载时清指令/事件/订阅。
+        """
+        if not stmt.args:
+            return None
+        action = stmt.args[0]
+        names = [str(a) for a in stmt.args[1:]]
+        pm = self.engine.plugins
+        if action in ("load", "enable"):
+            directory = pm.directory
+            if not directory:
+                log.warning(f"第{stmt.line}行: 插件目录未知, 请先执行 discover")
+                return None
+            for name in names:
+                path = os.path.join(directory, name + ".py")
+                if not os.path.isfile(path):
+                    log.warning(f"第{stmt.line}行: 插件文件不存在: {path}")
+                    continue
+                mod_name = "gm_plugin_" + name
+                if mod_name in pm._modules:
+                    log.info(f"插件已加载, 跳过: {name}")
+                    continue
+                if pm.load_module_from_path(mod_name, path):
+                    self.using_ns.add(name)
+                    log.info(f"插件已装载: {name}")
+            return None
+        if action in ("unload", "disable"):
+            for name in names:
+                mod_name = "gm_plugin_" + name
+                if mod_name in pm._modules:
+                    pm.unload_module(mod_name)
+                    self.using_ns.discard(name)
+                    log.info(f"插件已卸载: {name}")
+                else:
+                    log.warning(f"第{stmt.line}行: 插件未加载: {name}")
+            return None
+        if action == "list":
+            loaded = sorted(m.replace("gm_plugin_", "")
+                            for m in pm._modules)
+            log.info("已加载插件: " + (", ".join(loaded) or "无"))
+            return None
+        log.warning(f"第{stmt.line}行: 未知插件操作 {action!r} (load/unload/list)")
+        return None
+
+    def _norm_var_name(self, name: str) -> str:
+        """变量名规范化: main::x -> x (main 域键为裸名); 其余保留。"""
+        if name.startswith("main::"):
+            return name[len("main::"):]
+        return name
+
+    def _resolve_var(self, name: str, default=None):
+        """变量解析: 显式命名空间按域查; 无命名空间先 main:: 再 builtin::。"""
+        if "::" in name:
+            return self.vars.get(self._norm_var_name(name), default)
+        if name in self.vars:
+            return self.vars[name]
+        if name in self.builtin_vars:
+            return self.builtin_vars[name]
+        return default
+
     def _cmd_set(self, stmt):
         if len(stmt.args) < 2:
             log.warning(f"第{stmt.line}行: set 需要 变量 = 值")
             return None
-        name = stmt.args[0]
+        name = self._norm_var_name(stmt.args[0])
         expr = " ".join(stmt.args[1:])
         expr = expr.lstrip("=").strip()
         self.vars[name] = self.evaluate(expr)
@@ -1362,9 +1476,9 @@ class Runtime:
             return True
         if expr in ("false", "False"):
             return False
-        # 翻译 $var -> __vars__['var'] (裸变量名直接由命名空间解析)
+        # 翻译 $var -> __vars__['var'] (支持命名空间: $main::x / $plugin::x)
         translated = re.sub(
-            r"\$([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)",
+            r"\$(" + self._NS_RE + r")",
             r"__vars__['\1']", expr)
         # 安全检查: 禁止函数调用与魔法属性 (__vars__ 为内部合法名)
         if re.search(r"[A-Za-z_\u4e00-\u9fff]\s*\(", translated):
@@ -1372,7 +1486,14 @@ class Runtime:
         if re.search(r"\b__(?!vars__)\w+__\b", translated):
             raise RuntimeError_(f"表达式包含非法符号: {expr!r}")
         ns = dict(self.vars)
-        ns["__vars__"] = self.vars
+        # 命名空间别名: main::x -> x; builtin:: 域合并
+        for k in list(self.vars):
+            if "::" not in k and f"main::{k}" not in ns:
+                ns[f"main::{k}"] = self.vars[k]
+        for k, v in self.builtin_vars.items():
+            ns.setdefault(k, v)
+            ns.setdefault(f"builtin::{k}", v)
+        ns["__vars__"] = ns
         ns["true"] = ns["True"] = True
         ns["false"] = ns["False"] = False
         ns["None"] = None
@@ -1490,11 +1611,11 @@ class Runtime:
     # 文本插值
     # ==================================================================
     def _interp(self, text: str) -> str:
-        """替换 $var 变量; $$ 转义为字面 $。"""
+        """替换 $var 变量 (支持 $ns::name); $$ 转义为字面 $。"""
         def repl(m):
-            return str(self.vars.get(m.group(1), ""))
+            return str(self._resolve_var(m.group(1), ""))
         text = text.replace("$$", "\x00")
-        text = re.sub(r"\$([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*)", repl, text)
+        text = re.sub(r"\$(" + self._NS_RE + r")", repl, text)
         return text.replace("\x00", "$")
 
     # ==================================================================

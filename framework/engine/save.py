@@ -47,6 +47,31 @@ class SaveManager:
             log.warning(f"读档失败 {path}: {exc}")
             return None
 
+    def set_meta(self, slot: int, key: str, value) -> None:
+        """写入存档元数据 (如快照路径), 不覆盖游戏状态。"""
+        data = self.load(slot)
+        if data is None:
+            return
+        data[key] = value
+        data["_saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(self._path(slot), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def get_meta(self, slot: int, key: str, default=None):
+        """读取存档元数据。"""
+        data = self.load(slot)
+        if data is None:
+            return default
+        return data.get(key, default)
+
+    def meta_path(self, slot: int, rel: str) -> str:
+        """把存档元数据里的相对路径解析为绝对路径 (基于存档目录)。"""
+        if not rel:
+            return None
+        if os.path.isabs(rel):
+            return rel
+        return os.path.join(os.path.dirname(self._path(slot)), rel)
+
     def _read_raw(self, slot: int) -> dict:
         """直接读取槽位文件 (不发 load 事件, 供列表展示用)。"""
         path = self._path(slot)
@@ -76,6 +101,7 @@ class SaveManager:
                 "time": data.get("_saved_at", ""),
                 "label": data.get("label") or "",
                 "preview": str(preview)[:24],
+                "screenshot": data.get("screenshot") or "",
                 "empty": False,
             })
         return out

@@ -1,62 +1,77 @@
-"""指令注册表: 插件可以通过它向 DSL 添加自定义指令。"""
+"""指令注册表: 插件可以通过它向 DSL 添加自定义指令 (支持命名空间)。
+
+命名空间规则:
+    builtin::<指令>      引擎内置指令
+    main::<指令>         项目自定义 (目前仅引擎 API 直接注册时)
+    <插件名>::<指令>     插件注册的指令 (无 using 时必须显式命名空间)
+    无命名空间: 先查 main:: 再查 builtin::, 再查已 using 的插件
+"""
 
 from typing import Any, Callable, Dict, Optional
 
 
 class CommandRegistry:
-    """DSL 指令注册表。
-
-    引擎执行脚本时, 遇到一条语句:
-
-    1. 先查内置指令表 (runtime 内部实现);
-    2. 未命中则查本注册表 (插件指令);
-    3. 仍未命中则输出警告并跳过该行。
-
-    插件用法::
-
-        @engine.commands.register("shake")
-        def shake(engine, stmt, **kw):
-            engine.display.shake(0.3, 8)
-
-    指令函数的签名约定::
-
-        def handler(engine, stmt, **kwargs) -> Optional[str]:
-            # engine : GameEngine 实例
-            # stmt   : 解析后的 Statement (含 .args / .kwargs / .line)
-            # 返回 None        -> 指令执行完毕, 继续下一条
-            # 返回 "block"     -> 阻塞, 等待引擎外部事件 (如点击) 后
-            #                    由 handler 自己调用 engine.runtime.advance()
-    """
+    """DSL 指令注册表 (按命名空间分组)。"""
 
     def __init__(self, engine=None) -> None:
         self._engine = engine
-        self._commands: Dict[str, Callable] = {}
+        self._by_ns: Dict[str, Dict[str, Callable]] = {"main": {}, "builtin": {}}
 
     # ------------------------------------------------------------------
-    def register(self, name: str, handler: Callable = None):
-        """注册指令, 支持两种形式: ``register("x", fn)`` 或 ``@register("x")``。"""
+    def register(self, name: str, handler: Callable = None,
+                 ns: str = "main"):
+        """注册指令, 支持 ``register("x", fn)`` 或 ``@register("x")``。"""
         if handler is None:
             def deco(fn: Callable) -> Callable:
-                self._commands[name] = fn
+                self._by_ns.setdefault(ns, {})[name] = fn
                 return fn
             return deco
         if not callable(handler):
             raise TypeError(f"指令 {name} 的处理器必须是可调用对象")
-        self._commands[name] = handler
+        self._by_ns.setdefault(ns, {})[name] = handler
         return handler
 
-    def unregister(self, name: str) -> None:
-        self._commands.pop(name, None)
+    def register_builtin(self, name: str, handler: Callable) -> None:
+        """注册内置指令 (builtin:: 命名空间)。"""
+        self._by_ns["builtin"][name] = handler
 
-    def has(self, name: str) -> bool:
-        return name in self._commands
+    def unregister(self, name: str, ns: str = "main") -> None:
+        d = self._by_ns.get(ns, {})
+        d.pop(name, None)
 
-    def names(self) -> list:
-        return list(self._commands.keys())
+    def has(self, name: str, ns: str = None) -> bool:
+        """ns=None 时检查所有命名空间 (代码调用宽松); DSL 层应传具体 ns。"""
+        if ns is not None:
+            return name in self._by_ns.get(ns, {})
+        return any(name in d for d in self._by_ns.values())
 
-    def call(self, name: str, stmt: Any) -> Optional[str]:
-        """调用插件指令。找不到时返回 None 并由调用方继续兜底。"""
-        handler = self._commands.get(name)
+    def get(self, name: str, ns: str = None):
+        if ns is not None:
+            return self._by_ns.get(ns, {}).get(name)
+        for d in self._by_ns.values():
+            if name in d:
+                return d[name]
+        return None
+
+    def find(self, name: str) -> list:
+        """找指令存在于哪些命名空间, 返回 [(ns, name), ...] (提示用)。"""
+        out = []
+        for ns, d in self._by_ns.items():
+            if name in d:
+                out.append((ns, name))
+        return out
+
+    def names(self, ns: str = None) -> list:
+        if ns is not None:
+            return list(self._by_ns.get(ns, {}).keys())
+        out = []
+        for d in self._by_ns.values():
+            out.extend(d.keys())
+        return out
+
+    def call(self, name: str, stmt: Any, ns: str = None) -> Optional[str]:
+        """调用指令 (ns=None 时按注册顺序在任一命名空间找)。"""
+        handler = self.get(name, ns)
         if handler is None:
             return None
         return handler(self._engine, stmt)

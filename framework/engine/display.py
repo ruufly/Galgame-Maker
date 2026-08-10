@@ -583,6 +583,7 @@ class Display:
         self.text_mode = "typewriter"    # 当前模式
         self.text_mode_state = {}        # 模式私有状态
         self.active_index = -1           # 键盘导航: 当前活动选项 (-1=无)
+        self._slot_thumb_provider = None  # 插件注册: 槽位缩略图提供者
 
         # 确认对话框 (退出确认等)
         self.confirm_active = False
@@ -1394,6 +1395,22 @@ class Display:
         else:
             self.active_index = (self.active_index + delta) % n
 
+    def capture(self):
+        """截图当前游戏画面, 返回 Surface 副本 (插件快照用)。"""
+        screen = self.engine.screen
+        try:
+            return screen.copy()
+        except Exception:
+            return pygame.Surface((self.width, self.height))
+
+    def register_slot_thumbnail_provider(self, fn) -> None:
+        """注册槽位缩略图提供者 (存档/读档界面调用)。
+
+        fn(slot_index, slot_info) -> Surface | None
+        slot_info 是存档数据 dict (含 meta 字段)。
+        """
+        self._slot_thumb_provider = fn
+
     def sync_mouse_active(self) -> None:
         """鼠标悬停同步活动选项 (键盘/鼠标状态一致)。
 
@@ -1554,19 +1571,42 @@ class Display:
                 else (140, 140, 160),
                 border_width=2, radius=8)
             slot_no = info.get("slot", idx) + 1
+            tx = rect.x + 12
+            tw = rect.w - 24
+            # 槽位缩略图 (插件注册的 provider); 高度自动适配槽位, 防止溢出
+            thumb = None
+            if self._slot_thumb_provider is not None:
+                try:
+                    thumb = self._slot_thumb_provider(idx, info)
+                except Exception:
+                    thumb = None
+            if thumb is not None:
+                ow, oh = thumb.get_size()
+                th = max(26, min(oh, rect.h - 12))
+                tw_ = max(40, int(th * ow / max(1, oh)))
+                buf.blit(
+                    pygame.transform.smoothscale(thumb, (tw_, th)),
+                    (rect.x + 8, rect.y + (rect.h - th) // 2))
+                tx = rect.x + 10 + tw_ + 6
+                tw = max(50, rect.w - 18 - tw_ - 6)
+            # 文字字号与内容随可用宽度自适应 (避免换行叠字)
+            size1 = 20 if tw >= 110 else 16
+            size2 = 18 if tw >= 110 else 14
             if empty:
                 text1 = f"槽位 {slot_no}"
                 text2 = "（空存档）"
                 color = (150, 150, 160)
             else:
-                text1 = f"槽位 {slot_no}   {info.get('time', '')}"
+                time_str = info.get("time", "")
+                text1 = f"槽位 {slot_no}"
+                if tw >= 140 and time_str:
+                    text1 += f"  {time_str}"
                 text2 = str(info.get("preview") or info.get("label") or "")
                 color = (235, 235, 240)
-            self._rich.draw(buf, self._rich.parse(text1, base_size=20),
-                            rect.x + 12, rect.y + 8, rect.w - 24)
-            self._rich.draw(buf, self._rich.parse(text2, base_size=18),
-                            rect.x + 12, rect.y + 34, rect.w - 24,
-                            max_lines=2)
+            self._rich.draw(buf, self._rich.parse(text1, base_size=size1),
+                            tx, rect.y + 10, tw, max_lines=1)
+            self._rich.draw(buf, self._rich.parse(text2, base_size=size2),
+                            tx, rect.y + 10 + size1 + 4, tw, max_lines=1)
         # 返回按钮
         back = self.slot_menu_back_rect
         hovered = back.collidepoint(mouse)

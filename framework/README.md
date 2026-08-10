@@ -470,6 +470,23 @@ class MyAction(Plugin):
 引擎 API: `engine.handle_error(exc, level="error")` /
 `engine.copy_to_clipboard(text)`。
 
+### 命名空间系统
+
+```gal
+# 三个域: builtin:: (引擎内置) / main:: (项目文件) / <插件名>:: (插件)
+builtin::set x = 1          # 显式命名空间调用内置指令
+shake::shake 0.3            # 显式调用插件 shake 的指令 (无 using 时必须)
+using shake                 # 类似 C++ using: 之后 shake 可省略前缀
+plugin load custom_actions  # 运行时装载插件 (自动加入 using)
+plugin unload shake         # 运行时卸载插件 (清指令/事件/订阅)
+plugin list                 # 列出已加载插件
+# 变量: set love = 1 归 main::; $main::love / $love 均指向它;
+#       $plugin::x 访问插件变量; 无命名空间解析顺序: main:: -> builtin::
+#       找不到则报错/跳过 (指令会提示所在命名空间)
+```
+
+插件指令/变量默认必须 `<插件名>::` 访问; `using <插件名>` 后可省略前缀。
+
 ### 音频 API (插件/代码调用, 名称可为注册名或路径)
 
 ```python
@@ -480,6 +497,16 @@ engine.play_voice(name) / engine.stop_voice()
 engine.set_music_volume(v) / engine.set_sfx_volume(v)
 engine.stop_all_sounds(fade) / engine.pause_all_sounds(fade)
 ```
+
+存档快照 (插件 `slot_thumbnails.py` 示例):
+```python
+engine.display.capture()                    # 截图当前画面 -> Surface
+engine.save.set_meta(slot, key, value)      # 写存档元数据 (不覆盖游戏状态)
+engine.save.get_meta(slot, key, default)
+engine.save.meta_path(slot, rel)            # 相对路径 -> 存档目录绝对路径
+engine.display.register_slot_thumbnail_provider(fn)  # 槽位界面缩略图绘制
+```
+槽位缩略图存存档目录 (相对路径), 存档数据 "screenshot" 字段记录相对名。
 
 BGM 事件: `music_play`/`music_pause`/`music_resume`/`music_stop`
 (插件 `bgm_notice.py` 监听它们弹出通知; 曲名取文件名)。UI 音效只在

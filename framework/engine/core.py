@@ -105,6 +105,7 @@ class GameEngine:
         self.ui_hover_sound = None      # 活动选项变化时播放 (菜单/choice 配置)
         self._default_ui_click = None   # window 默认点击音 (临时覆盖后恢复用)
         self._last_active_index = -1
+        self._last_game_frame = None   # 最近一次纯游戏画面 (存档快照用)
 
         # 错误处理: 记录日志 + 游戏内弹窗
         from framework.engine.error import ErrorHandler
@@ -500,6 +501,11 @@ class GameEngine:
             self._last_active_index = -1
 
     def draw(self) -> None:
+        # 记录最近一次纯游戏画面 (无覆盖层时; 供存档快照插件截图)
+        d = self.display
+        if not (d.slot_menu_active or d.title_active or d.selection_active
+                or d.confirm_active or d.choice_active or d.error_active):
+            self._last_game_frame = self.screen.copy()
         self.display.draw(self.screen)
         # 插件渲染钩子
         self.emit("draw_overlay", surface=self.screen, dt=0)
@@ -823,6 +829,10 @@ class GameEngine:
     def pause_all_sounds(self, fade: float = None) -> None:
         """全局暂停所有声音。"""
         self.audio.pause_all(fade)
+
+    def get_last_game_frame(self):
+        """最近一次纯游戏画面 Surface (覆盖层弹出前的帧, 存档快照用)。"""
+        return self._last_game_frame
 
     def _play_ui_sound(self, kind: str = "click") -> None:
         """播放 UI 交互音效 (click=按下 / hover=活动项变化)。"""

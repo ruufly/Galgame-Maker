@@ -2551,6 +2551,170 @@ def test_audio_api():
         pygame.quit()
 
 
+def test_namespaces():
+    print("== 命名空间系统 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test48")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        # 顶层 using 静态生效 (加载即导入, 不依赖执行流程)
+        check("顶层 using 加载生效",
+              "shake" in rt.using_ns and "custom_actions" in rt.using_ns,
+              str(sorted(rt.using_ns)))
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"),
+                                {"except": ["fps_overlay"]})
+        # 插件指令注册在插件命名空间 (插件文件名)
+        check("插件指令带命名空间",
+              engine.commands.has("shake", "shake")
+              and engine.commands.has("do_action", "custom_actions"),
+              f"shake_ns={engine.commands.find('shake')} "
+              f"do_action_ns={engine.commands.find('do_action')}")
+        # 无 using 时裸名调用报提示 (不执行不崩溃)
+        rt.using_ns.clear()
+        rt._dispatch(Statement(op="shake", args=["0.3"], line=0))
+        # 显式命名空间调用
+        rt._dispatch(Statement(op="shake::shake", args=["0.3"], line=0))
+        # using 后裸名可用
+        rt._cmd_using(Statement(op="using", args=["shake"], line=0))
+        check("using 导入", "shake" in rt.using_ns)
+        rt._dispatch(Statement(op="shake", args=["0.3"], line=0))
+        check("using 后指令可用", True)
+        # builtin:: 显式命名空间
+        rt._dispatch(Statement(op="builtin::set", args=["b", "1"], line=0))
+        check("builtin::set 执行", rt.vars.get("b") == 1)
+
+        # 变量命名空间
+        rt._cmd_set(Statement(op="set", args=["main::love", "=", "5"], line=0))
+        check("main:: 变量归 main 域", rt.vars.get("love") == 5,
+              str(rt.vars.get("love")))
+        rt._cmd_set(Statement(op="set", args=["plugin::cnt", "=", "3"], line=0))
+        check("插件变量保留前缀键", rt.vars.get("plugin::cnt") == 3)
+        check("解析 main::love", rt._resolve_var("main::love") == 5)
+        check("解析裸名 love", rt._resolve_var("love") == 5)
+        rt.builtin_vars["version"] = "1.0"
+        check("builtin 兜底", rt._resolve_var("version") == "1.0")
+        check("未知名返回默认", rt._resolve_var("nope", "D") == "D")
+        check("evaluate $main::love", rt.evaluate("$main::love + 1") == 6)
+        check("evaluate 裸名", rt.evaluate("love + 1") == 6)
+        check("插值 $plugin::cnt", rt._interp("n=$plugin::cnt") == "n=3")
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_slot_thumbnails():
+    print("== 存档快照插件 ==")
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test49")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        # API: capture
+        surf = d.capture()
+        check("capture API", surf is not None
+              and surf.get_size() == (640, 360))
+        # API: set_meta / get_meta / meta_path (相对路径)
+        rt.load_script(demo)
+        rt.start()
+        snap = rt.snapshot()
+        engine.save.save(0, snap)
+        engine.save.set_meta(0, "screenshot", "thumb_slot1.png")
+        check("set_meta", engine.save.get_meta(0, "screenshot")
+              == "thumb_slot1.png")
+        abs_p = engine.save.meta_path(0, "thumb_slot1.png")
+        check("meta 相对路径解析", abs_p and abs_p.endswith(
+            os.path.join("save", "thumb_slot1.png")), str(abs_p))
+
+        # 插件加载: provider 注册
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"),
+                                {"only": ["slot_thumbnails"]})
+        check("provider 已注册", d._slot_thumb_provider is not None)
+
+        # 纯游戏画面帧 (存档快照来源): 先推进出标题菜单
+        engine.on_click(d.title_rects[0].center)   # 开始游戏
+        engine.draw()   # 无覆盖层: 记录游戏帧
+        check("游戏帧已记录", engine.get_last_game_frame() is not None)
+        # 打开槽位面板后帧不变 (快照不截面板)
+        d.show_slot_menu(engine.save.list_slots(), "load")
+        engine.draw()
+        check("面板期间帧保持", engine.get_last_game_frame() is not None
+              and engine.get_last_game_frame().get_size() == (640, 360))
+
+        # save 事件: 自动生成缩略图 (相对路径, 来自游戏帧)
+        engine.save.save(0, rt.snapshot())
+        rel = engine.save.get_meta(0, "screenshot")
+        check("存档自动快照", rel == "thumb_slot1.png", str(rel))
+        thumb_p = engine.save.meta_path(0, rel)
+        check("快照文件存在", os.path.isfile(thumb_p))
+        check("快照不存绝对路径", ":" not in rel and not rel.startswith("/"),
+              str(rel))
+        # list_slots 携带 screenshot 字段
+        slots = engine.save.list_slots()
+        check("list_slots 带快照字段", slots[0].get("screenshot")
+              == "thumb_slot1.png", str(slots[0]))
+        # provider 真实返回缩略图
+        thumb = d._slot_thumb_provider(0, slots[0])
+        check("provider 返回缩略图", thumb is not None
+              and thumb.get_size() == (150, 84),
+              str(thumb and thumb.get_size()))
+        # 槽位界面绘制 (含缩略图) 不崩
+        d.show_slot_menu(slots, "load")
+        engine.draw()
+        check("槽位界面绘制快照", True)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
+def test_plugin_cmd():
+    print("== 运行时插件管理语句 ==")
+    from framework.engine.parser import Statement
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test50")
+    d = engine.display
+    rt = engine.runtime
+    try:
+        rt.load_script(demo)
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"),
+                                {"except": ["fps_overlay"]})
+        # 卸载
+        rt._cmd_plugin(Statement(op="plugin", args=["unload", "shake"],
+                                 line=0))
+        check("卸载后指令消失", not engine.commands.has("shake", "shake")
+              and "shake" not in rt.using_ns)
+        # 装载 (自动加入 using)
+        rt._cmd_plugin(Statement(op="plugin", args=["load", "shake"], line=0))
+        check("装载后指令恢复", engine.commands.has("shake", "shake")
+              and "shake" in rt.using_ns)
+        # 裸名调用可用
+        rt._dispatch(Statement(op="shake", args=["0.2"], line=0))
+        check("装载后可裸名调用", True)
+        # list
+        rt._cmd_plugin(Statement(op="plugin", args=["list"], line=0))
+        # 卸载类插件: slot_thumbnails -> provider 清理
+        engine.plugins.load_module_from_path(
+            "gm_plugin_slot_thumbnails",
+            os.path.join(_ROOT, "framework", "plugins",
+                         "slot_thumbnails.py"))
+        check("类插件装载", d._slot_thumb_provider is not None)
+        rt._cmd_plugin(Statement(op="plugin", args=["unload",
+                                                    "slot_thumbnails"],
+                                 line=0))
+        check("类插件卸载清 provider", d._slot_thumb_provider is None)
+        # 装载不存在的插件不崩
+        rt._cmd_plugin(Statement(op="plugin", args=["load", "nope"], line=0))
+        check("装载不存在插件容错", True)
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -2565,6 +2729,7 @@ def test_plugins_and_save():
     with open(path, "w", encoding="utf-8") as f:
         f.write("start:\n    shake 0.2 5\n    set ok = 1\n")
     rt.load_script(path)
+    rt.using_ns.add("shake")   # 脚本等效 using shake (插件指令命名空间)
     rt.start()
     check("shake 后继续执行", rt.vars.get("ok") == 1)
     check("shake 状态被设置", engine.display.shake_time > 0)
@@ -2803,6 +2968,24 @@ def main():
         test_audio_api()
     except Exception as exc:
         print(f"  [ERROR] 音频 API 测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_namespaces()
+    except Exception as exc:
+        print(f"  [ERROR] 命名空间测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_slot_thumbnails()
+    except Exception as exc:
+        print(f"  [ERROR] 存档快照测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_plugin_cmd()
+    except Exception as exc:
+        print(f"  [ERROR] 插件管理语句测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

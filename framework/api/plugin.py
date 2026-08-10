@@ -87,14 +87,22 @@ class Plugin:
         return deco
 
     def add_command(self, name: str):
-        """实例方法版指令注册, 返回装饰器。"""
+        """实例方法版指令注册 (命名空间 = 插件名), 返回装饰器。"""
+        ns = getattr(self, "name", None) or "main"
         def deco(fn):
-            self.engine.commands.register(name, fn)
+            self.engine.commands.register(name, fn, ns=ns)
             self._command_handlers.append((name, fn))
             return fn
         return deco
 
     def _cleanup(self) -> None:
+        ns = getattr(self, "name", None) or "main"
+        for name, fn in list(self._command_handlers):
+            try:
+                self.engine.commands.unregister(name, ns=ns)
+            except Exception:
+                pass
+        self._command_handlers.clear()
         for fn in self._event_handlers:
             # 取消订阅 (按函数对象移除)
             for ev in list(self.engine.events.names()):
@@ -112,6 +120,7 @@ class PluginManager:
     def __init__(self, engine) -> None:
         self.engine = engine
         self.plugins: List[Plugin] = []
+        self.directory = None   # 最近一次 discover 的插件目录 (运行时装载用)
         self._modules = {}   # name -> module
         self._classes = {}   # name -> Plugin 类
         self._mod_regs = {}  # 模块级装饰器注册追踪: name -> {commands, events}
@@ -127,6 +136,7 @@ class PluginManager:
         config = config or {}
         only = config.get("only") or []
         except_ = config.get("except") or []
+        self.directory = directory
         loaded = []
         if not os.path.isdir(directory):
             return loaded
@@ -164,7 +174,7 @@ class PluginManager:
     def load(self, module) -> Optional[Plugin]:
         """加载一个已导入的模块 (或其内的 Plugin 子类)。"""
         if inspect.ismodule(module):
-            self._register_from_module(module)
+            self._register_from_module(module, mod_name)
             return None
         return self._instantiate(module)
 
@@ -189,7 +199,9 @@ class PluginManager:
                 self._mod_regs[mod_name]["events"].append((ev, fn))
         cmd = getattr(fn, _COMMAND_ATTR, None)
         if cmd is not None:
-            self.engine.commands.register(cmd, fn)
+            # 插件命名空间 = 插件文件名 (gm_plugin_shake -> shake)
+            ns = (mod_name or "main").replace("gm_plugin_", "")
+            self.engine.commands.register(cmd, fn, ns=ns)
             if mod_name:
                 self._mod_regs.setdefault(mod_name, {"commands": [],
                                                      "events": []})
@@ -229,14 +241,23 @@ class PluginManager:
         self._classes.pop(plugin.name, None)
 
     def unload_module(self, mod_name: str) -> None:
-        """清理模块级装饰器注册的指令与事件。"""
+        """卸载整个插件模块: 类实例 + 模块级指令/事件/订阅。"""
+        # 先卸载该模块定义的 Plugin 类实例
+        for inst in list(self.plugins):
+            try:
+                mod = inspect.getmodule(type(inst))
+                if mod is not None and getattr(mod, "__name__", "") == mod_name:
+                    self.unload(inst)
+            except Exception:
+                pass
+        # 再清模块级注册 (指令/事件/模块表)
         regs = self._mod_regs.pop(mod_name, None)
-        if not regs:
-            return
-        for cmd_name in regs.get("commands", []):
-            self.engine.commands.unregister(cmd_name)
-        for ev, fn in regs.get("events", []):
-            self.engine.events.off(ev, fn)
+        if regs:
+            ns = mod_name.replace("gm_plugin_", "")
+            for cmd_name in regs.get("commands", []):
+                self.engine.commands.unregister(cmd_name, ns=ns)
+            for ev, fn in regs.get("events", []):
+                self.engine.events.off(ev, fn)
         self._modules.pop(mod_name, None)
 
     def unload_all(self) -> None:
