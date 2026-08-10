@@ -2715,6 +2715,47 @@ def test_plugin_cmd():
         pygame.quit()
 
 
+def test_latex_typing():
+    print("== LaTeX 与逐字模式兼容 ==")
+    engine = GameEngine(640, 360, "test51")
+    d = engine.display
+    try:
+        d.show_text("公式 {m}\\frac{1}{2}{/m} 测试")
+        # 逻辑长度: "公式 " 3 + 公式 1 + " 测试" 3 = 7
+        check("逻辑长度", d._logic_len == 7, str(d._logic_len))
+        # 推进到公式前 (reveal=3): 公式未出现
+        d.reveal = 3
+        shown = d._rich.truncate(d._runs, int(d.reveal))
+        check("公式前不显示", not [r for r in shown if r.math])
+        # reveal=4: 公式整体出现且源码完整
+        d.reveal = 4
+        shown = d._rich.truncate(d._runs, int(d.reveal))
+        math_runs = [r for r in shown if r.math]
+        check("公式整体出现", len(math_runs) == 1
+              and math_runs[0].text == "\\frac{1}{2}",
+              str([r.text for r in math_runs]))
+        # 完成判定按逻辑长度
+        d.reveal = d._logic_len
+        check("逐字完成判定", d.text_done())
+        # typewriter 持续推进到完成 (含公式)
+        d.show_text("质量能量公式 {m}E=mc^2{/m}")
+        for _ in range(400):
+            d.update(1 / 60)
+        check("typewriter 完成含公式", d.text_done())
+        # terminal 光标不崩 (含公式文本)
+        d.set_text_mode("terminal")
+        d.show_text("终端公式 {m}ax^2+bx+c{/m}")
+        for _ in range(400):
+            d.update(1 / 60)
+        engine = d.engine
+        engine.draw()
+        check("terminal 含公式绘制", d.text_done())
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -2986,6 +3027,12 @@ def main():
         test_plugin_cmd()
     except Exception as exc:
         print(f"  [ERROR] 插件管理语句测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_latex_typing()
+    except Exception as exc:
+        print(f"  [ERROR] LaTeX 逐字测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

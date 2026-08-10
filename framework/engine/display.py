@@ -546,6 +546,7 @@ class Display:
         self.text_active = False
         self.speaker = None
         self.full_text = ""
+        self._logic_len = 0   # 逻辑字符数 (公式计 1)
         self._runs = []
         self.reveal = 0.0
         self._font_size = 26
@@ -1178,7 +1179,7 @@ class Display:
         self.choice_active = False
         if data.get("blocked") == "text":
             self.show_text(data.get("text", ""), data.get("speaker"))
-            self.reveal = len(self.full_text)   # 读档后文本完整显示
+            self.reveal = self._logic_len   # 读档后文本完整显示
         elif data.get("blocked") == "choice":
             self.show_choices(data.get("choices", []) or [])
 
@@ -1192,6 +1193,8 @@ class Display:
         st = self.style
         self._runs = self._rich.parse(text, base_size=st["text_size"],
                                       base_color=st["text_color"])
+        # 逻辑字符数 (公式计 1): 打字机/逐字模式按逻辑长度推进与完成
+        self._logic_len = self._rich.logic_len(self._runs)
         self.reveal = 0.0
         self.text_mode_state = {}
         # 按当前文字模式初始化 (如 instant 直接显示全文)
@@ -1206,11 +1209,11 @@ class Display:
         self.full_text = ""
 
     def text_done(self) -> bool:
-        return not self.text_active or self.reveal >= len(self.full_text)
+        return not self.text_active or self.reveal >= self._logic_len
 
     def finish_text(self) -> None:
         if self.text_active:
-            self.reveal = len(self.full_text)
+            self.reveal = self._logic_len
 
     # ==================================================================
     # 选项
@@ -1808,11 +1811,11 @@ class Display:
             self._update_sprite_effect(spr, dt)
             spr.update(dt)
         # 文字显示 (按模式推进)
-        if self.text_active and self.reveal < len(self.full_text):
+        if self.text_active and self.reveal < self._logic_len:
             mode = self.text_modes.get(self.text_mode)
             if mode and mode.get("update"):
                 mode["update"](self, dt)
-            if self.reveal >= len(self.full_text):
+            if self.reveal >= self._logic_len:
                 self.engine.emit("text_complete")
         # 黑幕
         if abs(self.fade_alpha - self.fade_target) > 0.5:
@@ -1949,7 +1952,7 @@ class Display:
                         max_lines=max(1, avail_h // line_h))
 
         # terminal 光标: 逐字输入中, 已输入文本末尾闪烁竖条
-        if self.text_mode == "terminal" and self.reveal < len(self.full_text):
+        if self.text_mode == "terminal" and self.reveal < self._logic_len:
             shown_runs = self._rich.truncate(self._runs, int(self.reveal))
             lines = self._rich.layout(shown_runs, avail_w)
             if lines:
@@ -1961,7 +1964,7 @@ class Display:
                                      (int(lx), int(ly), 2, line_h))
 
         # 推进箭头
-        if self.reveal >= len(self.full_text):
+        if self.reveal >= self._logic_len:
             t = pygame.time.get_ticks() / 500
             blink = 1 if int(t) % 2 == 0 else 0.35
             ui.text(buf, self._font_text, "▼", color=st["arrow_color"],

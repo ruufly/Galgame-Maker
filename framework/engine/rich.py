@@ -123,8 +123,18 @@ def parse_rich(text, base_size=26, base_color=(245, 245, 245)):
             buf.append(ch)
             i += 1
             continue
-        j = text.find("}", i + 1)
-        if j == -1:
+        # 配对扫描大括号 (支持公式里的嵌套 { }: {m=\frac{1}{2}})
+        depth = 1
+        j = i + 1
+        while j < n:
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if depth != 0:
             buf.append(ch)
             i += 1
             continue
@@ -338,7 +348,10 @@ class RichTextRenderer:
         return parse_rich(text, base_size, base_color)
 
     def truncate(self, runs, n_chars):
-        """按可见字符数截断 (打字机效果用)。公式整体计 len(expr) 个字符。"""
+        """按可见字符数截断 (打字机效果用)。
+
+        公式整体计 1 个字符 (公式一次性整体出现)。
+        """
         out = []
         remaining = n_chars
         for run in runs:
@@ -346,7 +359,7 @@ class RichTextRenderer:
                 break
             if run.math:
                 out.append(run)
-                remaining -= len(run.text)
+                remaining -= 1
                 continue
             if len(run.text) <= remaining:
                 out.append(run)
@@ -357,6 +370,16 @@ class RichTextRenderer:
                                run.outline, run.outline_width))
                 remaining = 0
         return out
+
+    def logic_len(self, runs) -> int:
+        """逻辑字符数: 普通字符逐字计, 公式整体计 1 (打字机/逐字模式用)。"""
+        total = 0
+        for run in runs:
+            if run.math:
+                total += 1
+            else:
+                total += len(run.text)
+        return total
 
     # ---- 单字符/公式 surface ----------------------------------------
     def _char_surface(self, ch, run):
