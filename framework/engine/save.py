@@ -47,6 +47,34 @@ class SaveManager:
             log.warning(f"读档失败 {path}: {exc}")
             return None
 
+    def _global_path(self) -> str:
+        """全局进度文件 (结局/CG 收集等跨存档记录)。"""
+        d = os.path.join(self.engine.project_dir, "save")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "global.json")
+
+    def get_global(self, key: str, default=None):
+        """读取全局进度 (跨存档, 如已达成结局 / 已解锁 CG)。"""
+        try:
+            with open(self._global_path(), "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get(key, default)
+        except Exception:
+            return default
+
+    def set_global(self, key: str, value) -> None:
+        """写入全局进度。"""
+        data = {}
+        if os.path.isfile(self._global_path()):
+            try:
+                with open(self._global_path(), "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = {}
+        data[key] = value
+        with open(self._global_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
     def set_meta(self, slot: int, key: str, value) -> None:
         """写入存档元数据 (如快照路径), 不覆盖游戏状态。"""
         data = self.load(slot)

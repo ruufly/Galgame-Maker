@@ -68,11 +68,14 @@ def launch(gal_file: str) -> int:
     icon = cfg.get("icon")
     fullscreen = str(cfg.get("fullscreen", "false")).lower() in (
         "true", "1", "yes", "on")
+    resizable = str(cfg.get("resizable", "true")).lower() in (
+        "true", "1", "yes", "on")
 
     log.info(f"启动游戏: {gal_file}")
     log.info(f"窗口配置: {width}x{height} fps={fps} title={title!r}"
-             f" fullscreen={fullscreen}")
-    engine = GameEngine(width, height, title, fps, fullscreen=fullscreen)
+             f" fullscreen={fullscreen} resizable={resizable}")
+    engine = GameEngine(width, height, title, fps, fullscreen=fullscreen,
+                        resizable=resizable)
     # 全局未捕获异常 -> 弹窗 (不崩溃)
     from framework.engine.error import install_excepthook
     install_excepthook(engine)

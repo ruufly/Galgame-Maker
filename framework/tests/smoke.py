@@ -1012,7 +1012,7 @@ def test_title_screen():
         check("标题无副标题(已注释)", d.title_caption == "",
               str(d.title_caption))
         check("标题图片加载", d.title_image is not None)
-        check("标题菜单 3 项", len(d.title_items) == 3, str(d.title_items))
+        check("标题菜单 4 项", len(d.title_items) == 4, str(d.title_items))
         check("开始按钮自定义文本", d.title_items[0][0] == "开始游戏",
               str(d.title_items[0]))
         check("标题位置自定义", d.title_anchor[1] == 210.0,
@@ -1168,7 +1168,7 @@ def test_system_menu():
         engine.on_escape()
         engine.on_click(d.system_menu_rects[3].center)   # 返回标题
         check("返回标题画面", d.title_active and not engine.paused)
-        check("标题菜单", len(d.title_items) == 3)
+        check("标题菜单", len(d.title_items) == 4)
 
         # 结束后回到标题: fadeout 黑幕后 ending, 黑幕应被清除
         rt.call_stack = []
@@ -1969,7 +1969,11 @@ def test_menu_block():
         rt.load_script(demo)
         check("菜单静态注册", "title" in rt.menus, str(list(rt.menus)))
         items = rt.menus["title"]
-        check("菜单 3 按键", len(items) == 3, str([i["name"] for i in items]))
+        check("菜单 4 按键", len(items) == 4,
+              str([i["name"] for i in items]))
+        check("鉴赏按钮在菜单中", items[3]["name"] == "gallery_button"
+              and items[3]["action"] == {"type": "gallery_open"},
+              str(items[3]))
         check("按键动作解析",
               items[0]["action"] == {"type": "start", "label": "game_start"}
               and items[1]["action"] == {"type": "slot_menu", "mode": "load"}
@@ -1986,8 +1990,13 @@ def test_menu_block():
 
         # title 使用命名菜单
         rt.start()
-        check("标题用菜单项", len(d.selection_items) == 3
+        check("标题用菜单项", len(d.selection_items) == 4
               and d.selection_items[0][0] == "开始游戏")
+        check("标题按钮两列布局",
+              d.selection_rects[0].y == d.selection_rects[1].y
+              and d.selection_rects[0].x != d.selection_rects[1].x
+              and d.selection_rects[2].y > d.selection_rects[0].y,
+              str(d.selection_rects))
         check("按键独立尺寸", d.selection_rects[0].height == 98
               and d.selection_rects[1].height == 98,
               str(d.selection_rects[0]))
@@ -2220,14 +2229,16 @@ def test_key_nav():
         check("下移", d.active_index == 1)
         engine._handle_key(pygame.K_DOWN)
         engine._handle_key(pygame.K_DOWN)
+        engine._handle_key(pygame.K_DOWN)
         check("循环到首项", d.active_index == 0)
         engine._handle_key(pygame.K_UP)
-        check("上移循环", d.active_index == 2)
+        check("上移循环", d.active_index == 3)
         # W/S 键移动 (自定义)
         engine._handle_key(pygame.K_s)
         check("S 键下移", d.active_index == 0)
         engine._handle_key(pygame.K_w)
-        check("W 键上移", d.active_index == 2)
+        check("W 键上移", d.active_index == 3)
+        engine._handle_key(pygame.K_w)
         engine._handle_key(pygame.K_w)
         engine._handle_key(pygame.K_w)
         check("回到首项", d.active_index == 0)
@@ -2756,6 +2767,441 @@ def test_latex_typing():
         pygame.quit()
 
 
+def test_voice_volume():
+    print("== 角色语音音量 ==")
+    from framework.engine.parser import Statement
+    demo_dir = os.path.join(_ROOT, "test", "engine_demo")
+    engine = GameEngine(640, 360, "test52")
+    rt = engine.runtime
+    path = os.path.join(demo_dir, "_voice_vol_test.gal")
+    src = '''char a
+    name: "A"
+    voice_volume: 0.5
+    normal: "x.png"
+char b
+    name: "B"
+    normal: "x.png"
+sound v_a
+    type: voice
+    file: "materials/audio/voice_demo.wav"
+    volume: 0.8
+start:
+    say a "hi" voice v_a
+'''
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        rt.load_script(path)
+        check("char voice_volume 解析", abs(float(
+            rt.characters["a"]["voice_volume"]) - 0.5) < 0.01,
+            str(rt.characters["a"].get("voice_volume")))
+        check("char 默认 voice_volume 1.0",
+              rt.characters["b"]["voice_volume"] == 1.0)
+        # 语音音量 = 角色 0.5 × 声音块 0.8 = 0.4
+        vol = rt._voice_volume("v_a", "a")
+        check("语音音量 = 角色×声音块", abs(vol - 0.4) < 0.01, str(vol))
+        # 旁白 (无角色) = 声音块音量
+        vol2 = rt._voice_volume("v_a", None)
+        check("旁白语音音量 = 声音块", abs(vol2 - 0.8) < 0.01, str(vol2))
+        # 未注册声音: 仅角色音量生效 / 无角色 1.0
+        check("未注册声音仅角色音量",
+              abs(rt._voice_volume("nope", "a") - 0.5) < 0.01)
+        check("未注册声音无角色 1.0", rt._voice_volume("nope") == 1.0)
+        # 实际播放: 最终 = sfx 1.0 × voice 1.0 × 0.4
+        rt._cmd_say(Statement(op="say", args=["a", '"hi"', "voice", "v_a"],
+                              line=0))
+        got = (engine.audio.voice_sound.get_volume()
+               if engine.audio.voice_sound else -1)
+        check("播放时应用角色音量", abs(got - 0.4) < 0.01, str(got))
+        engine.audio.stop_voice()
+        # volume voice <角色> <音量>: 运行时调整角色音量
+        rt._cmd_volume(Statement(op="volume", args=["voice", "a", "1.0"],
+                                 line=0))
+        check("volume voice 角色调整", abs(float(
+            rt.characters["a"]["voice_volume"]) - 1.0) < 0.01,
+            str(rt.characters["a"]["voice_volume"]))
+        # volume voice <音量>: 全局语音音量
+        rt._cmd_volume(Statement(op="volume", args=["voice", "0.3"], line=0))
+        check("volume voice 全局", abs(
+            engine.audio.voice_volume - 0.3) < 0.01,
+            str(engine.audio.voice_volume))
+        # 调整后播放: 角色 1.0 × 声音块 0.8 × 全局 0.3 = 0.24
+        rt._cmd_say(Statement(op="say", args=["a", '"hi"', "voice", "v_a"],
+                              line=0))
+        got2 = (engine.audio.voice_sound.get_volume()
+                if engine.audio.voice_sound else -1)
+        check("三层音量相乘", abs(got2 - 0.24) < 0.01, str(got2))
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+def test_menu_bar():
+    print("== 常驻菜单栏模式 (bar) ==")
+    demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+    engine = GameEngine(640, 360, "test53")
+    d = engine.display
+    rt = engine.runtime
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "_menu_bar_test.gal")
+    try:
+        # 默认 popup 模式
+        check("默认 popup 模式", engine.menu_mode == "popup")
+        # 切换 bar 模式
+        engine.apply_config({"menu_mode": "bar"})
+        check("menu_mode 配置", engine.menu_mode == "bar")
+        rt.load_script(demo)
+        check("bar 已构建", d.menu_bar_active
+              and len(d.menu_bar_items) == 4,
+              f"{len(d.menu_bar_items)} 项")
+        types = [it[1].get("type") for it in d.menu_bar_items]
+        check("bar 过滤 continue", "continue" not in types, str(types))
+        check("bar 项目顺序", types == ["slot_menu", "slot_menu",
+                                        "title", "quit"], str(types))
+        # bottom 位置: 贴窗口底部
+        st = d.menu_bar_style
+        bar_y = d.menu_bar_rects[0].y
+        check("bar 底部位置", bar_y >= 360 - int(st["height"]) - 2,
+              str(bar_y))
+        # 命中检测
+        check("bar 命中检测",
+              d.hit_menu_bar(d.menu_bar_rects[1].center) == 1)
+        check("bar 外不命中", d.hit_menu_bar((0, 0)) == -1)
+        check("bar 命中需可见",
+              d.hit_menu_bar(d.menu_bar_rects[1].center) == 1)
+        # 绘制无异常 (含 bar)
+        engine.draw()
+        check("bar 绘制无异常", True)
+        # 点击 bar 存档按钮 (items[0]) -> 打开槽位界面 (save)
+        engine.on_click(d.menu_bar_rects[0].center)
+        check("点击 bar 存档按钮", d.slot_menu_active
+              and d.slot_menu_mode == "save",
+              f"active={d.slot_menu_active} mode={d.slot_menu_mode}")
+        # ESC 关闭槽位界面; bar 模式 ESC 不再打开弹窗菜单
+        engine.on_escape()
+        check("ESC 关闭槽位界面", not d.slot_menu_active)
+        engine.on_escape()
+        check("bar 模式 ESC 不弹菜单",
+              not d.system_menu_active and not engine.paused)
+        # 标题画面 bar 隐藏
+        engine.goto_title()
+        check("标题画面 bar 隐藏", not d.menu_bar_visible())
+        # top 位置
+        engine.apply_config({"menu_bar_pos": "top"})
+        check("bar 顶部位置", d.menu_bar_rects[0].y < 10,
+              str(d.menu_bar_rects[0].y))
+        # 切回 popup 隐藏
+        engine.apply_config({"menu_mode": "popup"})
+        check("popup 模式隐藏 bar", not d.menu_bar_active)
+
+        # menu_bar 样式块 + 自定义 menu system 项
+        src = '''menu_bar
+    bg: "#112233"
+    text_size: 20
+    align: right
+menu system
+    save_button
+        text: "存档"
+        action: slot_menu save
+    quit_button
+        text: "退出"
+        action: quit
+start:
+    text "x"
+'''
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        engine2 = GameEngine(640, 360, "t54")
+        d2 = engine2.display
+        rt2 = engine2.runtime
+        try:
+            engine2.apply_config({"menu_mode": "bar"})
+            rt2.load_script(path)
+            check("menu_bar 样式解析",
+                  d2.menu_bar_style["bg"] == (17, 34, 51)
+                  and d2.menu_bar_style["text_size"] == 20
+                  and d2.menu_bar_style["align"] == "right",
+                  str(d2.menu_bar_style))
+            check("自定义 menu system 项", len(d2.menu_bar_items) == 2,
+                  str([t for t, _, _ in d2.menu_bar_items]))
+            types2 = [it[1].get("type") for it in d2.menu_bar_items]
+            check("自定义项类型", types2 == ["slot_menu", "quit"],
+                  str(types2))
+            # 自定义项也能点击触发 (存档 -> 槽位界面)
+            engine2.on_click(d2.menu_bar_rects[0].center)
+            check("自定义项点击生效", d2.slot_menu_active
+                  and d2.slot_menu_mode == "save")
+        finally:
+            engine2.quit()
+            import pygame as pg3
+            pg3.quit()
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+
+def test_gallery():
+    print("== 鉴赏系统 (gallery) ==")
+    import os as _os
+    import shutil
+    import pygame
+    from framework.engine.parser import Statement
+    base = os.path.dirname(os.path.abspath(__file__))
+    demo_dir = os.path.join(_ROOT, "test", "engine_demo")
+    # 清理测试环境存档/全局进度残留 (load_script 会把 project_dir
+    # 改成脚本目录, 故两处都要清; 保证可重复运行)
+    sd = os.path.join(base, "save")
+    if _os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    dg = os.path.join(demo_dir, "save", "global.json")
+    if _os.path.isfile(dg):
+        _os.remove(dg)
+    engine = GameEngine(640, 360, "test55")
+    d = engine.display
+    rt = engine.runtime
+    engine.project_dir = base          # 全局进度写到测试目录, 避免污染
+    path = os.path.join(demo_dir, "_gallery_test.gal")
+    src = '''gallery
+    unlock_ending: "真结局"
+    button_text: "鉴赏"
+    categories: "cg, bgm, character, scene"
+char a
+    name: "A"
+    desc: "角色描述"
+    cv: "配音"
+    normal: "x.png"
+scene s1
+    type: cg
+    name: "CG一"
+    default: "x.png"
+    pose2: "y.png"
+scene s2
+    type: normal
+    name: "普通场景"
+    default: "z.png"
+sound bgm_a
+    type: music
+    file: "materials/audio/maou_bgm_piano41.mp3"
+menu title
+    start_button
+        text: "开始"
+        action: start game_start
+    gallery_button
+        text: "鉴赏"
+        image_disabled: "materials/image/icon.png"
+        action: gallery_open
+start:
+    music bgm_a
+    title
+        menu: title
+        start: game_start
+game_start:
+    text "ok"
+'''
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        # 装载插件 (含 gallery)
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        check("gallery 插件装载", "gallery" in engine.plugins._classes,
+              str(list(engine.plugins._classes)))
+        rt.load_script(path)
+        # gallery 配置解析
+        check("gallery 配置解析",
+              engine.gallery_config["unlock_ending"] == "真结局"
+              and engine.gallery_config["button_text"] == "鉴赏"
+              and engine.gallery_config["categories"]
+              == "cg, bgm, character, scene",
+              str(engine.gallery_config))
+        # char 描述信息
+        check("char 描述信息",
+              rt.characters["a"]["meta"].get("desc") == "角色描述"
+              and rt.characters["a"]["meta"].get("cv") == "配音",
+              str(rt.characters["a"].get("meta")))
+        # scene 分类
+        check("scene type cg", rt.scenes["s1"]["type"] == "cg")
+        check("scene type normal", rt.scenes["s2"]["type"] == "normal")
+        # 鉴赏按钮挂接且禁用
+        rt.start()
+        check("标题显示", d.title_active)
+        check("标题 BGM 记录", rt.title_bgm == "bgm_a",
+              str(rt.title_bgm))
+        items = rt._menu_items("title")
+        gal = [it for it in items if it[1].get("type") == "gallery_open"]
+        check("鉴赏按钮已挂接", len(gal) == 1)
+        check("未解锁禁用", gal[0][2].get("enabled") is False,
+              str(gal[0][2]))
+        check("image_disabled 解析",
+              gal[0][2].get("image_disabled", "").endswith("icon.png"),
+              str(gal[0][2]))
+        # 禁用按钮点击落空
+        idx = next(i for i, it in enumerate(d.selection_items)
+                   if it[1].get("type") == "gallery_open")
+        engine.on_click(d.selection_rects[idx].center)
+        check("禁用按钮点击无效", d.title_active and d.selection_active)
+        # 达成结局 -> 解锁 (标题仍在显示, 状态同步刷新)
+        engine.record_ending("真结局")
+        check("解锁后启用",
+              d.selection_items[idx][2].get("enabled") is True)
+        # 点击打开鉴赏
+        engine.on_click(d.selection_rects[idx].center)
+        plug = engine.plugins._classes["gallery"]
+        check("打开鉴赏", engine.paused and not d.title_active
+              and plug._active)
+        # 绘制 (构建分类布局) 后切换分类
+        engine.draw()
+        check("鉴赏绘制无异常", True)
+        plug._handle_click(plug._cat_rects[1].center)
+        check("切换分类 bgm", plug._category == "bgm",
+              str(plug._cat_names))
+        # CG 展示即记录 (全局进度)
+        rt._cmd_bg(Statement(op="bg", args=["s1"], line=0))
+        check("CG 展示即记录", engine.cg_unlocked("s1", ""))
+        rt._cmd_bg(Statement(op="bg", args=["s1", "pose2"], line=0))
+        check("CG pose 记录", engine.cg_unlocked("s1", "pose2"))
+        check("CG 条目", len(plug._cg_entries()) == 2,
+              str(plug._cg_entries()))
+        check("CG 收集计数",
+              sum(len(v) for v in engine.get_unlocked_cgs().values()) == 2)
+        # CG 大图查看与关闭 (走完整 engine_click 事件路径)
+        plug._category = "cg"
+        plug._grid_rects = [pygame.Rect(10, 10, 100, 100)]
+        plug._grid_items = [("cg", ("s1", "", "x.png"))]
+        plug._on_grid_click(0)
+        check("CG 大图打开", plug._view is not None)
+        engine.on_click((20, 20))
+        check("大图点击关闭", plug._view is None and not d.slot_menu_active)
+        # BGM 试听: 先显示切换提示, 延迟后再实际切换
+        plug._category = "bgm"
+        surf = pygame.Surface((640, 360))
+        plug._draw_bgm(surf)              # 构建列表 rects
+        check("BGM 列表构建", len(plug._grid_items) >= 1)
+        plug._on_grid_click(0)            # 点击第一首
+        check("BGM 切换先显示提示", plug._bgm_pending is not None
+              and plug._bgm_pending["name"] == "bgm_a",
+              str(plug._bgm_pending))
+        # 650ms 后 (模拟时间流逝): 才实际播放
+        plug._bgm_pending["t0"] -= 700
+        plug._draw_bgm(surf)
+        check("BGM 延迟后切换", plug._bgm_pending is None
+              and engine.audio.current_bgm_name == "bgm_a",
+              str(engine.audio.current_bgm_name))
+        engine.audio.stop_music(0)
+        # ESC 拦截关闭鉴赏回标题
+        engine.on_escape()
+        check("ESC 关闭鉴赏回标题", d.title_active and not engine.paused
+              and not plug._active)
+        # ending 带名记录
+        rt._cmd_ending(Statement(op="ending", args=["普通结局"], line=0))
+        check("ending 记录结局", "普通结局" in engine.get_endings())
+        check("结束画面含结局名", d.ending_name == "普通结局")
+    finally:
+        engine.quit()
+        import pygame as pg4
+        pg4.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+        for root in (base, demo_dir):
+            r = os.path.join(root, "save")
+            if _os.path.isdir(r):
+                shutil.rmtree(r, ignore_errors=True)
+
+
+def test_window_config_scaling():
+    print("== 窗口配置与等比缩放 ==")
+    import pygame
+    from framework.engine.parser import Statement
+    engine = GameEngine(1280, 720, "orig")
+    d = engine.display
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "_win_cfg_test.gal")
+    try:
+        check("初始窗口尺寸", engine.window_w == 1280
+              and engine.window_h == 720)
+        # 逻辑分辨率与窗口尺寸分离: set_window_size 只改窗口
+        engine.set_window_size(1600, 900)
+        check("set_window_size 更新窗口",
+              engine.window_w == 1600 and engine.window_h == 900)
+        check("逻辑分辨率不变", engine.width == 1280
+              and engine.height == 720)
+        # to_logical: 1600x900 窗口 + 1280x720 内容 -> scale=1.25 无偏移
+        lx, ly = engine.to_logical((800, 450))
+        check("to_logical 等比映射", abs(lx - 640) < 0.5
+              and abs(ly - 360) < 0.5, f"{lx},{ly}")
+        # 宽高比不一致: 1600x800 -> scale=1.111, 水平偏移 88.9 (letterbox)
+        engine.set_window_size(1600, 800)
+        lx, ly = engine.to_logical((800, 400))
+        check("to_logical letterbox 偏移", abs(lx - 640) < 1
+              and abs(ly - 360) < 1, f"{lx},{ly}")
+        # present: 逻辑红点渲染到窗口等比位置; 边缘留黑边
+        # (直接调 _present, 避免 draw 开头 fill 清空 buffer)
+        d.buffer.fill((0, 0, 0))
+        pygame.draw.circle(d.buffer, (255, 0, 0), (640, 360), 6)
+        d._present(engine.screen)
+        c = engine.screen.get_at((800, 400))
+        check("present 等比缩放渲染", c[0] > c[1] + 80, str(c))
+        c2 = engine.screen.get_at((8, 400))
+        check("letterbox 黑边", c2[0] < 20 and c2[1] < 20
+              and c2[2] < 20, str(c2))
+        # VIDEORESIZE 事件同步窗口尺寸
+        ev = pygame.event.Event(pygame.VIDEORESIZE, size=(900, 500))
+        engine.handle_event(ev)
+        check("VIDEORESIZE 同步尺寸",
+              engine.window_w == 900 and engine.window_h == 500,
+              f"{engine.window_w}x{engine.window_h}")
+        # apply_window_config: 标题 / 全屏
+        engine.apply_window_config({"title": "新标题"})
+        check("apply_window_config 标题", engine.title == "新标题")
+        engine.apply_window_config({"fullscreen": "true"})
+        check("apply_window_config 全屏开", engine.fullscreen is True)
+        engine.apply_window_config({"fullscreen": "false"})
+        check("apply_window_config 全屏关", engine.fullscreen is False)
+        # window config DSL 指令 (执行流中)
+        src = '''start:
+    window config
+        title: "运行时标题"
+        width: 1000
+        height: 620
+    text "ok"
+'''
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        engine2 = GameEngine(640, 360, "t2")
+        try:
+            engine2.runtime.load_script(path)
+            engine2.runtime.start()
+            check("window config 标题", engine2.title == "运行时标题",
+                  engine2.title)
+            check("window config 尺寸",
+                  engine2.window_w == 1000 and engine2.window_h == 620,
+                  f"{engine2.window_w}x{engine2.window_h}")
+            check("window config 逻辑分辨率不变",
+                  engine2.width == 640 and engine2.height == 360)
+            # fullscreen 独立指令
+            engine2.runtime._cmd_fullscreen(
+                Statement(op="fullscreen", args=["true"], line=0))
+            check("fullscreen 指令开", engine2.fullscreen is True)
+            engine2.runtime._cmd_fullscreen(
+                Statement(op="fullscreen", args=["false"], line=0))
+            check("fullscreen 指令关", engine2.fullscreen is False)
+        finally:
+            engine2.quit()
+            import pygame as pg2
+            pg2.quit()
+    finally:
+        engine.quit()
+        import pygame
+        pygame.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+
+
 def test_plugins_and_save():
     print("== 插件与存档 ==")
     engine = GameEngine(640, 360, "test3")
@@ -3033,6 +3479,30 @@ def main():
         test_latex_typing()
     except Exception as exc:
         print(f"  [ERROR] LaTeX 逐字测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_voice_volume()
+    except Exception as exc:
+        print(f"  [ERROR] 语音音量测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_window_config_scaling()
+    except Exception as exc:
+        print(f"  [ERROR] 窗口配置测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_menu_bar()
+    except Exception as exc:
+        print(f"  [ERROR] 菜单栏测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_gallery()
+    except Exception as exc:
+        print(f"  [ERROR] 鉴赏系统测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

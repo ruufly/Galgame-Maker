@@ -31,19 +31,23 @@ class GameEngine:
     def __init__(self, width: int = 1280, height: int = 720,
                  title: str = "Galgame Maker Engine", fps: int = 60,
                  plugins_dir: str = None, autoload_plugins: bool = True,
-                 fullscreen: bool = False) -> None:
-        self.width = width
+                 fullscreen: bool = False, resizable: bool = True) -> None:
+        self.width = width          # 逻辑分辨率 (布局/绘制基准, 恒定不变)
         self.height = height
+        self.window_w = width       # 实际窗口尺寸 (可运行时调整, 内容等比缩放)
+        self.window_h = height
         self.title = title
         self.fps = fps
         self.fullscreen = fullscreen
+        self.resizable = resizable
+        self._icon_path = None      # 记住图标路径, 重建窗口后重新应用
         self.project_dir = os.getcwd()
         self.script_dir = None
 
         pygame.init()
         try:
-            flags = pygame.FULLSCREEN if fullscreen else 0
-            self.screen = pygame.display.set_mode((width, height), flags)
+            self.screen = pygame.display.set_mode(
+                (width, height), self._window_flags())
         except pygame.error as exc:
             log.error(f"无法创建窗口: {exc}")
             raise
@@ -99,6 +103,22 @@ class GameEngine:
         self.key_up = [pygame.K_UP]
         self.key_down = [pygame.K_DOWN]
         self.key_confirm = [pygame.K_RETURN, pygame.K_SPACE]
+
+        # 系统菜单模式 (window 配置可自定义):
+        #   popup = 现有弹窗菜单 (ESC 打开, 选择列表覆盖层)
+        #   bar   = 常驻菜单栏 (对话框下方/窗口上方一排按钮, 随时点击)
+        self.menu_mode = "popup"
+        self.menu_bar_pos = "bottom"   # bar 模式位置: bottom / top
+        self._last_bar_hover = -1      # bar 悬停音效去重
+
+        # 鉴赏配置 (gallery 块, 鉴赏插件读取)
+        self.gallery_config = {
+            "unlock_ending": None,
+            "button_text": "鉴赏",
+            "title": "鉴赏",
+            "categories": "cg, bgm, character, scene",
+            "locked_hint": "",
+        }
 
         # UI 交互音效 (window 配置 ui_click_sound, 按钮确认时播放)
         self.ui_click_sound = None
@@ -194,14 +214,104 @@ class GameEngine:
         return os.path.normpath(os.path.join(base, path))
 
     def set_icon(self, path: str) -> None:
-        """设置窗口图标 (路径相对脚本所在目录)。"""
+        """设置窗口图标 (路径相对脚本所在目录)。
+
+        重建窗口 (改尺寸/切全屏) 后会自动重新应用。
+        """
         try:
             real = self.resolve_path(path)
             icon = pygame.image.load(real)
             pygame.display.set_icon(icon)
+            self._icon_path = path
             log.info(f"窗口图标已设置: {real}")
         except Exception as exc:
             log.warning(f"设置窗口图标失败 {path}: {exc}")
+
+    # ==================================================================
+    # 窗口运行时配置 (window config 命令 / 全屏 / 等比缩放)
+    # ==================================================================
+    def _window_flags(self) -> int:
+        """当前窗口 flags: 可缩放 + (全屏)。"""
+        flags = pygame.RESIZABLE if self.resizable else 0
+        if self.fullscreen:
+            flags |= pygame.FULLSCREEN
+        return flags
+
+    def _rebuild_window(self) -> None:
+        """按当前 尺寸/全屏/可缩放 重建窗口 (标题与图标一并恢复)。"""
+        size = (0, 0) if self.fullscreen else (self.window_w, self.window_h)
+        try:
+            self.screen = pygame.display.set_mode(size, self._window_flags())
+        except pygame.error as exc:
+            log.warning(f"重建窗口失败: {exc}")
+            return
+        pygame.display.set_caption(self.title)
+        if self._icon_path:
+            self.set_icon(self._icon_path)
+        log.info(f"窗口已重建: {'全屏' if self.fullscreen else '窗口'} "
+                 f"{self.screen.get_size()} title={self.title!r}")
+
+    def set_window_title(self, title: str) -> None:
+        """运行中修改窗口标题。"""
+        self.title = str(title)
+        pygame.display.set_caption(self.title)
+        log.info(f"窗口标题已更新: {self.title}")
+
+    def set_window_size(self, width: int, height: int) -> None:
+        """运行中修改窗口尺寸 (逻辑分辨率不变, 内容等比缩放)。"""
+        self.window_w = max(64, int(width))
+        self.window_h = max(64, int(height))
+        self._rebuild_window()
+
+    def set_fullscreen(self, fullscreen: bool) -> None:
+        """切换全屏模式 (内容等比缩放, 保持比例)。"""
+        self.fullscreen = bool(fullscreen)
+        self._rebuild_window()
+
+    def to_logical(self, pos) -> tuple:
+        """窗口坐标 -> 逻辑坐标 (内容等比缩放 letterbox 的逆映射)。
+
+        命中检测/鼠标悬停全部基于逻辑坐标, 窗口缩放后依然准确。
+        """
+        try:
+            w, h = self.screen.get_size()
+            scale = min(w / self.width, h / self.height)
+            tw, th = self.width * scale, self.height * scale
+            ox, oy = (w - tw) / 2.0, (h - th) / 2.0
+            return ((pos[0] - ox) / scale, (pos[1] - oy) / scale)
+        except Exception:
+            return pos
+
+    def apply_window_config(self, cfg: dict) -> None:
+        """应用 window 块中的窗口配置 (title/width/height/icon/
+        fullscreen/resizable/fps)。
+
+        可在运行中通过 ``window config`` 命令调用, 即时生效。
+        """
+        if "title" in cfg:
+            self.set_window_title(str(cfg["title"]))
+        if "width" in cfg or "height" in cfg:
+            try:
+                w = int(cfg.get("width", self.window_w))
+                h = int(cfg.get("height", self.window_h))
+                self.set_window_size(w, h)
+            except (TypeError, ValueError):
+                log.warning(f"窗口尺寸配置无效, 忽略: "
+                            f"{cfg.get('width')}x{cfg.get('height')}")
+        if "icon" in cfg:
+            self.set_icon(str(cfg["icon"]))
+        if "fullscreen" in cfg:
+            self.set_fullscreen(str(cfg["fullscreen"]).lower() in (
+                "true", "1", "yes", "on"))
+        if "resizable" in cfg:
+            self.resizable = str(cfg["resizable"]).lower() in (
+                "true", "1", "yes", "on")
+            self._rebuild_window()
+        if "fps" in cfg:
+            try:
+                self.fps = max(1, int(cfg["fps"]))
+            except (TypeError, ValueError):
+                pass
 
     # ==================================================================
     # 事件 (统一在事件上下文里附带 engine 引用, 方便插件取用)
@@ -261,10 +371,14 @@ class GameEngine:
     def handle_event(self, event) -> None:
         if event.type == pygame.QUIT:
             self.request_quit()   # 右上角关闭按钮 -> 退出确认
+        elif event.type == pygame.VIDEORESIZE:
+            # 用户拖拽窗口边缘: 记录新尺寸, 内容等比缩放 (letterbox)
+            self.window_w, self.window_h = event.size
         elif event.type == pygame.KEYDOWN:
             self._handle_key(event.key)
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            self.on_click(event.pos)
+            # 窗口坐标 -> 逻辑坐标 (缩放后命中检测依然准确)
+            self.on_click(self.to_logical(event.pos))
 
     def _handle_key(self, key) -> None:
         if key in self.key_up:
@@ -289,10 +403,17 @@ class GameEngine:
             self.on_escape()
 
     def on_escape(self) -> None:
-        """ESC: 逐层关闭/打开菜单。"""
+        """ESC: 逐层关闭/打开菜单。
+
+        popup 模式: 游戏中打开系统菜单弹窗;
+        bar 模式: 菜单常驻, ESC 仅关闭覆盖层, 不再打开弹窗。
+        """
         d = self.display
         if d.confirm_active:
             return                       # 确认框优先, ESC 不干预
+        # 0) 插件拦截 (返回 False 表示已消费 ESC)
+        if any(r is False for r in self.emit("engine_escape")):
+            return
         if d.slot_menu_active:
             d.slot_menu_active = False   # 槽位界面 -> 返回上一层
             return
@@ -302,14 +423,49 @@ class GameEngine:
         if d.title_active:
             self.request_quit()          # 标题画面 -> 退出确认
             return
+        if self.menu_mode == "bar":
+            return                       # 常驻菜单栏: 无弹窗可开
         self.open_system_menu()          # 游戏中 -> 打开系统菜单
 
     # ==================================================================
     # 系统菜单 / 存档选择 / 回标题
     # ==================================================================
+    def refresh_menu_bar(self) -> None:
+        """按 menu_mode 刷新常驻菜单栏 (bar 模式构建, popup 模式隐藏)。
+
+        bar 模式复用 menu system 块的按钮定义 (过滤无意义的 continue),
+        无定义时用默认四项 (存档/读档/返回标题/退出)。
+        """
+        d = self.display
+        if self.menu_mode != "bar":
+            d.hide_menu_bar()
+            return
+        items = self.runtime._menu_items("system")
+        if items is None:
+            items = [
+                (self.menu_texts["save"],
+                 {"type": "slot_menu", "mode": "save"}, {}),
+                (self.menu_texts["load"],
+                 {"type": "slot_menu", "mode": "load"}, {}),
+                (self.menu_texts["title"], {"type": "title"}, {}),
+                (self.menu_texts["quit"], {"type": "quit"}, {}),
+            ]
+        else:
+            self._set_ui_sounds(self.runtime._menu_ui("system"))
+        # 常驻栏无弹窗: continue (关闭弹窗继续) 无意义, 过滤
+        items = [it for it in items
+                 if not (isinstance(it[1], dict)
+                         and it[1].get("type") == "continue")]
+        d.set_menu_bar(items)
+
     def open_system_menu(self) -> None:
         """打开游戏内菜单 (暂停游戏), 文案由 menu_texts 配置;
-        脚本定义 menu system 可整体覆盖。"""
+        脚本定义 menu system 可整体覆盖。
+
+        bar 模式下菜单常驻界面, 不再弹窗。
+        """
+        if self.menu_mode == "bar":
+            return
         self.paused = True
         items = self.runtime._menu_items("system")
         if items is None:
@@ -369,8 +525,11 @@ class GameEngine:
     # 点击推进逻辑
     # ==================================================================
     def on_click(self, pos) -> None:
-        """处理一次点击: 错误弹窗 -> 确认框 -> 槽位界面 -> 选择列表..."""
+        """处理一次点击: 插件拦截 -> 错误弹窗 -> 确认框 -> 槽位界面..."""
         d = self.display
+        # 0) 插件拦截 (事件处理器返回 False 表示已消费该点击)
+        if any(r is False for r in self.emit("engine_click", pos=pos)):
+            return
         # 0) 错误弹窗 (最高优先级)
         if d.error_active:
             idx = d.hit_error(pos)
@@ -459,6 +618,17 @@ class GameEngine:
             d.choices = []
             self.runtime.choose(idx, label)
             return
+        # 1.5) 常驻菜单栏按钮 (bar 模式): 随时点击执行动作
+        if d.menu_bar_visible():
+            idx = d.hit_menu_bar(pos)
+            if idx >= 0:
+                d.menu_bar_hover = idx
+                self._play_ui_sound()
+                text, action, _cfg = d.menu_bar_items[idx]
+                self.emit("selection_choice", index=idx, text=text,
+                          action=action, source="menu_bar")
+                self.run_action(action, source="menu_bar")
+                return
         # 2) 文本推进
         if d.text_active:
             if not d.text_done():
@@ -489,7 +659,7 @@ class GameEngine:
         self.runtime.tick(dt)
 
     def _sync_hover_sound(self) -> None:
-        """活动选项变化时播放 UI 悬停音效。"""
+        """活动选项变化时播放 UI 悬停音效 (菜单/选择支/常驻菜单栏)。"""
         d = self.display
         if d.selection_active or d.choice_active:
             ai = d.active_index
@@ -499,16 +669,24 @@ class GameEngine:
                     self._play_ui_sound("hover")
         else:
             self._last_active_index = -1
+        # 常驻菜单栏悬停
+        if d.menu_bar_visible():
+            hv = d.menu_bar_hover
+            if hv != self._last_bar_hover:
+                self._last_bar_hover = hv
+                if hv >= 0:
+                    self._play_ui_sound("hover")
+        else:
+            self._last_bar_hover = -1
 
     def draw(self) -> None:
         # 记录最近一次纯游戏画面 (无覆盖层时; 供存档快照插件截图)
+        # 截图逻辑分辨率画面 (窗口缩放前), 避免黑边入镜
         d = self.display
         if not (d.slot_menu_active or d.title_active or d.selection_active
                 or d.confirm_active or d.choice_active or d.error_active):
-            self._last_game_frame = self.screen.copy()
+            self._last_game_frame = self.display.buffer.copy()
         self.display.draw(self.screen)
-        # 插件渲染钩子
-        self.emit("draw_overlay", surface=self.screen, dt=0)
         pygame.display.flip()
 
     # ==================================================================
@@ -650,6 +828,20 @@ class GameEngine:
         for key in self.menu_texts:
             if f"menu_{key}" in cfg:
                 self.menu_texts[key] = str(cfg[f"menu_{key}"])
+        # 系统菜单模式: popup (ESC 弹窗) / bar (常驻菜单栏)
+        if "menu_mode" in cfg:
+            mode = str(cfg["menu_mode"]).lower()
+            if mode in ("bar", "toolbar", "hud"):
+                self.menu_mode = "bar"
+            elif mode in ("popup", "esc", "dialog"):
+                self.menu_mode = "popup"
+        if "menu_bar_pos" in cfg:
+            pos = str(cfg["menu_bar_pos"]).lower()
+            if pos in ("top", "up"):
+                self.menu_bar_pos = "top"
+            elif pos in ("bottom", "down"):
+                self.menu_bar_pos = "bottom"
+        self.refresh_menu_bar()
         log.info(f"对话框: " + ", ".join(
             f"{k}={'开' if v['enabled'] else '关'}"
             for k, v in self.dialogs.items()))
@@ -833,6 +1025,65 @@ class GameEngine:
     def get_last_game_frame(self):
         """最近一次纯游戏画面 Surface (覆盖层弹出前的帧, 存档快照用)。"""
         return self._last_game_frame
+
+    # ==================================================================
+    # 全局进度: 结局记录 / CG 收集 (跨存档, 存 save/global.json)
+    # ==================================================================
+    def record_ending(self, name: str = None) -> None:
+        """记录达成结局 (全局进度)。ending <结局名> 指令触发。"""
+        endings = list(self.save.get_global("endings", []))
+        if name and name not in endings:
+            endings.append(name)
+            self.save.set_global("endings", endings)
+            log.info(f"结局已记录: {name}")
+        self.emit("ending_recorded", name=name, endings=endings)
+
+    def get_endings(self) -> list:
+        """已达成结局名列表。"""
+        return list(self.save.get_global("endings", []))
+
+    def record_cg(self, scene_id: str, pose: str = None) -> None:
+        """记录已展示的 CG (全局进度)。scene type: cg 的背景切换时触发。"""
+        cgs = dict(self.save.get_global("cgs", {}))
+        poses = list(cgs.get(scene_id, []))
+        key = pose or ""
+        if key not in poses:
+            poses.append(key)
+            cgs[scene_id] = poses
+            self.save.set_global("cgs", cgs)
+            log.info(f"CG 已记录: {scene_id} ({pose or '默认'})")
+        self.emit("cg_unlocked", scene_id=scene_id, pose=pose, cgs=cgs)
+
+    def get_unlocked_cgs(self) -> dict:
+        """已解锁 CG: {场景id: [背景名列表]} ("" 表示默认背景)。"""
+        return dict(self.save.get_global("cgs", {}))
+
+    def cg_unlocked(self, scene_id: str, pose: str = None) -> bool:
+        return pose in self.get_unlocked_cgs().get(scene_id, [])
+
+    # ==================================================================
+    # 菜单按钮 API (插件可向命名菜单添加/控制按钮)
+    # ==================================================================
+    def register_menu_button(self, menu_id: str, text: str, action,
+                             cfg: dict = None, index: int = None) -> dict:
+        """插件 API: 向命名菜单 (title/system/自定义) 追加/插入按钮。
+
+        action: 动作 dict ({"type": ...}) 或动作字符串 ("slot_menu save" /
+        "start game_start" / 自定义动作名)。cfg 可含 width/height/image/
+        enabled 等 (enabled=False 显示为禁用态, 点击无效)。
+        返回按钮 item dict (含 cfg["name"], 供 set_menu_button_state 定位)。
+        """
+        return self.runtime.add_menu_button(menu_id, text, action, cfg,
+                                            index)
+
+    def set_menu_button_state(self, menu_id: str, key, enabled: bool) -> bool:
+        """插件 API: 设置菜单按钮启用/禁用 (key=按钮名或文本或索引)。"""
+        ok = self.runtime.set_menu_button_state(menu_id, key, enabled)
+        # 标题/系统菜单正在显示时同步刷新按钮状态
+        if ok and (self.display.title_active
+                   or self.display.system_menu_active):
+            self.display.sync_selection_enabled()
+        return ok
 
     def _play_ui_sound(self, kind: str = "click") -> None:
         """播放 UI 交互音效 (click=按下 / hover=活动项变化)。"""

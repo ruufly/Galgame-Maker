@@ -48,6 +48,7 @@ class Runtime:
         self.current_style_name = None
         self.menus = {}               # 菜单表: id -> [{name, text, action, cfg}]
         self.sounds = {}              # 声音表: name -> {type, file, volume}
+        self.title_bgm = None         # start 块配置的标题 BGM (注册名/路径)
 
         # 内置指令表
         self._builtins = {
@@ -89,11 +90,14 @@ class Runtime:
             "ending": self._cmd_ending,
             "quit": self._cmd_ending,
             "pass": self._cmd_pass,
-            "window": self._cmd_pass,
-            "config": self._cmd_pass,
+            "window": self._cmd_window,
+            "config": self._cmd_window,
+            "fullscreen": self._cmd_fullscreen,
             "style": self._cmd_style,
             "use": self._cmd_use,
             "selection_style": self._cmd_selection_style,
+            "menu_bar": self._cmd_menu_bar,
+            "gallery": self._cmd_gallery,
             "import": self._cmd_pass,
             "ui": self._cmd_ui,
             "menu": self._cmd_menu,
@@ -146,11 +150,22 @@ class Runtime:
             elif stmt.op == "using":
                 # 命名空间声明: 加载即生效 (顶层 using 不依赖执行流程)
                 self._cmd_using(stmt)
+            elif stmt.op == "menu_bar":
+                # 常驻菜单栏样式 (bar 模式系统菜单)
+                self._apply_menu_bar_stmt(stmt)
+            elif stmt.op == "gallery":
+                # 鉴赏配置 (gallery.gal, 插件读取)
+                self._cmd_gallery(stmt)
+            # 注: window/config 块不在此静态应用 —— 窗口类配置由启动器
+            # 预解析 (extract_window_config), 交互配置由启动器 apply_config;
+            # 运行中的 `window config` 命令在执行到该语句时即时生效。
         self.engine.emit("script_load", path=path, name=script.name)
         log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
                  f"对象 {len(self.script_objects)} 个, "
                  f"角色 {len(self.characters)} 个, "
                  f"场景 {len(self.scenes)} 个)")
+        # 按 menu_mode 构建常驻菜单栏 (bar 模式; menu system 已静态注册)
+        self.engine.refresh_menu_bar()
         # widgets 模板
         if script.widgets_dir:
             self.load_widget_templates(
@@ -210,9 +225,19 @@ class Runtime:
             pos = props.pop("pos", "center")
             scale = props.pop("scale", None)
             mode = props.pop("mode", None)
+            meta = {}
+            for key in list(props):
+                if key in self._CHAR_META_KEYS:
+                    meta[key] = props.pop(key)
+            try:
+                voice_volume = max(0.0, min(1.0, float(props.pop(
+                    "voice_volume", 1.0))))
+            except (TypeError, ValueError):
+                voice_volume = 1.0
             self.characters[cid] = {
                 "id": cid, "name": name, "sprites": props,
                 "default": default, "pos": pos, "scale": scale, "mode": mode,
+                "voice_volume": voice_volume, "meta": meta,
             }
 
     # ------------------------------------------------------------------
@@ -226,7 +251,10 @@ class Runtime:
             name = props.pop("name", sid)
             default = props.pop("default", None)
             mode = props.pop("mode", None)
-            self.scenes[sid] = {"id": sid, "name": name,
+            stype = str(props.pop("type", "normal")).lower()
+            if stype not in ("cg", "normal"):
+                stype = "normal"
+            self.scenes[sid] = {"id": sid, "name": name, "type": stype,
                                 "backgrounds": props, "default": default,
                                 "mode": mode}
 
@@ -259,6 +287,31 @@ class Runtime:
     _SEL_STYLE_STR_KEYS = {"anchor_x", "caption_x", "anchor_y",
                            "button_image", "button_image_hover",
                            "dialog_image"}
+
+    # menu_bar 常驻菜单栏样式键
+    _MENU_BAR_COLOR_KEYS = {"bg", "border", "button_bg", "button_bg_hover",
+                            "button_border", "button_border_hover",
+                            "text_color", "text_color_hover"}
+    _MENU_BAR_NUM_KEYS = {"gap", "padding", "height", "btn_h", "y_offset",
+                          "text_size", "button_radius"}
+    _MENU_BAR_STR_KEYS = {"align"}
+
+    def _apply_menu_bar_stmt(self, stmt) -> None:
+        """解析并应用一条 menu_bar 样式语句 (属性块)。"""
+        from framework.engine.rich import parse_color
+        parsed = {}
+        for key, value in stmt.kwargs.items():
+            if key in self._MENU_BAR_COLOR_KEYS:
+                parsed[key] = parse_color(str(value),
+                                          (255, 255, 255, 255))
+            elif key in self._MENU_BAR_NUM_KEYS:
+                try:
+                    parsed[key] = float(value)
+                except (TypeError, ValueError):
+                    pass
+            elif key in self._MENU_BAR_STR_KEYS:
+                parsed[key] = str(value)
+        self.engine.display.apply_menu_bar_style(parsed)
 
     def _apply_selection_style_stmt(self, stmt) -> None:
         """解析并应用一条 selection_style 语句 (属性块)。"""
@@ -301,6 +354,45 @@ class Runtime:
             self.engine.display.selection_style_overrides.clear()
             return None
         self._apply_selection_style_stmt(stmt)
+        return None
+
+    def _cmd_menu_bar(self, stmt):
+        """定义常驻菜单栏样式 (bar 模式系统菜单):
+
+        menu_bar
+            bg: "#1a1a2e"              # 条背景 (RGBA)
+            align: center              # left / center / right
+            gap: 12                    # 按钮间距
+            padding: 18                # 按钮左右内边距
+            height: 56                 # 条高度
+            btn_h: 38                  # 按钮高度
+            y_offset: 0                # 位置微调
+            button_bg / button_bg_hover / button_border / ...
+            text_color / text_color_hover / text_size / button_radius
+        menu_bar default               # 重置为默认
+        """
+        if stmt.args and stmt.args[0] == "default":
+            from framework.engine.display import DEFAULT_MENU_BAR_STYLE
+            self.engine.display.menu_bar_style = dict(DEFAULT_MENU_BAR_STYLE)
+            return None
+        self._apply_menu_bar_stmt(stmt)
+        return None
+
+    def _cmd_gallery(self, stmt):
+        """鉴赏配置块 (由鉴赏插件读取):
+
+        gallery
+            unlock_ending: "真结局"          # 达成此结局解锁鉴赏按钮 (空=不锁)
+            button_text: "鉴赏"              # 标题菜单按钮文本
+            title: "鉴赏"                    # 鉴赏界面标题
+            categories: "cg, bgm, character, scene"   # 可用分类
+            locked_hint: "达成真结局后解锁"   # 锁定提示
+        """
+        base = dict(self.engine.gallery_config)
+        base.update({k: str(v) for k, v in stmt.kwargs.items()})
+        self.engine.gallery_config = base
+        self.engine.emit("gallery_config", config=base)
+        log.info(f"鉴赏配置已应用: {base}")
         return None
 
     def _scan_styles(self, script) -> dict:
@@ -555,14 +647,21 @@ class Runtime:
     # ==================================================================
     # -- 场景 -----------------------------------------------------------
     def _cmd_scene(self, stmt):
-        """注册场景: scene <id> + 属性块 (name/default/背景名: 路径)。"""
+        """注册场景: scene <id> + 属性块 (name/default/背景名: 路径)。
+
+        type: normal (默认) / cg —— CG 场景展示时记入全局 CG 收集
+        (鉴赏插件用)。显示逻辑与 normal 完全一致。
+        """
         if not stmt.args:
             return None
         sid = stmt.args[0]
         props = dict(stmt.kwargs)
         name = props.pop("name", sid)
         default = props.pop("default", None)
-        self.scenes[sid] = {"id": sid, "name": name,
+        stype = str(props.pop("type", "normal")).lower()
+        if stype not in ("cg", "normal"):
+            stype = "normal"
+        self.scenes[sid] = {"id": sid, "name": name, "type": stype,
                             "backgrounds": props, "default": default}
         # 同步到对象注册表 (存档/读档用)
         self.script_objects[sid] = {
@@ -570,8 +669,9 @@ class Runtime:
                 next(iter(props.values())) if props else None),
             "props": dict(stmt.kwargs),
         }
-        self.engine.emit("scene_register", id=sid, name=name)
-        log.info(f"场景已注册: {sid} ({name}), 背景 {len(props)} 张")
+        self.engine.emit("scene_register", id=sid, name=name, type=stype)
+        log.info(f"场景已注册: {sid} ({name}) [{stype}], "
+                 f"背景 {len(props)} 张")
         return None
 
     def _cmd_bg(self, stmt):
@@ -618,6 +718,9 @@ class Runtime:
                 d.bg_id = None
                 self.engine.emit("scene_change", id=target,
                                  name=scene["name"], background=img, pose=pose)
+                # CG 场景: 展示即记录 (全局 CG 收集, 跨存档)
+                if scene.get("type") == "cg":
+                    self.engine.record_cg(target, pose)
             return None
         # 直接路径
         d.set_bg(target, effect, mode)
@@ -628,8 +731,15 @@ class Runtime:
         return None
 
     # -- 角色 -----------------------------------------------------------
+    _CHAR_META_KEYS = {"desc", "description", "bio", "intro", "cv",
+                       "birthday", "height", "age"}
+
     def _cmd_char(self, stmt):
-        """注册角色: char <id> + 属性块 (name/default/立绘名: 路径)。"""
+        """注册角色: char <id> + 属性块 (name/default/立绘名: 路径)。
+
+        描述性信息 (不进入立绘表, 供角色鉴赏等使用):
+            desc: "角色描述" / cv: "声优" / birthday / height / age
+        """
         if not stmt.args:
             return None
         cid = stmt.args[0]
@@ -639,9 +749,19 @@ class Runtime:
         pos = props.pop("pos", "center")
         scale = props.pop("scale", None)
         mode = props.pop("mode", None)
+        meta = {}
+        for key in list(props):
+            if key in self._CHAR_META_KEYS:
+                meta[key] = props.pop(key)
+        try:
+            voice_volume = max(0.0, min(1.0, float(props.pop(
+                "voice_volume", 1.0))))
+        except (TypeError, ValueError):
+            voice_volume = 1.0
         self.characters[cid] = {
             "id": cid, "name": name, "sprites": props,
             "default": default, "pos": pos, "scale": scale, "mode": mode,
+            "voice_volume": voice_volume, "meta": meta,
         }
         # 同步到对象注册表 (存档/读档用)
         self.script_objects[cid] = {
@@ -929,21 +1049,47 @@ class Runtime:
             display_speaker = self.characters[speaker]["name"]
         elif speaker and speaker != "旁白":
             display_speaker = speaker
-        self._play_voice(voice)
+        self._play_voice(voice, speaker)
         self.engine.display.show_text(text, display_speaker)
         self.blocked = "text"
         return BLOCK
 
-    def _play_voice(self, voice_name) -> None:
-        """播放/停止语音 (voice 参数; 无语音时停止上一个)。"""
+    def _play_voice(self, voice_name, speaker=None) -> None:
+        """播放/停止语音 (voice 参数; 无语音时停止上一个)。
+
+        语音音量 = 全局(sfx×voice) × 声音块 volume × 角色 voice_volume。
+        """
         if not voice_name:
             self.engine.audio.stop_voice()
             return
         path = self.resolve_sound(voice_name)
         if path:
-            self.engine.audio.play_voice(path)
+            self.engine.audio.play_voice(
+                path, volume=self._voice_volume(voice_name, speaker))
         else:
             log.warning(f"语音 {voice_name!r} 未注册")
+
+    def _voice_volume(self, voice_name, speaker=None) -> float:
+        """计算语音音量系数: 声音块 volume × 角色 voice_volume。
+
+        未配置的层为 1.0 (不衰减); 结果钳制在 [0, 1]。
+        """
+        vol = 1.0
+        s = self.sounds.get(voice_name)
+        if s:
+            try:
+                vol *= max(0.0, min(1.0, float(s.get("volume", 1.0))))
+            except (TypeError, ValueError):
+                pass
+        if speaker:
+            ch = self.characters.get(speaker)
+            if ch:
+                try:
+                    vol *= max(0.0, min(1.0, float(
+                        ch.get("voice_volume", 1.0))))
+                except (TypeError, ValueError):
+                    pass
+        return max(0.0, min(1.0, vol))
 
     # -- 选项 -----------------------------------------------------------
     # -- 样式 -----------------------------------------------------------
@@ -1080,8 +1226,8 @@ class Runtime:
             text = props.pop("text", sub.op)
             action = self._parse_action(props.pop("action", ""))
             cfg = {}
-            for key in ("image", "image_focus", "width", "height",
-                        "stretch", "text_visible"):
+            for key in ("image", "image_focus", "image_disabled", "width",
+                        "height", "stretch", "text_visible"):
                 if key in props:
                     val = props[key]
                     if key in ("width", "height"):
@@ -1111,6 +1257,77 @@ class Runtime:
         self.engine.emit("menu_register", name=mid, items=len(items))
         log.info(f"菜单已注册: {mid} ({len(items)} 个按键)")
         return None
+
+    def add_menu_button(self, mid: str, text: str, action,
+                        cfg: dict = None, index: int = None) -> dict:
+        """插件 API: 向命名菜单 (title/system/自定义) 追加/插入按钮。
+
+        action: 动作 dict ({"type": ...}) 或动作字符串
+        ("slot_menu save" / "start game_start" / 插件自定义动作)。
+        cfg: {width, height, image, image_focus, stretch, text_visible,
+              enabled(False=禁用态, 点击无效), name(按钮标识)}。
+        """
+        menu = self.menus.get(mid)
+        if isinstance(menu, dict) and "items" in menu:
+            items = menu["items"]
+            ui = menu.get("ui", {})
+        elif isinstance(menu, list):
+            items = menu
+            ui = {}
+        else:
+            items, ui = [], {}
+            self.menus[mid] = {"ui": ui, "items": items}
+        if isinstance(action, str):
+            action = self._parse_action(action) or {"type": "close"}
+        if not isinstance(action, dict):
+            action = {"type": "close"}
+        cfg = dict(cfg or {})
+        if "enabled" in cfg:
+            cfg["enabled"] = str(cfg["enabled"]).lower() in (
+                "true", "1", "yes", "on")
+        item = {
+            "name": str(cfg.get("name") or text),
+            "text": str(text), "action": dict(action), "cfg": cfg,
+        }
+        if index is None:
+            items.append(item)
+        else:
+            items.insert(max(0, min(index, len(items))), item)
+        # 统一为 dict 格式
+        if not (isinstance(self.menus.get(mid), dict)
+                and "items" in self.menus[mid]):
+            self.menus[mid] = {"ui": ui, "items": items}
+        self.engine.emit("menu_button_added", name=mid, text=str(text))
+        log.info(f"菜单按钮已添加: {mid} -> {item['name']}")
+        return item
+
+    def set_menu_button_state(self, mid: str, key, enabled: bool) -> bool:
+        """设置菜单按钮启用/禁用状态。
+
+        key: 按钮名 (子块名/添加时 cfg.name) / 按钮文本 / 整数索引。
+        """
+        menu = self.menus.get(mid)
+        if isinstance(menu, dict):
+            items = menu.get("items", [])
+        elif isinstance(menu, list):
+            items = menu
+        else:
+            return False
+        idx = None
+        if isinstance(key, int):
+            idx = key
+        else:
+            key_s = str(key)
+            for i, it in enumerate(items):
+                if it.get("name") == key_s or str(it.get("text")) == key_s:
+                    idx = i
+                    break
+        if idx is None or not (0 <= idx < len(items)):
+            return False
+        items[idx].setdefault("cfg", {})["enabled"] = bool(enabled)
+        self.engine.emit("menu_button_state", name=mid,
+                         button=items[idx]["name"], enabled=bool(enabled))
+        return True
 
     def _menu_items(self, mid: str) -> list:
         """把命名菜单转成 selection items: [(text, action, cfg), ...]。"""
@@ -1211,6 +1428,9 @@ class Runtime:
             path = target
         self.engine.audio.play_music(path, loop, fade,
                                      name=(target if is_reg else None))
+        # 记录标题 BGM (start 块配置, 鉴赏/回标题恢复用)
+        if self.current_label == "start":
+            self.title_bgm = target if is_reg else path
         return None
 
     def _cmd_pause(self, stmt):
@@ -1244,18 +1464,49 @@ class Runtime:
         return None
 
     def _cmd_volume(self, stmt):
-        """临时音量调整: volume music <0-1> / volume sfx <0-1>"""
+        """音量调整:
+
+        volume music <0-1>          BGM 音量
+        volume sfx <0-1>            音效音量 (同时影响语音 master)
+        volume voice <0-1>          全局语音音量
+        volume voice <角色> <0-1>    某个角色的语音音量 (char voice_volume)
+        """
         if len(stmt.args) < 2:
             return None
         target = stmt.args[0]
-        try:
-            vol = max(0.0, min(1.0, float(self._interp(stmt.args[1]))))
-        except ValueError:
-            return None
         if target in ("music", "bgm"):
+            try:
+                vol = max(0.0, min(1.0, float(self._interp(stmt.args[1]))))
+            except ValueError:
+                return None
             self.engine.audio.set_bgm_volume(vol)
         elif target in ("sfx", "sound"):
+            try:
+                vol = max(0.0, min(1.0, float(self._interp(stmt.args[1]))))
+            except ValueError:
+                return None
             self.engine.audio.set_sfx_volume(vol)
+        elif target == "voice":
+            if len(stmt.args) >= 3:
+                # volume voice <角色> <音量>: 按角色独立调控
+                cid = self._interp(stmt.args[1])
+                try:
+                    vol = max(0.0, min(1.0, float(self._interp(stmt.args[2]))))
+                except ValueError:
+                    return None
+                if cid in self.characters:
+                    self.characters[cid]["voice_volume"] = vol
+                    log.info(f"角色 {cid} 语音音量 -> {vol}")
+                else:
+                    log.warning(f"第{stmt.line}行: 角色 {cid!r} 未定义, "
+                                f"无法设置语音音量")
+            else:
+                # volume voice <音量>: 全局语音音量
+                try:
+                    vol = max(0.0, min(1.0, float(self._interp(stmt.args[1]))))
+                except ValueError:
+                    return None
+                self.engine.audio.set_voice_volume(vol)
         return None
 
     def _menu_ui(self, mid: str) -> dict:
@@ -1291,6 +1542,11 @@ class Runtime:
             "button_x": props.get("button_x", "center"),
             "button_y": props.get("button_y"),
         }
+        if "button_columns" in props:
+            try:
+                pos["columns"] = max(1, int(float(props["button_columns"])))
+            except (TypeError, ValueError):
+                pass
         for bool_key in ("button_stretch", "button_text"):
             if bool_key in props:
                 pos[bool_key] = str(props[bool_key]).lower() in (
@@ -1585,15 +1841,55 @@ class Runtime:
 
     # -- 结束 -----------------------------------------------------------
     def _cmd_ending(self, stmt):
-        """结束游戏: 显示结束画面, 同时淡出停止 BGM。"""
-        self.engine.display.show_ending()
+        """结束游戏: ending [结局名]
+
+        显示结束画面 (结局名), 淡出停止 BGM, 结局名记入全局进度
+        (save/global.json, 跨存档; 鉴赏插件等可监听 ending_recorded)。
+        """
+        name = self._interp(stmt.args[0]) if stmt.args else None
+        self.engine.record_ending(name)
+        self.engine.display.show_ending(name)
         self.engine.audio.stop_music()   # 淡出 (沿用 music_fade)
         self.ended = True
         self.running = False
-        self.engine.emit("script_end")
+        self.engine.emit("script_end", ending=name)
         return None
 
     def _cmd_pass(self, stmt):
+        return None
+
+    def _cmd_window(self, stmt):
+        """运行时窗口配置命令:
+
+        window config
+            title: "新标题"            # 窗口名
+            width: 1600               # 窗口大小 (内容等比缩放, 比例不变)
+            height: 900
+            icon: "materials/x.png"   # 图标 (相对脚本目录)
+            fullscreen: true          # 全屏开关
+            resizable: true           # 是否允许拖拽缩放窗口
+            fps: 60                   # 帧率
+        """
+        if stmt.args and stmt.args[0] != "config":
+            return None
+        cfg = dict(stmt.kwargs)
+        if not cfg:
+            return None
+        # 运行时选项 (确认框/键位/UI 音效/文案) + 窗口配置 (标题/尺寸/图标/全屏)
+        self.engine.apply_config(cfg)
+        self.engine.apply_window_config(cfg)
+        self.engine.emit("window_config", config=cfg)
+        log.info(f"window config 已应用: {cfg}")
+        return None
+
+    def _cmd_fullscreen(self, stmt):
+        """切换全屏: fullscreen true / fullscreen false"""
+        if not stmt.args:
+            return None
+        val = str(self._interp(stmt.args[0])).lower() in (
+            "true", "1", "yes", "on")
+        self.engine.set_fullscreen(val)
+        self.engine.emit("window_config", config={"fullscreen": val})
         return None
 
     # -- widgets 模板实例化 ---------------------------------------------

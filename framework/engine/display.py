@@ -484,6 +484,26 @@ DEFAULT_STYLE = {
     "choice_height": 56,          # 无图/禁用适配时的按钮高度
 }
 
+# 常驻菜单栏 (bar 模式系统菜单) 的默认外观
+DEFAULT_MENU_BAR_STYLE = {
+    "bg": (16, 16, 32, 215),        # 条背景 (RGBA)
+    "border": (90, 90, 130, 120),   # 条边框
+    "align": "center",              # 按钮水平对齐: left / center / right
+    "gap": 12,                      # 按钮间距
+    "padding": 18,                  # 按钮左右内边距 (决定按钮宽度)
+    "height": 56,                   # 条高度
+    "btn_h": 38,                    # 按钮高度
+    "y_offset": 0,                  # 位置微调 (bottom 向上 / top 向下)
+    "button_bg": (42, 42, 70, 235),
+    "button_bg_hover": (233, 69, 96, 255),
+    "button_border": (68, 68, 106, 255),
+    "button_border_hover": (255, 210, 130, 255),
+    "button_radius": 8,
+    "text_color": (234, 234, 234),
+    "text_color_hover": (255, 255, 255),
+    "text_size": 22,
+}
+
 # 通用选择列表 (selection) 的默认外观
 DEFAULT_SELECTION_STYLE = {
     "width_ratio": 0.36,        # 按钮宽度占窗口比例
@@ -599,6 +619,13 @@ class Display:
         self.system_menu_items = []   # [(text, action)]
         self.system_menu_rects = []
 
+        # 常驻菜单栏 (bar 模式: 对话框下方/窗口上方的按钮条)
+        self.menu_bar_active = False
+        self.menu_bar_items = []      # [(text, action, cfg)]
+        self.menu_bar_rects = []
+        self.menu_bar_hover = -1
+        self.menu_bar_style = dict(DEFAULT_MENU_BAR_STYLE)
+
         # 存档槽位选择界面 (save/load)
         self.slot_menu_active = False
         self.slot_menu_mode = "load"  # "save" / "load"
@@ -630,6 +657,7 @@ class Display:
 
         # 结束画面
         self.ending = False
+        self.ending_name = None
         self.ending_timer = 0.0
 
         self._font_title = engine.get_font(48)
@@ -1305,6 +1333,8 @@ class Display:
             "anchor_x": pos.get("button_x", "center"),
             "anchor_y": pos.get("button_y"),
         }
+        if "columns" in pos:
+            style["columns"] = pos["columns"]
         for bool_key in ("button_stretch", "button_text"):
             if bool_key in pos:
                 style[bool_key] = str(pos[bool_key]).lower() in (
@@ -1347,27 +1377,52 @@ class Display:
             self._resolve_title_x(st.get("caption_x", "center")),
             self._resolve_title_y(st.get("caption_y"), 0.30),
         )
-        # 按钮区: 每项可独立尺寸 (高度可变, 纵向排列)
+        # 按钮区: 每项可独立尺寸 (高度可变, 纵向/多列排列)
         n = len(norm)
         bx = self._resolve_title_x(st.get("anchor_x", "center"))
         by = st.get("anchor_y")
         gap = st["gap"]
-        if str(by).lower() == "center":
-            # 先算总高 (按各项高度)
-            total = sum(int(cfg.get("height") or st["height"])
-                        for _, _, cfg in norm)
-            total += (n - 1) * gap
-            by = (self.height - total) / 2
+        columns = max(1, int(st.get("columns", 1)))
+        sizes = [(int(cfg.get("width") or st.get("width")
+                      or w * st["width_ratio"]),
+                  int(cfg.get("height") or st["height"]))
+                 for _t, _a, cfg in norm]
+        if columns <= 1 or n <= 1:
+            # 单列: 垂直排列 (原布局)
+            total = sum(h for _, h in sizes) + (n - 1) * gap
+            if str(by).lower() == "center":
+                by = (self.height - total) / 2
+            else:
+                by = self._resolve_title_y(by, 0.52)
+            rects = []
+            y = by
+            for bw, bh in sizes:
+                rects.append(pygame.Rect(int(bx - bw / 2), int(y), bw, bh))
+                y += bh + gap
         else:
-            by = self._resolve_title_y(by, 0.52)
-        rects = []
-        y = by
-        for text, action, cfg in norm:
-            bw = int(cfg.get("width") or st.get("width")
-                     or w * st["width_ratio"])
-            bh = int(cfg.get("height") or st["height"])
-            rects.append(pygame.Rect(int(bx - bw / 2), int(y), bw, bh))
-            y += bh + gap
+            # 多列 (行优先): 列宽取该列最大宽, 整体水平居中
+            rows = (n + columns - 1) // columns
+            col_w = [max(sizes[r * columns + c][0]
+                         for r in range(rows)
+                         if r * columns + c < n)
+                     for c in range(columns)]
+            row_h = [max(sizes[r * columns + c][1]
+                         for c in range(columns)
+                         if r * columns + c < n)
+                     for r in range(rows)]
+            total_w = sum(col_w) + gap * (columns - 1)
+            total_h = sum(row_h) + gap * (rows - 1)
+            if str(by).lower() == "center":
+                by = (self.height - total_h) / 2
+            else:
+                by = self._resolve_title_y(by, 0.52)
+            x0 = bx - total_w / 2
+            rects = []
+            for i, (bw, bh) in enumerate(sizes):
+                r, c = divmod(i, columns)
+                x = x0 + sum(col_w[:c]) + c * gap
+                y = by + sum(row_h[:r]) + r * gap
+                rects.append(pygame.Rect(int(x), int(y), bw, bh))
         self.selection_rects = rects
         # 兼容旧字段 (标题画面/系统菜单)
         self.title_rects = self.selection_rects
@@ -1375,12 +1430,39 @@ class Display:
         self.engine.emit("selection_show", caption=caption,
                          items=[t for t, _, _ in norm])
 
+    def _item_enabled(self, cfg) -> bool:
+        """菜单按钮是否可用 (cfg.enabled, 默认 True)。"""
+        return cfg.get("enabled", True) if isinstance(cfg, dict) else True
+
+    def sync_selection_enabled(self) -> None:
+        """从命名菜单数据同步按钮启用状态到当前显示的 selection。
+
+        (插件 set_menu_button_state 后调用, 刷新禁用按钮外观/可点性)
+        """
+        if not self.selection_active:
+            return
+        mid = "title" if self.title_active else "system"
+        items = self.engine.runtime._menu_items(mid)
+        if items is None:
+            return
+        by_text = {t: c for t, _a, c in items}
+        for text, _a, cfg in self.selection_items:
+            nc = by_text.get(text)
+            if nc is not None and "enabled" in nc:
+                cfg["enabled"] = nc["enabled"]
+
     def hit_selection(self, pos) -> int:
         if not self.selection_active:
             return -1
         for idx, rect in enumerate(self.selection_rects):
-            if rect.collidepoint(pos):
-                return idx
+            if not rect.collidepoint(pos):
+                continue
+            # 禁用按钮不可点 (返回 -1, 点击落空)
+            if idx < len(self.selection_items):
+                _t, _a, cfg = self.selection_items[idx]
+                if not self._item_enabled(cfg):
+                    return -1
+            return idx
         return -1
 
     def move_active(self, delta: int) -> None:
@@ -1397,6 +1479,13 @@ class Display:
             self.active_index = 0
         else:
             self.active_index = (self.active_index + delta) % n
+        # 键盘导航跳过禁用项 (选择支无禁用概念)
+        if self.selection_active:
+            for _ in range(n):
+                _t, _a, cfg = self.selection_items[self.active_index]
+                if self._item_enabled(cfg):
+                    return
+                self.active_index = (self.active_index + delta) % n
 
     def capture(self):
         """截图当前游戏画面, 返回 Surface 副本 (插件快照用)。"""
@@ -1420,7 +1509,7 @@ class Display:
         需在暂停状态下也调用 (ESC 菜单等), 故独立成方法。
         """
         if self.selection_active or self.choice_active:
-            mouse = pygame.mouse.get_pos()
+            mouse = self.mouse_pos()
             if self.selection_active:
                 idx = self.hit_selection(mouse)
             else:
@@ -1457,16 +1546,21 @@ class Display:
             self._rich.draw_centered(buf, runs, int(tx) + 3, int(text_y) + 3)
             self._rich.draw_centered(buf, runs, int(tx), int(text_y))
         # 按钮 (每按键可独立配置)
-        mouse = pygame.mouse.get_pos()
+        mouse = self.mouse_pos()
         for idx, (label, action, cfg) in enumerate(self.selection_items):
             rect = self.selection_rects[idx]
-            hovered = rect.collidepoint(mouse) or idx == self.active_index
+            disabled = not self._item_enabled(cfg)
+            hovered = (not disabled) and (rect.collidepoint(mouse)
+                                          or idx == self.active_index)
             # 标题画面用 title_buttons 主题图 (多按钮图组, 按索引取),
             # ESC 菜单用 menu_buttons 主题图; cfg 的 image 优先
             theme_comp = ("title_buttons" if self.title_active
                           else "menu_buttons")
             cfg_img = cfg.get("image_focus") if hovered else cfg.get("image")
-            if cfg_img:
+            if disabled:
+                # 禁用态: 优先用 image_disabled 禁用图, 否则纯色暗化
+                img = self._ui_image(cfg.get("image_disabled"))
+            elif cfg_img:
                 img = self._ui_image(cfg_img)
             else:
                 img = (self._theme(theme_comp, "focus" if hovered
@@ -1491,12 +1585,15 @@ class Display:
             if cfg.get("text_visible", st.get("button_text", True)):
                 runs_b = self._rich.parse(
                     str(label), base_size=st.get("text_size", 28),
-                    base_color=st.get("text_color_hover") if hovered
-                    else st.get("text_color", (245, 245, 245)))
-                self._rich.draw_centered(buf, runs_b, rect.centerx,
-                                         rect.centery,
-                                         alpha=255 if hovered
-                                         else st.get("unhover_alpha", 215))
+                    base_color=(st.get("text_color", (245, 245, 245))
+                                if disabled else
+                                (st.get("text_color_hover")
+                                 if hovered
+                                 else st.get("text_color", (245, 245, 245)))))
+                self._rich.draw_centered(
+                    buf, runs_b, rect.centerx, rect.centery,
+                    alpha=110 if disabled else (
+                        255 if hovered else st.get("unhover_alpha", 215)))
 
     def show_system_menu(self, items) -> None:
         """显示系统菜单 (游戏内 ESC, selection 的菜单专用实例)。
@@ -1509,6 +1606,103 @@ class Display:
 
     def hit_system_menu(self, pos) -> int:
         return self.hit_selection(pos) if self.system_menu_active else -1
+
+    # ==================================================================
+    # 常驻菜单栏 (bar 模式系统菜单: 对话框下方 / 窗口上方)
+    # ==================================================================
+    def apply_menu_bar_style(self, cfg: dict) -> None:
+        """应用 menu_bar 样式块 (解析后的值), 已激活时重新布局。"""
+        self.menu_bar_style.update(cfg)
+        if self.menu_bar_active and self.menu_bar_items:
+            self.set_menu_bar(self.menu_bar_items)
+
+    def set_menu_bar(self, items) -> None:
+        """构建常驻菜单栏。items: [(text, action, cfg)] 或 (text, action)。"""
+        st = self.menu_bar_style
+        norm = []
+        for item in items:
+            if len(item) >= 3:
+                norm.append((item[0], item[1], item[2] or {}))
+            else:
+                norm.append((item[0], item[1], {}))
+        self.menu_bar_items = norm
+        w, h = self.width, self.height
+        bar_h = int(st["height"])
+        pos = self.engine.menu_bar_pos
+        if pos == "top":
+            bar_y = int(st.get("y_offset", 0))
+        else:  # bottom = 对话框下方 (贴窗口底部)
+            bar_y = h - bar_h - int(st.get("y_offset", 0))
+        # 按钮宽度按文本自适应 (左右内边距), 高度在条内居中
+        font = self.engine.get_font(int(st["text_size"]))
+        btn_h = max(20, min(int(st["btn_h"]), bar_h - 6))
+        widths = [font.size(str(text))[0] + int(st["padding"]) * 2
+                  for text, _a, _c in norm]
+        total = sum(widths) + int(st["gap"]) * max(0, len(norm) - 1)
+        align = str(st.get("align", "center")).lower()
+        if align == "left":
+            x0 = int(st["padding"])
+        elif align == "right":
+            x0 = w - total - int(st["padding"])
+        else:
+            x0 = max(0, (w - total) // 2)
+        rects = []
+        x = x0
+        for i, (_text, _a, _c) in enumerate(norm):
+            rects.append(pygame.Rect(x, bar_y + (bar_h - btn_h) // 2,
+                                     widths[i], btn_h))
+            x += widths[i] + int(st["gap"])
+        self.menu_bar_rects = rects
+        self.menu_bar_active = True
+        self.menu_bar_hover = -1
+
+    def hide_menu_bar(self) -> None:
+        self.menu_bar_active = False
+        self.menu_bar_items = []
+        self.menu_bar_rects = []
+        self.menu_bar_hover = -1
+
+    def menu_bar_visible(self) -> bool:
+        """菜单栏是否显示: bar 模式 && 非标题画面 (标题有自己的按钮)。"""
+        return (self.menu_bar_active and not self.title_active
+                and self.engine.menu_mode == "bar")
+
+    def hit_menu_bar(self, pos) -> int:
+        if not self.menu_bar_visible():
+            return -1
+        for idx, rect in enumerate(self.menu_bar_rects):
+            if rect.collidepoint(pos):
+                return idx
+        return -1
+
+    def _draw_menu_bar(self, buf) -> None:
+        """绘制常驻菜单栏 (半透明背景条 + 按钮, hover 高亮)。"""
+        if not self.menu_bar_visible():
+            return
+        st = self.menu_bar_style
+        w, h = self.width, self.height
+        bar_h = int(st["height"])
+        if self.engine.menu_bar_pos == "top":
+            bar_y = int(st.get("y_offset", 0))
+        else:
+            bar_y = h - bar_h - int(st.get("y_offset", 0))
+        ui.panel(buf, pygame.Rect(0, bar_y, w, bar_h),
+                 bg_color=st["bg"], border_color=st["border"],
+                 border_width=1)
+        font = self.engine.get_font(int(st["text_size"]))
+        for idx, (text, _a, _c) in enumerate(self.menu_bar_items):
+            rect = self.menu_bar_rects[idx]
+            hovered = idx == self.menu_bar_hover
+            ui.panel(buf, rect,
+                     bg_color=st["button_bg_hover" if hovered
+                                 else "button_bg"],
+                     border_color=st["button_border_hover" if hovered
+                                     else "button_border"],
+                     border_width=2, radius=int(st["button_radius"]))
+            ui.text(buf, font, str(text),
+                    color=st["text_color_hover" if hovered
+                             else "text_color"],
+                    center=rect.center)
 
     def show_slot_menu(self, slots, mode: str = "load") -> None:
         """显示存档槽位选择界面。slots: [{slot,time,label,preview,empty}]"""
@@ -1559,7 +1753,7 @@ class Display:
         runs_t = self._rich.parse(title, base_size=30)
         self._rich.draw_centered(buf, runs_t, w // 2, py + 22)
         # 槽位格子
-        mouse = pygame.mouse.get_pos()
+        mouse = self.mouse_pos()
         for idx, info in enumerate(self.slot_menu_slots):
             rect = self.slot_menu_rects[idx]
             hovered = rect.collidepoint(mouse)
@@ -1693,7 +1887,7 @@ class Display:
                         self.confirm_panel.y + 30,
                         self.confirm_panel.w - pad * 2, align="center")
         # 是/否按钮
-        mouse = pygame.mouse.get_pos()
+        mouse = self.mouse_pos()
         for idx, label in enumerate((self.confirm_yes, self.confirm_no)):
             rect = self.confirm_rects[idx]
             hovered = rect.collidepoint(mouse)
@@ -1742,7 +1936,7 @@ class Display:
         self._rich.draw(buf, runs_h, self.error_panel.x + pad,
                         self.error_panel.y + self.error_panel.h - 78,
                         pw - pad * 2, max_lines=2)
-        mouse = pygame.mouse.get_pos()
+        mouse = self.mouse_pos()
         labels = ("继续游戏", "复制错误", "退出游戏")
         for idx, label in enumerate(labels):
             rect = self.error_rects[idx]
@@ -1781,8 +1975,10 @@ class Display:
         self.notice_ttl = seconds
         self.notice_pos = pos
 
-    def show_ending(self) -> None:
+    def show_ending(self, name: str = None) -> None:
+        """显示结束画面 (结局名可选)。"""
         self.ending = True
+        self.ending_name = name
         self.ending_timer = 0.0
         self.text_active = False
         self.choice_active = False
@@ -1805,6 +2001,11 @@ class Display:
                 self.bg_alpha = 255
                 self.bg_fading = False
         self.sync_mouse_active()
+        # 常驻菜单栏 hover 同步 (bar 模式, 鼠标悬停高亮)
+        if self.menu_bar_visible():
+            self.menu_bar_hover = self.hit_menu_bar(self.mouse_pos())
+        else:
+            self.menu_bar_hover = -1
 
         # 立绘 (登场/退场效果 + 移动/旋转动画)
         for spr in self.sprites.values():
@@ -1876,6 +2077,10 @@ class Display:
             black.set_alpha(int(min(255, self.fade_alpha)))
             buf.blit(black, (0, 0))
 
+        # 常驻菜单栏 (bar 模式; 画在覆盖层之下, 打开覆盖层时被 dim 盖住)
+        if self.menu_bar_visible():
+            self._draw_menu_bar(buf)
+
         if self.error_active:
             self._draw_error(buf)
         elif self.confirm_active:
@@ -1900,17 +2105,57 @@ class Display:
         # 结束画面
         if self.ending:
             buf.fill((0, 0, 0))
-            t1 = self._font_end.render("— 谢谢游玩 —", True, (255, 255, 255))
-            buf.blit(t1, t1.get_rect(center=(self.width / 2, self.height / 2)))
+            if self.ending_name:
+                main = f"— 结局：{self.ending_name} —"
+                sub = "— 谢谢游玩 —"
+            else:
+                main = "— 谢谢游玩 —"
+                sub = None
+            t1 = self._font_end.render(main, True, (255, 255, 255))
+            cy = self.height / 2
+            buf.blit(t1, t1.get_rect(center=(self.width / 2, cy)))
+            if sub:
+                t2 = self._font_notice.render(sub, True, (200, 200, 200))
+                buf.blit(t2, t2.get_rect(center=(self.width / 2, cy + 40)))
 
-        # 贴到窗口 (带震动偏移)
-        surface.blit(buf, (self._shake_ox, self._shake_oy))
+        # 插件渲染钩子 (逻辑坐标 buffer, 随窗口缩放, 覆盖层之上)
+        self.engine.emit("draw_overlay", surface=buf, dt=0)
+
+        # 贴到窗口: 等比缩放保持比例 (letterbox 留黑边, 窗口可自由调整大小)
+        self._present(surface)
+
+    def _present(self, surface) -> None:
+        """把逻辑分辨率 buffer 等比缩放到窗口 (保持宽高比)。
+
+        窗口尺寸变化 (用户拖拽 / window config) 后内容整体拉伸,
+        比例不变; 宽高比不一致时上下/左右留黑边。
+        """
+        win_w, win_h = surface.get_size()
+        scale = min(win_w / self.width, win_h / self.height)
+        tw = max(1, int(self.width * scale))
+        th = max(1, int(self.height * scale))
+        if (tw, th) != (self.width, self.height):
+            scaled = pygame.transform.smoothscale(self.buffer, (tw, th))
+        else:
+            scaled = self.buffer
+        surface.fill((0, 0, 0))
+        ox = (win_w - tw) // 2 + int(self._shake_ox * scale)
+        oy = (win_h - th) // 2 + int(self._shake_oy * scale)
+        surface.blit(scaled, (ox, oy))
+
+    def mouse_pos(self) -> tuple:
+        """窗口鼠标坐标 -> 逻辑坐标 (窗口缩放后命中检测用)。"""
+        return self.engine.to_logical(pygame.mouse.get_pos())
 
     # ------------------------------------------------------------------
     def _draw_textbox(self, buf) -> None:
         w, h = self.width, self.height
         box_h = int(h * 0.30)
         box_y = h - box_h - 12
+        if (self.menu_bar_visible()
+                and self.engine.menu_bar_pos == "bottom"):
+            # bar 模式: 对话框上移, 给底部菜单栏让位 (菜单栏贴底)
+            box_y -= int(self.menu_bar_style["height"]) + 10
         box_w = w - 24
         box_x = 12
         st = self.style
@@ -1974,7 +2219,7 @@ class Display:
     def _draw_choices(self, buf) -> None:
         ui.dim_overlay(buf, 150)
         st = self.style
-        mouse = pygame.mouse.get_pos()
+        mouse = self.mouse_pos()
         self.hover_index = -1
         for idx, (text, label) in enumerate(self.choices):
             rect = self.choice_rects[idx]

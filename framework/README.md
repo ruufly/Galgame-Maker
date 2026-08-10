@@ -38,16 +38,19 @@ framework/
 │   ├── custom_actions.py     explode 动作 + do_action 指令 + wobble 立绘效果 +
 │   │                         wave 文字模式
 │   ├── bgm_notice.py         BGM 播放/暂停/恢复/停止通知
-│   └── slot_thumbnails.py    存档画面快照 (槽位缩略图)
+│   ├── slot_thumbnails.py    存档画面快照 (槽位缩略图)
+│   └── gallery.py            鉴赏: 标题菜单按钮 + CG/BGM/角色/场景鉴赏
+│                            (结局解锁, 配置在 gallery.gal)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 493 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 568 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 493 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 568 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
-命名空间/音频/快照/LaTeX)。
+命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
+鉴赏系统/结局记录/CG 收集)。
 
 ---
 
@@ -144,6 +147,7 @@ choice:                   # 选择支 (也支持行内参数, 见 4.9)
 ```gal
 scene school                       # 场景定义 (可放顶层, 静态注册)
     name: "学校"
+    type: normal                    # normal (默认) / cg
     default: "materials/image/bg.png"
     morning: "materials/image/bg.png"     # 背景名: 路径
 
@@ -154,6 +158,11 @@ bg school with fade                # 过渡: fade/dissolve/blinds/slide/
                                    #       circle/pixelate/zoom + 插件自定义
 ```
 
+**场景分类**: `type: cg` 的 CG 场景显示逻辑与 normal 完全一致,
+但每次用 `bg` 展示 (含背景名) 都会记入**全局 CG 收集**
+(`save/global.json`, 跨存档), 供鉴赏插件分门别类展示
+(见 4.15 鉴赏系统)。
+
 ### 4.4 立绘与角色
 
 ```gal
@@ -162,6 +171,9 @@ char producer
     default: "materials/char/producer1.png"
     normal: "materials/char/producer1.png"    # 立绘名: 路径
     happy: "materials/char/producer2.png"
+    voice_volume: 0.6                # 该角色语音音量 0-1 (可选, 默认 1.0)
+    desc: "引擎的制作者，温和而执着。"   # 描述性信息 (角色鉴赏用, 可选)
+    cv: "演示配音"                    # 声优 / 生日 / 身高 / 年龄 等均可
 
 show producer normal                # 显示角色立绘 (默认居中)
 show producer happy                 # 切换立绘 (保持中心点原位替换)
@@ -176,9 +188,8 @@ flip producer                       # 水平翻转 (再次调用恢复)
 flip producer vertical              # 垂直翻转
 ```
 
-立绘登场/退场效果 (9 种预设):
-`fade` / `slide_left` / `slide_right` / `slide_up` / `slide_down` /
-`zoom` / `drop` / `bounce` / `spin`。插件可注册 (见插件 API)。
+**描述性信息**: `desc/description/bio/intro/cv/birthday/height/age`
+等键不进入立绘表, 存于 `characters[<id>]["meta"]`, 供角色鉴赏等使用。
 
 ### 4.5 对话与语音
 
@@ -250,6 +261,12 @@ pause all                       # BGM 淡出暂停 + 音效/语音全停
 # 音效与语音
 sfx sfx_boom                    # 剧情音效
 say producer "..." voice voice_demo   # 台词语音 (可省略)
+
+# 语音音量分层 (四层相乘, 每层默认 1.0 不衰减):
+#   全局 sfx 音量 × 全局 voice 音量 × 声音块 volume × 角色 voice_volume
+volume voice 0.5                # 全局语音音量
+volume voice producer 0.3       # 指定角色的语音音量 (改 char voice_volume)
+# 角色语音音量也可在 char 块里预设: voice_volume: 0.6
 
 # 自动行为
 #   ending 指令 / 标题"开始游戏" 动作: 自动 stop music (淡出, 非全局静音)
@@ -326,6 +343,44 @@ window
 * 键盘移动循环切换; 鼠标点击同步活动索引 (键盘/鼠标状态一致)
 * ESC 菜单 (paused) 下鼠标悬停同步依然工作 (见 `sync_mouse_active`)
 
+### 4.9.1 系统菜单两种模式: popup 弹窗 / bar 常驻菜单栏
+
+开发者可在 window 块选择系统菜单形态 (也可用 `window config` 运行时切换):
+
+```gal
+window
+    menu_mode: "popup"        # popup=ESC 弹窗 (默认) / bar=常驻按钮条
+    menu_bar_pos: "bottom"    # bar 模式位置: bottom=对话框下方 / top=窗口上方
+```
+
+* **popup (默认)**: 游戏时按 ESC 打开系统菜单 (选择列表覆盖层, 暂停游戏)
+* **bar**: 对话框下方或窗口上方常驻一排按钮 (存档/读档/返回标题/退出),
+  **游戏过程中随时点击**; ESC 不再弹窗 (仅用于关闭槽位界面等覆盖层)。
+  bar 按钮复用 `menu system` 块的按钮定义 (自动过滤无意义的
+  `continue`), 未定义时用默认四项。标题画面始终使用自己的按钮, bar 隐藏。
+
+**bar 样式** (独立 `menu_bar` 块, `menu_bar default` 重置):
+
+```gal
+menu_bar
+    bg: "#1a1a2e"              # 条背景 (含 alpha: "#1a1a2ee0" 或 R,G,B,A)
+    border: "#5a5a7a"
+    align: center              # 按钮水平对齐: left / center / right
+    gap: 12                    # 按钮间距
+    padding: 18                # 按钮左右内边距 (决定按钮宽度)
+    height: 56                 # 条高度
+    btn_h: 38                  # 按钮高度
+    y_offset: 0                # 位置微调 (bottom 向上 / top 向下)
+    button_bg: "#2a2a44" / button_bg_hover: "#e94560"
+    button_border: "#44446a" / button_border_hover: "#ffd282"
+    button_radius: 8
+    text_color: "#eaeaea" / text_color_hover: "#ffffff"
+    text_size: 22
+```
+
+bar 模式下对话框自动上移让位 (bottom); 打开槽位界面/确认框等覆盖层时
+菜单栏被 dim 盖住, 关闭覆盖层后恢复。
+
 ### 4.10 界面样式
 
 ```gal
@@ -392,7 +447,8 @@ window
     height: 720
     icon: "materials/image/icon.png"
     fps: 60
-    fullscreen: false
+    fullscreen: false              # 全屏启动
+    resizable: true                # 允许拖拽窗口边缘 (内容等比缩放)
     confirm_quit: true             # 对话框统一配置 (退出/读档/返回标题):
     confirm_quit_text: "确定要退出游戏吗？"
     confirm_quit_yes: "退出" / confirm_quit_no: "继续游戏"
@@ -406,6 +462,39 @@ window
     menu_continue: "继续游戏"      # ESC 菜单文案 (可自定义)
     menu_save: "存档" / menu_load: "读取存档" / menu_title: "返回标题"
     menu_quit: "退出游戏"
+```
+
+### 4.12.1 运行时窗口配置 (window config) 与等比缩放
+
+`window config` 命令可在**程序运行过程中**即时修改窗口配置
+(标题/大小/图标/全屏/可缩放/帧率), 无需重启:
+
+```gal
+window config
+    title: "新的标题"              # 窗口名
+    width: 1600                    # 窗口大小 (像素)
+    height: 900
+    icon: "materials/image/x.png"  # 图标 (相对脚本目录)
+    fullscreen: true               # 全屏开关
+    resizable: false               # 是否允许拖拽缩放
+    fps: 60
+
+fullscreen true                    # 独立全屏指令 (true/false)
+```
+
+**等比缩放 (letterbox)**: 引擎以**固定逻辑分辨率** (初始 width/height) 绘制,
+窗口可自由调整大小 (拖拽边缘 / window config / 全屏), 画面整体等比拉伸,
+保持比例不变; 宽高比不一致时上下/左右留黑边。鼠标坐标自动映射回逻辑坐标,
+命中检测/悬停在任何窗口尺寸下都准确。
+
+相关 API (插件/游戏代码):
+
+```python
+engine.set_window_title(title)       # 改窗口名
+engine.set_window_size(w, h)         # 改窗口大小 (内容等比缩放)
+engine.set_fullscreen(True/False)    # 全屏切换
+engine.apply_window_config(cfg)      # 批量应用 window 配置 dict
+engine.to_logical(pos)               # 窗口坐标 -> 逻辑坐标
 ```
 
 ### 4.13 插件装载配置
@@ -424,7 +513,58 @@ save                        # 存档到槽位 0 (save/slot0.json)
 load                        # 读档
 fade / fadeout              # 黑幕淡入/淡出
 ending                      # 结束画面 (同时淡出停止 BGM) 后回标题
+ending 真结局                # 带结局名: 显示 "— 结局：真结局 —",
+                            # 并记入全局进度 (save/global.json, 跨存档)
 ```
+
+**全局进度** (`save/global.json`, 跨存档):
+
+* `endings` — 已达成结局名列表 (`ending <名>` 触发, 事件 `ending_recorded`)
+* `cgs` — 已解锁 CG: `{场景id: [背景名列表]}` (CG 场景 `bg` 展示触发,
+  事件 `cg_unlocked`)
+
+```python
+engine.get_endings()                 # -> [结局名]
+engine.record_ending(name)           # 记录结局 (ending 指令内部调用)
+engine.get_unlocked_cgs()            # -> {场景id: [背景名]}
+engine.record_cg(scene_id, pose)     # 记录 CG (bg 指令内部调用)
+engine.cg_unlocked(scene_id, pose)   # -> bool
+```
+
+### 4.15 鉴赏系统 (gallery 插件)
+
+标题画面的「鉴赏」按钮可解锁 **CG / BGM / 角色 / 场景** 四类鉴赏。
+配置在独立 `.gal` 文件 (如 `gallery.gal`, 被主脚本 import):
+
+```gal
+gallery
+    unlock_ending: "真结局"          # 达成此结局解锁鉴赏按钮 (空=不锁)
+    button_text: "鉴赏"              # 标题菜单按钮文本
+    title: "鉴赏"                    # 鉴赏界面标题
+    categories: "cg, bgm, character, scene"   # 可用分类
+    locked_hint: "达成「真结局」后解锁鉴赏"
+
+scene cg_school                     # CG 场景定义 (type: cg)
+    type: cg
+    name: "学园CG"
+    default: "materials/cg/a.png"
+    morning: "materials/cg/b.png"   # 每张背景 = 一张可收集 CG
+```
+
+* **解锁**: 达成 `unlock_ending` 指定的结局 (用 `ending <名>` 指令) 后,
+  标题菜单的「鉴赏」按钮从禁用态变为可用; 未解锁时按钮呈禁用态
+* **按钮样式**: 在 `ui.gal` 的 `menu title` 中定义
+  (子块名任意, `action: gallery_open`, 样式照常配置);
+  未在脚本中定义时插件自动追加默认样式按钮
+* **禁用图**: 按钮支持 `image_disabled` 键 (禁用态专用图片, 系统菜单通用;
+  未配置时禁用态为纯色暗化)
+* **数据来源**: CG 来自 `type: cg` 场景的已解锁背景; BGM 来自
+  `sound` 注册表 `type: music`; 角色来自 `char` (含 desc 等描述);
+  场景来自 `scene` 定义
+* **界面**: 分类按钮行 + 内容网格 (CG 点击放大查看; BGM 点击后
+  先在页面显示"正在切换"提示再实际切换试听), ESC/返回 关闭回标题
+* **标题 BGM**: `start:` 块可用 `music` 配置标题背景音乐, 回标题/
+  退出鉴赏时自动恢复播放 (engine 记录 `runtime.title_bgm`)
 
 ---
 
@@ -739,7 +879,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (493 项断言)
+## 12. 测试 (568 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -751,7 +891,10 @@ py -3.10 framework/tests/smoke.py
 样式表 / selection / 存档 (含 BGM 名称/快照元数据) / 过渡 / 角色 / 场景 /
 对话框 / 菜单 / 动作 / 立绘效果 / 文字模式 / 插件装载配置 / import 拆分 /
 键盘导航 / 命名空间 / 音频 (fade 状态机/全局静音/UI 音效) / 存档快照 /
-运行时插件管理 / LaTeX 逐字兼容 / 语音生命周期 / 错误弹窗。
+运行时插件管理 / LaTeX 逐字兼容 / 语音生命周期 / 分角色语音音量 /
+窗口配置与等比缩放 (to_logical/present letterbox/window config 指令) /
+常驻菜单栏 (bar 模式: 构建/命中/点击/ESC 语义/样式/自定义项) /
+错误弹窗。
 
 ---
 
@@ -824,6 +967,10 @@ py -3.10 framework/tests/smoke.py
 | 17. 存档快照 | 纯游戏画面帧 + 槽位缩略图 (相对路径) |
 | 18. LaTeX 兼容 | 大括号配对扫描 + 公式逻辑长度 (逐字模式) |
 | 19. 交接文档 | 本 README 完整重写 (493 项测试全绿) |
+| 20. 窗口/语音增强 | 分角色语音音量 (char voice_volume + volume voice) + 运行时 window config 命令 + 全屏切换 + 窗口等比缩放 (letterbox, 鼠标坐标映射) + 测试增至 519 项 |
+| 21. 菜单双模式 | menu_mode: popup (ESC 弹窗) / bar (常驻菜单栏, 对话框下方或窗口上方, 随时点击) + menu_bar 样式块 + 运行时切换 + 测试增至 539 项 |
+| 22. 鉴赏系统 | gallery 插件 (标题按钮+结局解锁+CG/BGM/角色/场景鉴赏) + 菜单按钮注册/禁用 API + ending 结局名 + char 描述 + scene type cg + 全局进度 (save/global.json) + 测试增至 562 项 |
+| 23. 鉴赏完善 | 标题按钮多列布局 (button_columns) + 按钮禁用图 image_disabled + BGM 先显示后切换 + 标题 BGM (start 块, 退出鉴赏恢复) + 测试增至 568 项 |
 
 ---
 
@@ -835,9 +982,10 @@ py -3.10 framework/tests/smoke.py
 | --- | --- |
 | `demo.gal` | 主流程: window 配置 (键盘导航/UI 音效/确认框/music_fade) + plugins 装载 + **using 导入** + title 标题 + game_start 开场 (语音旁白) |
 | `ui.gal` | 界面样式: style 自定义主题 + selection_style + ui 主题切片 + **menu title/system** (带菜单级 ui_hover/ui_click 音效) |
-| `cast.gal` | 角色与场景定义: char producer (多立绘) + scene school |
+| `cast.gal` | 角色与场景定义: char producer (多立绘 + voice_volume 分角色语音音量) + scene school |
 | `audio.gal` | 声音注册: sfx_click/sfx_hover/sfx_boom/voice_demo/bgm_piano41/bgm_piano39 |
-| `branches.gal` | 分支流程: 选择支 (like_it/neutral/dislike) + 立绘登场退场 + 场景过渡 + 文字模式演示 + **BGM 控制全流程** (淡入/暂停/恢复/音量/切歌/淡出) + ending |
+| `gallery.gal` | 鉴赏配置 (gallery 块: 真结局解锁) + CG 场景定义 (scene type: cg) |
+| `branches.gal` | 分支流程: 选择支 (like_it/neutral/dislike) + 立绘登场退场 + 场景过渡 + 文字模式演示 + **BGM 控制全流程** (淡入/暂停/恢复/音量/切歌/淡出) + **window config 运行时窗口配置** (改标题/改尺寸/全屏切换, 等比缩放) + **menu_mode 双模式切换** (bar 常驻菜单栏 ↔ popup ESC 弹窗) + **CG 展示与真结局** (解锁鉴赏) + ending |
 
 素材目录:
 * `materials/image/` — 背景/立绘/UI 九宫格切片素材包
@@ -859,8 +1007,9 @@ py -3.10 framework/tests/smoke.py
 | 清除 | `clear` | 清除全部立绘 |
 | 样式 | `use style <名>` / `style <名>` 块 / `selection_style` 块 | 主题切换/定义 |
 | UI 素材 | `ui` 块 | 九宫格主题切片 |
-| 菜单 | `menu <id>` 块 | 命名菜单定义 |
-| 标题 | `title` 块 | 标题画面 (menu: 引用) |
+| 菜单 | `menu <id>` 块 | 命名菜单定义 (按钮支持 image_disabled 禁用图) |
+| 菜单栏 | `menu_bar` 块 | 常驻菜单栏样式 (bar 模式) |
+| 标题 | `title` 块 | 标题画面 (menu: 引用; button_columns 多列) |
 | 选择支 | `choice [ui_click X] [ui_hover Y]` 块 | 分支选择 |
 | 变量 | `set <名> = <表达式>` | 赋值 (main::/插件:: 前缀) |
 | 条件 | `if/elif/else/endif` | 分支 |
@@ -871,14 +1020,18 @@ py -3.10 framework/tests/smoke.py
 | 音乐 | `music <名/路径> [loop 0/1] [fade 秒]` | 播放/切换 |
 | 暂停 | `pause music [fade 秒]` / `pause all` | 暂停音乐/全局 |
 | 恢复 | `resume music [fade 秒]` | 恢复 |
-| 音量 | `volume music <0-1>` / `volume sfx <0-1>` | 临时音量 |
+| 音量 | `volume music <0-1>` / `volume sfx <0-1>` / `volume voice [角色] <0-1>` | 临时音量 (voice 可全局或按角色) |
 | 停止 | `stop music [fade 秒]` / `stop all` | 停止音乐/全局 |
 | 音效 | `sfx <声音名>` | 剧情音效 |
+| 窗口 | `window config` 块 | 运行时改 标题/尺寸/图标/全屏/可缩放/fps (即时生效) |
+| 全屏 | `fullscreen true/false` | 切换全屏 (内容等比缩放) |
 | 命名空间 | `using <命名空间...>` | 导入插件命名空间 |
 | 插件 | `plugin load/unload/list <名>` | 运行时插件管理 |
 | 存档 | `save` / `load` | 槽位 0 存档/读档 |
 | 转场 | `fade` / `fadeout` | 黑幕淡入/淡出 |
-| 结束 | `ending` | 结束画面 (自动停 BGM) 回标题 |
+| 结束 | `ending [结局名]` | 结束画面 + 结局记录 (全局进度) |
+| 鉴赏 | `gallery` 块 / `scene type: cg` | 鉴赏配置 / CG 场景 (展示即收集) |
+| 结束 | `ending [结局名]` | 结束画面 + 结局记录 (全局进度) 回标题 |
 
 ## 18. 已知限制 (补充)
 

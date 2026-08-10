@@ -11,6 +11,7 @@ class Audio:
         self.mixer_ok = False
         self.bgm_volume = 0.8
         self.sfx_volume = 1.0
+        self.voice_volume = 1.0        # 全局语音音量 (volume voice <0-1> 调整)
         self.current_bgm = None        # 当前 BGM 路径 (恢复播放用)
         self.current_bgm_name = None  # 当前 BGM 注册名 (存档/显示用, 可为 None)
         self.voice_sound = None
@@ -22,6 +23,11 @@ class Audio:
             pygame.mixer.init()
             self.mixer_ok = True
             self.voice_channel = pygame.mixer.Channel(0)   # 语音专用通道
+            # 防御: 重复 init (如 pygame.quit 后重建引擎) 时清除 music 残留
+            try:
+                pygame.mixer.music.stop()
+            except Exception:
+                pass
         except Exception as exc:
             log.warning(f"音频初始化失败, 游戏将静音运行: {exc}")
 
@@ -225,10 +231,19 @@ class Audio:
     def set_sfx_volume(self, vol: float) -> None:
         self.sfx_volume = max(0.0, min(1.0, vol))
 
+    def set_voice_volume(self, vol: float) -> None:
+        """设置全局语音音量 (作为 master, 与角色/声音音量相乘)。"""
+        self.voice_volume = max(0.0, min(1.0, vol))
+
     # ------------------------------------------------------------------
     # 语音 (独立通道, 随 say/nar 播放与停止)
     # ------------------------------------------------------------------
-    def play_voice(self, path: str) -> bool:
+    def play_voice(self, path: str, volume: float = None) -> bool:
+        """播放语音 (独立通道)。
+
+        volume: 本次播放的额外音量系数 (角色 voice_volume × 声音块 volume),
+        None 表示不额外衰减。最终音量 = sfx_volume × voice_volume × volume。
+        """
         if not self.mixer_ok:
             return False
         self.stop_voice()
@@ -239,7 +254,8 @@ class Audio:
                 log.warning(f"语音文件不存在: {real}")
                 return False
             snd = pygame.mixer.Sound(real)
-            snd.set_volume(self.sfx_volume)
+            extra = 1.0 if volume is None else max(0.0, min(1.0, float(volume)))
+            snd.set_volume(self.sfx_volume * self.voice_volume * extra)
             ch = self.voice_channel or pygame.mixer.find_channel()
             if ch is None:
                 return False

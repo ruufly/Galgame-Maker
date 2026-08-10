@@ -273,7 +273,8 @@ class Parser:
         # ---- 对象创建: ... / plugins / ui + 属性块
         if op in ("weight", "sprite", "object", "char", "character",
                   "scene", "scenery", "window", "config", "title", "style",
-                  "selection_style", "plugins", "ui", "sound"):
+                  "selection_style", "menu_bar", "plugins", "ui", "sound",
+                  "gallery"):
             return self._parse_create(i, indent, lineno, content, op, rest)
 
         # ---- set: 保留字符串引号, 表达式部分重构 ----------------
