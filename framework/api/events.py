@@ -82,7 +82,8 @@ class EventBus:
                 results.append(handler(**kwargs))
             except Exception as exc:  # 插件异常不能拖垮主循环
                 from framework.engine import log
-                log.warning(f"[event:{event_name}] 处理器 {handler} 出错: {exc}")
+                log.w("log.event.handler_failed",
+                      event=event_name, handler=handler, exc=exc)
         return results
 
     def has_handlers(self, event_name: str) -> bool:

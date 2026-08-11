@@ -83,7 +83,8 @@ class ErrorHandler:
             pass
         self.last_error = {"text": text, "traceback": tb_text,
                            "time": stamp, "file": path, "level": level}
-        first = text.splitlines()[0] if text else "未知错误"
+        first = (text.splitlines()[0] if text
+                 else self.engine.i18n.t("error.unknown"))
         if level == "warn":
             log.warning(first)
         else:

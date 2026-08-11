@@ -280,7 +280,7 @@ class Parser:
         if op in ("weight", "sprite", "object", "char", "character",
                   "scene", "scenery", "window", "config", "title", "style",
                   "selection_style", "menu_bar", "plugins", "ui", "sound",
-                  "gallery"):
+                  "gallery", "language"):
             return self._parse_create(i, indent, lineno, content, op, rest)
 
         # ---- set: 保留字符串引号, 表达式部分重构 ----------------
@@ -320,7 +320,7 @@ class Parser:
                 left, right = cnt.split("->", 1)
                 options.append((_unquote(left), _unquote(right)))
             else:
-                log.warning(f"第{ln}行: choice 块内选项需为 '文本 -> 标签' 形式, 已跳过: {cnt!r}")
+                log.w("log.parser.choice_invalid", line=ln, text=cnt)
             i += 1
         if not options:
             raise ParserError(f"第{lineno}行: choice 块没有选项")
@@ -372,7 +372,7 @@ class Parser:
                         val = val[:comment]
                     props[kv[0].strip()] = _unquote(val)
                 else:
-                    log.warning(f"第{ln2}行: 属性需为 key: value, 已跳过")
+                    log.w("log.parser.attr_invalid", line=ln2)
                 i += 1
             items.append(Statement(op=name, args=[], kwargs=props,
                                    line=ln, raw=cnt))
@@ -435,7 +435,7 @@ class Parser:
                         val = val[:comment]
                     props[kv[0].strip()] = _unquote(val)
                 else:
-                    log.warning(f"第{ln2}行: 属性需为 key: value, 已跳过")
+                    log.w("log.parser.attr_invalid", line=ln2)
                 i += 1
             items.append(Statement(op="setting", args=[key],
                                    kwargs=props, line=ln, raw=cnt))
@@ -512,7 +512,7 @@ class Parser:
                     val = val[:comment]
                 kwargs[kv[0].strip()] = _unquote(val)
             else:
-                log.warning(f"第{ln}行: 属性需为 key: value 形式, 已跳过: {cnt!r}")
+                log.w("log.parser.attr_invalid_value", line=ln, text=cnt)
             i += 1
         return Statement(
             op=op, args=[ident] if ident else [], kwargs=kwargs,

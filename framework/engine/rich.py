@@ -273,7 +273,7 @@ class MathRenderer:
             self._meta_parser = mathtext.MathTextParser("agg")
             self.available = True
         except Exception as exc:
-            log.info(f"matplotlib 不可用, LaTeX 公式将按原文显示: {exc}")
+            log.i("log.rich.matplotlib_missing", exc=exc)
 
     def render(self, expr, size=26, color=(245, 245, 245), color_override=True):
         """渲染公式, 返回 (pygame.Surface, asc, desc)。失败返回 None。"""
@@ -320,7 +320,7 @@ class MathRenderer:
             self._cache[key] = result
             return result
         except Exception as exc:
-            log.warning(f"LaTeX 渲染失败 {expr!r}: {exc}")
+            log.w("log.rich.render_failed", src=expr, exc=exc)
             return None
 
 

@@ -43,7 +43,8 @@ class CustomActionsPlugin(Plugin):
             except (TypeError, ValueError):
                 mag = 20
             engine.display.shake(duration, mag)
-            engine.display.show_notice("强震！", 1.0)
+            engine.display.show_notice(
+                engine.i18n.t("notice.quake"), 1.0)
             return False
 
         def act_freeze(engine, params, source):
@@ -192,9 +193,8 @@ class CustomActionsPlugin(Plugin):
         # 全屏特效覆盖 (freeze/blackout)
         engine.display.register_effect_overlay(self._overlay)
 
-        print("[插件] custom_actions: 动作 explode/quake/freeze/blackout | "
-              "立绘 wobble/sway/zoom_bounce/fade_rotate | "
-              "文字 wave/bounce/speedup")
+        from framework.engine import log
+        log.i("log.plugin.loaded", name=self.name, version=self.version)
 
     def _overlay(self, surface):
         """freeze/blackout 全屏覆盖 (无特效时返回 None)。"""
@@ -215,7 +215,8 @@ class CustomActionsPlugin(Plugin):
 
     def on_unload(self):
         self._fx = None
-        print("[插件] custom_actions 已卸载")
+        from framework.engine import log
+        log.i("log.plugin.unloaded", name=self.name)
 
 
 def _num(v, default):

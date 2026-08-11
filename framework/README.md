@@ -46,12 +46,12 @@ framework/
 │   └── auto_skip.py          自动模式 (自动推进, 非正式界面自动暂停)
 │                               + 跳过剧情 (直达下一个选择支/结局)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 747 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 779 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 747 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 779 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -753,6 +753,133 @@ engine.keybinds.register(
 (默认 F3, 设置界面可调整/留空), 切换调试模式; **开启时才显示**
 右上角 FPS / 窗口分辨率 / 当前标签等调试信息。
 
+### 4.19 多语言系统 (i18n)
+
+三层语言, 各层在其目录下配置 JSON 语言文件 (文件名 = 语言码):
+
+| 层 | 位置 | 内容 |
+| --- | --- | --- |
+| 框架 | `framework/lang/<code>.json` | 日志/提示/内置 UI 文案 (确认框默认、菜单文案、设置项 label 等), 引擎构造时自动加载 |
+| 插件 | `plugins/lang/<code>.json` | 插件文案 (key 建议带插件前缀, 如 `gallery.button`), 插件装载时自动加载 |
+| 游戏 | 项目目录 `lang/<code>.json` | **游戏文本** (检测到目录即启用), 可选 |
+
+**游戏文本** (对开发者友好: 文本存额外文件, DSL 不臃肿): 台词/选项/
+标题中用 `{@key}` 占位符引用, 如:
+
+```gal
+say producer "{@welcome}"        # 文本取自 lang/<语言>.json 的 welcome
+nar "{@love_high}"               # key 文本内的 $var 支持再插值
+choice:
+    "{@choice_like}" -> like_it
+```
+
+**主文件 language 块** (声明项目支持的语言, 主文件如 demo.gal 顶部):
+
+```gal
+language
+    default: en            # 默认语言: 当前语言缺翻译时回退到它
+    en: "English"          # 语言码 -> 设置中显示的名字
+    zh-CN: "简体中文"
+```
+
+* 游戏语言文件只从列出的语言中加载 (`lang/<语言码>.json`), 脚本中任何
+  语言文本资源均在其中查找
+* 设置页"语言"项显示的是**语言名字** (如 English / 简体中文), 切换后
+  立即全界面生效
+
+* 未翻译的 key 回退默认语言, 再回退原文 (便于开发调试); `{@key}`
+  占位符的查找顺序: **游戏表 → 核心表 → 原文** —— 脚本可直接引用框架
+  文案, 如 `confirm_quit_text: "{@dialog.quit.text}"` 复用确认框默认文案
+* 切换语言后**所有显示中的界面即时生效**: 新文本、标题/系统菜单按钮
+  (脚本文本可用 {@key})、bar 常驻栏、**对话框/确认框 (含按钮)**、
+  **设置界面 (title/label/section/选项值)**、**角色与场景显示名**、
+  {lang} UI 图片
+* 语言写入 `$lang` / `$language` 变量 (脚本可引用)
+* 可在设置页面的"语言"项切换 (也可脚本/插件调用 `engine.i18n.set_lang`)
+
+**对话框 / 菜单文案** (window 块): 确认框/ESC 菜单文案支持 `{@key}`,
+**显示时按当前语言解析** —— 语言切换即时刷新, 脚本可覆写为任意语言
+(见 demo.gal window 块):
+
+```gal
+window
+    confirm_quit: true
+    confirm_quit_text: "{@dialog.quit.text}"   # 或直接写任意语言的文本
+    menu_continue: "{@menu.continue}"          # ESC 菜单文案同理
+```
+
+**设置界面多语言** (setting.gal): `title / label / section / options`
+均支持 `{@key}` 占位符 (切换语言即时生效); 内置设置项自带 `label_key`
+(核心语言表 `settings.*`), `setting.gal` 的 label 仅为覆盖/兜底。
+**分栏 (tab) 显示名** 按 `settings.section.<值>` 翻译, 未配置的
+自定义分栏原样显示:
+
+```gal
+settings
+    title: "{@settings.title}"
+    columns: 2
+    setting my_slider
+        label: "{@settings.my_slider}"
+        type: slider
+        var: my_val
+        section: "游戏"          # 内置分栏值: 音量/语音/显示/游戏/按键/通用
+```
+
+**角色与场景显示名**: `char`/`scene` 块的 `name` (及 `desc`/`cv` 等
+描述) 支持 `{@key}` —— 注册时存占位符原文, **显示时解析** (名字框/
+鉴赏/场景通知均按当前语言):
+
+```gal
+char producer
+    name: "{@char.producer.name}"
+    desc: "{@char.producer.desc}"
+```
+
+**结局名约定**: 结局名按**原文记录** (跨存档/解锁比较用), **显示时
+解析** —— 脚本与 gallery 配置写同一个占位符即可, 任何语言下解锁
+判断一致:
+
+```gal
+ending {@ending.true_end}            # story.gal
+gallery
+    unlock_ending: "{@ending.true_end}"   # gallery.gal
+```
+
+**内置默认文案** (未覆写时): 确认框默认按钮 `confirm.yes/no`、"开始
+游戏" `menu.start`、结束画面 `ending.name/ending.thanks` 等均走核心
+语言表, 无 language 块的项目也会按当前语言显示。
+
+**UI 图片语言变体**: 图片路径含 `{lang}` 占位符时按当前语言替换
+(如 `materials/title_{lang}.png` → `materials/title_en.png`), 切换
+语言自动重载。
+
+**渲染字体**: `window` 块 `font:` 配置 — 相对脚本目录的字体文件
+(`font: "fonts/Ubuntu-R.ttf"`) 或系统字体 (`font: "sys:Microsoft
+YaHei"`); 运行时 `engine.apply_font(font)` 立即生效。
+
+**日志多语言**: `log.i / log.w / log.e(key, **fmt)` 按语言表翻译
+日志文案 (如 `log.i("log.script_loaded", path=...)`); **框架全部日志
+(引擎/解析/插件/启动器) 均已键化**, 核心语言表含 `log.*` key,
+开发者可在语言文件中自行扩展。
+
+**API**:
+
+```python
+engine.i18n.set_lang("en")              # 切换语言
+engine.i18n.t("menu.quit")              # 取文本 (回退默认/原文)
+engine.i18n.t("gallery.button", ns="plugin")   # 插件/游戏层: ns="plugin"/"game"
+engine.i18n.resolve("hi {@name}")       # 替换 {@key} 占位符 (游戏→核心→原文)
+engine.i18n.langs()                     # 可用语言列表
+
+# 快捷键显示名走 i18n (插件 API, 自动生成设置项时生效)
+engine.keybinds.register("my_toggle", "调试模式", callback,
+                         primary="f3", label_key="debug_mode.toggle")
+```
+
+语言文件格式 (JSON): `{"key": "文本"}` (单语言) 或
+`{"en": {...}, "zh-CN": {...}}` (多语言合并)。核心文案 key 见
+`framework/lang/zh-CN.json`。
+
 ---
 
 ## 5. 命名空间系统
@@ -1086,7 +1213,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (747 项断言)
+## 12. 测试 (779 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -1140,6 +1267,10 @@ py -3.10 framework/tests/smoke.py
     否则公式与相邻行重叠
 16. **lines 逐行模式**: reveal 必须按**逻辑长度**推进 (公式计 1),
     且基于富文本布局分行 (wrap_text 会切在 {m} 标记中间)
+17. **Python 3.10 f-string 限制**: f-string 表达式内嵌字符串字面量会
+    触发 SyntaxError (PEP 701 到 3.12 才放开) —— i18n 迁移时踩过
+    (core.py 对话框日志 / gallery.py 形态进度)。**不要在 f-string 里
+    写 `{self.t('a' if x['b'] else 'c')}` 这类嵌套**, 先算好再拼接。
 
 ---
 
@@ -1201,6 +1332,10 @@ py -3.10 framework/tests/smoke.py
 | 39. 键盘/调试收尾 | ESC 注册进快捷键系统 (key_escape 可配置) + fps_overlay 改名 debug_mode 插件 (快捷键切换调试模式, 开启才显示 FPS) + keybind UI 双槽美化 + 测试增至 714 项 |
 | 40. 设置/日志完善 | cycle 点击箭头切换 (中间不切换) + 退出全屏恢复设置分辨率 (VIDEORESIZE 全屏不污染) + 日志 console+文件双写 + WARN 游戏界面小提示 + 测试增至 719 项 |
 | 41. 插件整理扩展 | 通知合并为 notice (BGM+场景) + shake 改名 fx (加 strobe/pulse) + wipe 改名 transitions_plus (加 checker/stripes) + custom_actions 扩展 (float/squash 立绘 + rainbow/shiver 文字) + demo 架构: game_start 移入 story.gal (branches.gal 更名) + 测试增至 747 项 |
+| 42. 多语言系统 | engine/i18n.py 三层语言 (框架 lang/ + 插件 plugins/lang/ + 游戏项目 lang/) + {@key} 占位符 + 设置"语言"项切换 + 核心文案 t 化 (确认框/菜单/设置 label/常用提示) + 插件文案迁移 (gallery/auto_skip) + 设置 label 即时刷新 (label_key) + 测试增至 762 项 |
+| 43. 多语言全面化 | 语言变量 $lang/$language + 切换后所有界面即时刷新 (菜单/bar/图片) + menu 按钮文本 {@key} (demo ui.gal 全量迁移) + UI 图片 {lang} 变体 + 字体系统 (window font: 文件/sys:系统字体 + apply_font) + log.i/w/e 日志翻译 API + auto_skip 惰性按钮样式 + 测试增至 772 项 |
+| 44. language 块收尾 | 主文件 language 块 (默认语言 + 语言码->显示名, 只加载列出语言) + 设置"语言"项显示名字 + 剩余文案 t 化 (错误弹窗/存档界面/复制与保存提示) + ESC 菜单语言切换不再误贴标题图 + 测试增至 779 项 |
+| 45. 多语言全面化 II | i18n.resolve 三级回退 (游戏→核心→原文, 脚本可引用 {@dialog.*} 等框架文案) + 对话框/菜单文案"显示时解析" (修复启动器先于 language 块应用配置的时序, 语言切换即时刷新) + 确认框/结束画面/title 默认按钮 t 化 + 角色与场景显示名 {@key} (注册存原文, 显示时解析) + 结局名约定 (原文记录+显示翻译, 解锁跨语言一致) + 设置界面 title/label/section/options 支持 {@key} + 分栏显示名 settings.section.<值> + 快捷键 label_key API + **全框架日志键化 (~115 处 log.i/w/e, 含插件生命周期与启动器)** + 插件全量迁移 (notice/gallery/auto_skip/debug_mode/fx/custom_actions/slot_thumbnails/transitions_plus) + demo 全量迁移 (story/demo/cast/gallery/setting 全部 {@key}, 语言文件 99 key 双语对齐) + 插件语言文件 zh-CN + 核心语言表增至 207 key + 测试同步 (断言不依赖存档语言) + 测试保持 779 项全绿 |
 
 ---
 
@@ -1210,13 +1345,13 @@ py -3.10 framework/tests/smoke.py
 
 | 文件 | 内容与演示点 |
 | --- | --- |
-| `demo.gal` | 主流程: window 配置 (键盘导航/UI 音效/确认框/music_fade) + plugins 装载 + **using 导入** + title 标题 + game_start 开场 (语音旁白) |
-| `ui.gal` | 界面样式: style 自定义主题 + selection_style + ui 主题切片 + **menu title/system** (带菜单级 ui_hover/ui_click 音效) |
-| `cast.gal` | 角色与场景定义: char producer (多立绘 + voice_volume 分角色语音音量) + scene school |
+| `demo.gal` | 主流程: window 配置 (键盘导航/UI 音效/确认框/music_fade) + plugins 装载 + **using 导入** + **language 多语言声明** (默认 en) + title 标题 + game_start 开场 (语音旁白) |
+| `ui.gal` | 界面样式: style 自定义主题 + selection_style + ui 主题切片 + **menu title/system** (带菜单级 ui_hover/ui_click 音效; 按钮文本全部 {@key}) |
+| `cast.gal` | 角色与场景定义: char producer (多立绘 + voice_volume 分角色语音音量) + scene school; **name/desc/cv 全部 {@key}** |
 | `audio.gal` | 声音注册: sfx_click/sfx_hover/sfx_boom/voice_demo/bgm_piano41/bgm_piano39 |
-| `gallery.gal` | 鉴赏配置 (gallery 块: 真结局解锁) + CG 场景定义 (scene type: cg) |
-| `setting.gal` | 设置界面配置 (settings 块: 布局 + 条目) |
-| `story.gal` | 剧情流程: game_start 开场 (语音旁白) + 分支 (like_it/neutral/dislike) + 立绘登场退场 + 场景过渡 + 文字模式演示 + **BGM 控制全流程** (淡入/暂停/恢复/音量/切歌/淡出) + **window config 运行时窗口配置** (改标题/改尺寸/全屏切换, 等比缩放) + **menu_mode 双模式切换** (bar 常驻菜单栏 ↔ popup ESC 弹窗) + **CG 展示与真结局** (解锁鉴赏) + ending |
+| `gallery.gal` | 鉴赏配置 (gallery 块: `{@ending.true_end}` 解锁) + CG 场景定义 (scene type: cg; 场景名 {@key}) |
+| `setting.gal` | 设置界面配置 (settings 块: 布局 + 条目; title/label/section/options 全部 {@key}) |
+| `story.gal` | 剧情流程: game_start 开场 (语音旁白) + 分支 (like_it/neutral/dislike) + 立绘登场退场 + 场景过渡 + 文字模式演示 + **BGM 控制全流程** (淡入/暂停/恢复/音量/切歌/淡出) + **window config 运行时窗口配置** (改标题/改尺寸/全屏切换, 等比缩放) + **menu_mode 双模式切换** (bar 常驻菜单栏 ↔ popup ESC 弹窗) + **CG 展示与真结局** (解锁鉴赏) + ending; **全部台词/旁白走 {@key}** (lang/ 目录 99 key 双语) |
 
 素材目录:
 * `materials/image/` — 背景/立绘/UI 九宫格切片素材包

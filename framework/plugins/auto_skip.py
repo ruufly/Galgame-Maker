@@ -26,8 +26,8 @@ class AutoSkipPlugin(Plugin):
     version = "1.0"
 
     AUTO_DELAY = 1.2          # 自动模式: 文本完成后等待秒数
-    AUTO_BUTTON = "自动模式"
-    SKIP_BUTTON = "跳过剧情"
+    AUTO_BUTTON = "{@system.auto}"      # 按钮文本走游戏文本多语言
+    SKIP_BUTTON = "{@system.skip}"
 
     def on_load(self):
         self.auto_on = False
@@ -49,15 +49,24 @@ class AutoSkipPlugin(Plugin):
             self._sync_auto_state()
             self._auto_tick()
             if self.auto_on:
-                self._draw_indicator(surface, "自动", (120, 220, 255))
+                self._draw_indicator(
+                    surface, self.engine.i18n.t("auto_skip.auto",
+                                                ns="plugin",
+                                                default="自动"),
+                    (120, 220, 255))
             elif self._skip_running:
-                self._draw_indicator(surface, "跳过", (255, 200, 120))
+                self._draw_indicator(
+                    surface, self.engine.i18n.t("auto_skip.skip",
+                                                ns="plugin",
+                                                default="跳过"),
+                    (255, 200, 120))
 
     def on_unload(self):
         self.engine.actions.pop("auto_toggle", None)
         self.engine.actions.pop("skip_once", None)
         self.engine.runtime.skip_mode = False
-        print("[插件] auto_skip 已卸载")
+        from framework.engine import log
+        log.i("log.plugin.unloaded", name=self.name)
 
     # ------------------------------------------------------------------
     # 菜单按钮: 挂接 / 样式
@@ -67,7 +76,8 @@ class AutoSkipPlugin(Plugin):
 
         脚本 menu system 已定义 (action: auto_toggle / skip_once) 时
         只挂接 action; 未定义时自动追加默认按钮 (无 menu system 时
-        先补引擎内置五项)。
+        先补引擎内置五项)。去重按 **action 类型** (按钮文本可能含
+        {@key}, 语言切换后解析文本不同, 按文本去重会重复添加)。
         """
         rt = self.engine.runtime
         if rt._menu_items("system") is None:
@@ -83,10 +93,20 @@ class AutoSkipPlugin(Plugin):
         if "skip_once" not in types:
             rt.add_menu_button("system", self.SKIP_BUTTON,
                                {"type": "skip_once"})
-        # 记住按钮原始样式 (激活状态切换用)
-        for text, _a, cfg in (rt._menu_items("system") or []):
-            if text in (self.AUTO_BUTTON, self.SKIP_BUTTON):
-                self._btn_styles.setdefault(text, dict(cfg))
+        # 记住按钮原始样式 (激活状态切换用; 按 action 从原始注册表定位)
+        menu = rt.menus.get("system")
+        raw = (menu.get("items", []) if isinstance(menu, dict)
+               else menu or [])
+        for it in raw:
+            a = it.get("action")
+            if not isinstance(a, dict):
+                continue
+            if a.get("type") == "auto_toggle":
+                self._btn_styles.setdefault(self.AUTO_BUTTON,
+                                            dict(it.get("cfg", {})))
+            elif a.get("type") == "skip_once":
+                self._btn_styles.setdefault(self.SKIP_BUTTON,
+                                            dict(it.get("cfg", {})))
 
     def _close_system_menu(self, engine):
         """popup 模式: 点击后退出 ESC 菜单; bar 模式常驻无需关闭。"""
@@ -95,6 +115,14 @@ class AutoSkipPlugin(Plugin):
 
     def _update_auto_button(self):
         """自动模式按钮激活样式: 切换 image_active 图 (脚本可配置)。"""
+        # 惰性收集按钮样式 (插件装载时菜单可能尚未定义 auto 按钮)
+        if self.AUTO_BUTTON not in self._btn_styles:
+            rt = self.engine.runtime
+            for it in (rt._menu_items("system") or []):
+                if isinstance(it[1], dict) and \
+                        it[1].get("type") == "auto_toggle":
+                    self._btn_styles[self.AUTO_BUTTON] = dict(it[2])
+                    break
         orig = self._btn_styles.get(self.AUTO_BUTTON)
         if not orig or not orig.get("image_active"):
             return
@@ -128,7 +156,8 @@ class AutoSkipPlugin(Plugin):
             engine.runtime.skip_mode = False
         self._update_auto_button()
         engine.display.show_notice(
-            "自动模式：开" if self.auto_on else "自动模式：关", 1.2)
+            engine.i18n.t("notice.auto_on" if self.auto_on
+                          else "notice.auto_off"), 1.2)
         self._close_system_menu(engine)
         return False
 
@@ -171,7 +200,8 @@ class AutoSkipPlugin(Plugin):
         if rt.skip_mode:
             rt.skip_mode = False
             self._skip_running = False
-            engine.display.show_notice("已取消跳过", 1.0)
+            engine.display.show_notice(
+                engine.i18n.t("notice.skip_cancel"), 1.0)
             self._close_system_menu(engine)
             return False
         self.auto_on = False
@@ -194,13 +224,17 @@ class AutoSkipPlugin(Plugin):
                 spr.effect = None
         d = engine.display
         if d.choice_active:
-            engine.display.show_notice("已跳转到选择支", 1.2)
+            engine.display.show_notice(
+                engine.i18n.t("notice.skip_done"), 1.2)
         elif d.title_active:
-            engine.display.show_notice("已跳转到标题", 1.2)
+            engine.display.show_notice(
+                engine.i18n.t("notice.skip_title"), 1.2)
         elif rt.ended:
-            engine.display.show_notice("已跳转到结局", 1.2)
+            engine.display.show_notice(
+                engine.i18n.t("notice.skip_ending"), 1.2)
         else:
-            engine.display.show_notice("跳过完成", 1.0)
+            engine.display.show_notice(
+                engine.i18n.t("notice.skip_complete"), 1.0)
         self._close_system_menu(engine)
         return False
 

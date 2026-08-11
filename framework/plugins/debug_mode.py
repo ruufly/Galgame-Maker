@@ -24,11 +24,12 @@ class DebugModePlugin(Plugin):
         self.fps = 0.0
         self.font = None
 
-        # 注册快捷键 (自动生成设置项, "按键"分栏)
+        # 注册快捷键 (自动生成设置项, "按键"分栏; label_key 走 i18n)
         self.engine.keybinds.register(
             "debug_toggle", "调试模式",
             lambda key: self._toggle(),
-            primary=self.DEFAULT_KEY)
+            primary=self.DEFAULT_KEY,
+            label_key="debug_mode.toggle")
 
         @self.listen("draw_overlay")
         def draw_overlay(surface, **kw):
@@ -60,8 +61,10 @@ class DebugModePlugin(Plugin):
         self.frames = 0
         self.last_time = time.time()
         self.engine.display.show_notice(
-            "调试模式：开" if self.enabled else "调试模式：关", 1.2)
+            self.engine.i18n.t("notice.debug_on" if self.enabled
+                               else "notice.debug_off"), 1.2)
         return True
 
     def on_unload(self):
-        print("[插件] debug_mode 已卸载")
+        from framework.engine import log
+        log.i("log.plugin.unloaded", name=self.name)

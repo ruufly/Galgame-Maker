@@ -140,6 +140,9 @@ class PluginManager:
         loaded = []
         if not os.path.isdir(directory):
             return loaded
+        # 插件语言: <插件目录>/lang/<code>.json (ns="plugin")
+        self.engine.i18n.load_dir(os.path.join(directory, "lang"),
+                                  ns="plugin")
         for entry in sorted(os.listdir(directory)):
             if entry.startswith("_") or not entry.endswith(".py"):
                 continue
@@ -168,7 +171,7 @@ class PluginManager:
             return True
         except Exception as exc:
             from framework.engine import log
-            log.warning(f"插件 {path} 加载失败: {exc}")
+            log.w("log.plugin.load_failed", path=path, exc=exc)
             return False
 
     def load(self, module) -> Optional[Plugin]:
@@ -212,7 +215,7 @@ class PluginManager:
             inst = cls(self.engine)
         except Exception as exc:
             from framework.engine import log
-            log.warning(f"插件类 {cls} 实例化失败: {exc}")
+            log.w("log.plugin.instantiate_failed", cls=cls, exc=exc)
             return None
         if not isinstance(inst, Plugin):
             return None
@@ -225,7 +228,7 @@ class PluginManager:
         self.plugins.append(inst)
         self._classes[inst.name] = inst
         from framework.engine import log
-        log.info(f"插件已加载: {inst.name} v{inst.version}")
+        log.i("log.plugin.loaded", name=inst.name, version=inst.version)
         return inst
 
     # ------------------------------------------------------------------
@@ -234,7 +237,7 @@ class PluginManager:
             plugin.on_unload()
         except Exception as exc:
             from framework.engine import log
-            log.warning(f"插件 {plugin.name} 卸载时出错: {exc}")
+            log.w("log.plugin.unload_failed", name=plugin.name, exc=exc)
         plugin._cleanup()
         if plugin in self.plugins:
             self.plugins.remove(plugin)

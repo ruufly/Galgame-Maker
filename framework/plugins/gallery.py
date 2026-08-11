@@ -128,7 +128,8 @@ class GalleryPlugin(Plugin):
     def on_unload(self):
         self.engine.actions.pop("gallery_open", None)
         self._img_cache.clear()
-        print("[插件] gallery 已卸载")
+        from framework.engine import log
+        log.i("log.plugin.unloaded", name=self.name)
 
     def _apply_gallery_block(self, stmt):
         """解析 gallery 配置块 (引擎广播 script_block 事件):
@@ -153,7 +154,7 @@ class GalleryPlugin(Plugin):
         self._cfg = dict(base)
         self._ensure_button()
         from framework.engine import log
-        log.info(f"鉴赏配置已应用: {base}")
+        log.i("log.gallery.config_applied", cfg=base)
 
     # ------------------------------------------------------------------
     # 按钮: 挂接 / 解锁
@@ -165,17 +166,19 @@ class GalleryPlugin(Plugin):
         return target in self.engine.get_endings()
 
     def _find_gallery_button(self):
-        """找脚本 menu title 中 action 为 gallery_open 的按钮 (name/text)。"""
-        try:
-            items = self.engine.runtime._menu_items("title")
-        except Exception:
-            return None
-        if not items:
-            return None
-        for text, action, cfg in items:
-            if isinstance(action, dict) and \
-                    action.get("type") == "gallery_open":
-                return cfg.get("name") or text
+        """找脚本 menu title 中 action 为 gallery_open 的按钮 key。
+
+        返回按钮**原始 name (子块名) 或原始文本** —— set_menu_button_state
+        按原始值匹配注册表 (文本可能含 {@key}, 解析后的文本无法匹配)。
+        """
+        rt = self.engine.runtime
+        menu = rt.menus.get("title")
+        items = (menu.get("items", []) if isinstance(menu, dict)
+                 else menu or [])
+        for it in items:
+            a = it.get("action")
+            if isinstance(a, dict) and a.get("type") == "gallery_open":
+                return it.get("name") or it.get("text")
         return None
 
     def _ensure_button(self):
@@ -191,13 +194,12 @@ class GalleryPlugin(Plugin):
         except Exception:
             items = []
         # 1) 脚本定义的鉴赏按钮 (action: gallery_open)
-        for text, action, cfg in items:
-            if isinstance(action, dict) and \
-                    action.get("type") == "gallery_open":
-                self._btn_registered = True
-                self.engine.set_menu_button_state(
-                    "title", cfg.get("name") or text, unlocked)
-                return
+        #    用原始 name/文本作 key 更新状态 (文本可能含 {@key})
+        key = self._find_gallery_button()
+        if key is not None:
+            self._btn_registered = True
+            self.engine.set_menu_button_state("title", key, unlocked)
+            return
         # 2) 已自动添加的按钮 (name=gallery) 仍存在 -> 只改状态
         if any(c.get("name") == "gallery" for _t, _a, c in items):
             self.engine.set_menu_button_state("title", "gallery", unlocked)
@@ -205,15 +207,17 @@ class GalleryPlugin(Plugin):
         # 3) 自动添加 (可能被脚本 menu 块覆盖后丢失, 重新添加)
         self._btn_registered = True
         self.engine.register_menu_button(
-            "title", self._cfg.get("button_text") or "鉴赏",
+            "title",
+            self.engine.i18n.resolve(self._cfg.get("button_text")
+                                     or "鉴赏"),
             {"type": "gallery_open"},
             cfg={"enabled": unlocked, "name": "gallery"})
 
     def _unlock(self):
         self._ensure_button()
-        hint = self._cfg.get("locked_hint")
+        hint = self.engine.i18n.resolve(self._cfg.get("locked_hint") or "")
         self.engine.display.show_notice(
-            hint or "鉴赏已解锁！", 2.0)
+            hint or self.engine.i18n.t("notice.gallery_unlock"), 2.0)
 
     # ------------------------------------------------------------------
     # 打开 / 关闭
@@ -323,7 +327,7 @@ class GalleryPlugin(Plugin):
         try:
             img = pygame.image.load(real).convert_alpha()
         except Exception as exc:
-            log.warning(f"鉴赏图片加载失败 {path}: {exc}")
+            log.w("log.gallery.image_failed", path=path, exc=exc)
         self._img_cache[path] = img
         return img
 
@@ -369,9 +373,12 @@ class GalleryPlugin(Plugin):
             surface.blit(shown, shown.get_rect(center=(w // 2, h // 2)))
         else:
             surface.fill((8, 8, 14))
-        # 标题
-        ui.text(surface, self.engine.get_font(40),
-                str(self._cfg.get("title") or "鉴赏"),
+        # 标题 (config title 优先, 支持 {@key}; 否则插件语言表)
+        title = self.engine.i18n.resolve(self._cfg.get("title") or "")
+        if not title:
+            title = self.engine.i18n.t("gallery.title", ns="plugin",
+                                       default="鉴赏")
+        ui.text(surface, self.engine.get_font(40), title,
                 color=(255, 220, 130), center=(w // 2, 40))
         # 分类按钮行
         self._build_cat_layout(w)
@@ -383,13 +390,16 @@ class GalleryPlugin(Plugin):
             name = self._cat_names[i]
             hovered = rect.collidepoint(mouse)
             if name == "back":
-                label = "← 返回"
+                label = self.engine.i18n.t("gallery.back", ns="plugin",
+                                           default="← 返回")
                 img = back_f if hovered else back_d
                 bg = (70, 44, 44) if hovered else (42, 30, 30)
                 border = (220, 130, 130) if hovered else (120, 80, 80)
             else:
                 active = (name == self._category)
-                label = dict(CATEGORY_NAMES).get(name, name)
+                label = self.engine.i18n.t(
+                    f"gallery.{name}", ns="plugin",
+                    default=dict(CATEGORY_NAMES).get(name, name))
                 img = cat_f if (hovered or active) else cat_d
                 bg = ((233, 69, 96) if active else
                       (85, 62, 95) if hovered else (45, 45, 70))
@@ -429,6 +439,11 @@ class GalleryPlugin(Plugin):
                 pygame.Rect(x0 + i * (bw + gap), 80, bw, bh))
             self._cat_names.append(name)
 
+    def _name(self, scene_or_char, fallback) -> str:
+        """场景/角色显示名: 支持 {@key} 按当前语言解析。"""
+        raw = scene_or_char.get("name") or fallback
+        return self.engine.i18n.resolve(str(raw))
+
     def _draw_cg(self, surface):
         ui = self.engine.ui
         w, h = surface.get_size()
@@ -436,13 +451,18 @@ class GalleryPlugin(Plugin):
         entries = self._cg_entries()
         collected = sum(1 for _s, poses, _t, _th in entries if poses)
         ui.text(surface, self.engine.get_font(20),
-                f"CG 收集: {collected} / {len(entries)}",
+                self.engine.i18n.t("gallery.cg_collected", ns="plugin",
+                                   default="CG 收集: {collected} / {total}",
+                                   collected=collected,
+                                   total=len(entries)),
                 color=(200, 200, 210), pos=(28, 132))
         self._grid_rects = []
         self._grid_items = []
         if not entries:
             ui.text(surface, self.engine.get_font(20),
-                    "暂无 CG 可鉴赏", color=(150, 150, 165),
+                    self.engine.i18n.t("gallery.empty_cg", ns="plugin",
+                                       default="暂无 CG 可鉴赏"),
+                    color=(150, 150, 165),
                     center=(w // 2, h // 2))
             return
         cols = 4
@@ -472,7 +492,7 @@ class GalleryPlugin(Plugin):
                 img = self._scaled(thumb, cw - 6, ch - 6)
                 if img:
                     surface.blit(img, img.get_rect(center=rect.center))
-                label = (f"{scene.get('name', sid)} "
+                label = (f"{self._name(scene, sid)} "
                          f"({len(poses)}/{total})")
                 color = (230, 230, 235)
             else:
@@ -485,7 +505,8 @@ class GalleryPlugin(Plugin):
                              border_color=(90, 90, 98), border_width=1)
                     ui.text(surface, font_q, "？", color=(120, 120, 128),
                             center=rect.center)
-                label = f"{scene.get('name', sid)} · 未解锁"
+                label = (f"{self._name(scene, sid)} · "
+                         f"{self.engine.i18n.t('gallery.locked', ns='plugin', default='未解锁')}")
                 color = (140, 140, 150)
             ui.text(surface, font_s, label, color=color,
                     center=(rect.centerx, rect.bottom + 13))
@@ -497,7 +518,9 @@ class GalleryPlugin(Plugin):
         self._grid_rects = []
         self._grid_items = []
         if not songs:
-            ui.text(surface, self.engine.get_font(20), "暂无 BGM 可鉴赏",
+            ui.text(surface, self.engine.get_font(20),
+                    self.engine.i18n.t("gallery.empty_bgm", ns="plugin",
+                                       default="暂无 BGM 可鉴赏"),
                     color=(150, 150, 165), center=(w // 2, h // 2))
             return
         font = self.engine.get_font(20)
@@ -512,7 +535,10 @@ class GalleryPlugin(Plugin):
                 cur = self.engine.audio.current_bgm_name
             else:
                 ui.text(surface, self.engine.get_font(18),
-                        f"正在切换 BGM：{pend['name']} …",
+                        self.engine.i18n.t(
+                            "gallery.switching", ns="plugin",
+                            default="正在切换 BGM：{name} …",
+                            name=pend["name"]),
                         color=(255, 210, 130), pos=(80, 122))
         y = 150
         for name, f in songs:
@@ -536,7 +562,9 @@ class GalleryPlugin(Plugin):
             y += 56
         if self._bgm_pending is None:
             ui.text(surface, self.engine.get_font(16),
-                    "点击曲目试听（再点另一首切换）", color=(140, 140, 155),
+                    self.engine.i18n.t("gallery.bgm_hint", ns="plugin",
+                                       default="点击曲目试听（再点另一首切换）"),
+                    color=(140, 140, 155),
                     pos=(80, y + 4))
 
     def _draw_characters(self, surface):
@@ -546,7 +574,9 @@ class GalleryPlugin(Plugin):
         self._grid_rects = []
         self._grid_items = []
         if not chars:
-            ui.text(surface, self.engine.get_font(20), "暂无角色",
+            ui.text(surface, self.engine.get_font(20),
+                    self.engine.i18n.t("gallery.empty_character", ns="plugin",
+                                       default="暂无角色"),
                     color=(150, 150, 165), center=(w // 2, h // 2))
             return
         cols = 3
@@ -568,12 +598,13 @@ class GalleryPlugin(Plugin):
             img = self._scaled(ch_.get("default"), cw, ch)
             if img:
                 surface.blit(img, img.get_rect(center=rect.center))
-            ui.text(surface, font_n, str(ch_.get("name", ch_["id"])),
+            ui.text(surface, font_n, self._name(ch_, ch_["id"]),
                     color=(255, 220, 130), center=(rect.centerx,
                                                    rect.bottom + 18))
             desc = ch_.get("meta", {}).get("desc", "")
             if desc:
-                lines = ui.wrap_text(font_d, str(desc), cw)
+                lines = ui.wrap_text(font_d,
+                                     self.engine.i18n.resolve(str(desc)), cw)
                 for k, line in enumerate(lines[:2]):
                     ui.text(surface, font_d, line, color=(185, 185, 200),
                             center=(rect.centerx, rect.bottom + 44 + k * 20))
@@ -587,7 +618,9 @@ class GalleryPlugin(Plugin):
         self._grid_rects = []
         self._grid_items = []
         if not scenes:
-            ui.text(surface, self.engine.get_font(20), "暂无场景",
+            ui.text(surface, self.engine.get_font(20),
+                    self.engine.i18n.t("gallery.empty_scene", ns="plugin",
+                                       default="暂无场景"),
                     color=(150, 150, 165), center=(w // 2, h // 2))
             return
         cols = 4
@@ -608,7 +641,7 @@ class GalleryPlugin(Plugin):
             img = self._scaled(sc.get("default"), cw, ch)
             if img:
                 surface.blit(img, img.get_rect(center=rect.center))
-            label = str(sc.get("name", sc["id"]))
+            label = self._name(sc, sc["id"])
             if sc.get("type") == "cg":
                 label += " [CG]"
             ui.text(surface, font_s, label, color=(190, 190, 205),
@@ -637,13 +670,18 @@ class GalleryPlugin(Plugin):
             shown = pygame.transform.smoothscale(img, (tw, th))
             surface.blit(shown, shown.get_rect(center=(w // 2, (h - 60) // 2)))
         total = len(v["poses"])
-        label = (f"{scene.get('name', v['scene'])} · "
-                 f"形态 {v['idx'] + 1} / {total}")
+        progress = self.engine.i18n.t(
+            "gallery.pose_progress", ns="plugin",
+            default="形态 {idx} / {total}",
+            idx=v["idx"] + 1, total=total)
+        label = self._name(scene, v["scene"]) + " · " + progress
         ui.text(surface, self.engine.get_font(22), label,
                 color=(230, 230, 240), center=(w // 2, h - 46))
         if v["idx"] < total - 1:
-            hint = "点击切换下一形态 · ESC 退出"
+            hint = self.engine.i18n.t("gallery.click_next", ns="plugin",
+                                      default="点击切换下一形态 · ESC 退出")
         else:
-            hint = "已是最后形态 · 点击退出"
+            hint = self.engine.i18n.t("gallery.last_pose", ns="plugin",
+                                      default="已是最后形态 · 点击退出")
         ui.text(surface, self.engine.get_font(16), hint,
                 color=(140, 140, 155), center=(w // 2, h - 20))

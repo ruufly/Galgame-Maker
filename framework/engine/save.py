@@ -30,7 +30,7 @@ class SaveManager:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         self.engine.emit("save", slot=slot, path=path)
-        log.info(f"已存档: {path}")
+        log.i("log.save_written", path=path)
         return path
 
     def load(self, slot: int) -> dict:
@@ -44,7 +44,7 @@ class SaveManager:
             self.engine.emit("load", slot=slot, path=path)
             return data
         except Exception as exc:
-            log.warning(f"读档失败 {path}: {exc}")
+            log.w("log.save.load_failed", path=path, exc=exc)
             return None
 
     def _global_path(self) -> str:
@@ -94,7 +94,7 @@ class SaveManager:
             with open(self._settings_path(), "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except Exception as exc:
-            log.warning(f"设置写入失败: {exc}")
+            log.w("log.save.settings_write_failed", exc=exc)
 
     def set_meta(self, slot: int, key: str, value) -> None:
         """写入存档元数据 (如快照路径), 不覆盖游戏状态。"""

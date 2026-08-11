@@ -72,7 +72,7 @@ def test_parser():
                 return True
         return False
 
-    check("after_choice 含变量插值 text", stmts_contain(after, "$love"))
+    check("after_choice 含游戏文本占位符", stmts_contain(after, "{@love_high}"))
 
     # 未知指令在解析层不报错
     s2 = parse("start:\n    hello world\n    text \"ok\"\n")
@@ -629,7 +629,9 @@ def test_scenes():
     try:
         rt.load_script(demo)
         check("场景静态注册", "school" in rt.scenes, str(list(rt.scenes)))
-        check("场景显示名", rt.scenes["school"]["name"] == "学校")
+        check("场景显示名", rt.scenes["school"]["name"] == "{@scene.school.name}"
+              and engine.i18n.resolve(rt.scenes["school"]["name"]) == "School",
+              str(rt.scenes["school"]["name"]))
         check("场景背景表", len(rt.scenes["school"]["backgrounds"]) == 2,
               str(rt.scenes["school"]["backgrounds"]))
 
@@ -969,7 +971,7 @@ def test_window_config():
     check("解析窗口图标", cfg.get("icon") == "materials/image/icon.png")
     check("解析 fps", int(cfg.get("fps")) == 60)
     check("解析退出确认配置", str(cfg.get("confirm_quit")) == "true"
-          and "确定要退出游戏吗？" in str(cfg.get("confirm_quit_text")),
+          and "{@dialog.quit.text}" in str(cfg.get("confirm_quit_text")),
           str(cfg.get("confirm_quit")))
 
     # 无 window 配置的脚本 -> 空 dict
@@ -1003,6 +1005,7 @@ def test_title_screen():
     def fresh():
         eng = GameEngine(640, 360, "title_test")
         eng.runtime.load_script(demo)
+        eng.i18n.set_lang("zh-CN")   # 显式中文断言, 不依赖存档语言
         eng.runtime.start()
         return eng
 
@@ -1488,6 +1491,7 @@ def test_dialogs():
 
         # 返回标题 -> 确认框 -> 确认后回标题
         rt.load_script(demo)
+        engine.i18n.set_lang("zh-CN")   # 显式中文断言, 不依赖存档语言
         rt.start()
         engine.on_click(d.title_rects[0].center)   # 开始游戏
         check("剧情中", rt.blocked == "text")
@@ -3274,8 +3278,11 @@ lab_b:
         rt.load_script(path)
         # 系统菜单按钮 (popup/bar 共用)
         names = [t for t, _a, _c in (rt._menu_items("system") or [])]
-        check("自动模式按钮", "自动模式" in names, str(names))
-        check("跳过剧情按钮", "跳过剧情" in names, str(names))
+        types = [a.get("type") for _t, a, _c
+                 in (rt._menu_items("system") or [])
+                 if isinstance(a, dict)]
+        check("自动模式按钮", "auto_toggle" in types, str(names))
+        check("跳过剧情按钮", "skip_once" in types, str(names))
         rt.start()
         check("开始文本阻塞", rt.blocked == "text")
         # 跳过: 直达选择支, 背景同步跳转到位
@@ -3319,7 +3326,7 @@ lab_b:
         engine.open_system_menu()
         check("系统菜单打开", engine.paused and d.selection_active)
         idx = next(i for i, it in enumerate(d.selection_items)
-                   if it[0] == "自动模式")
+                   if it[1].get("type") == "auto_toggle")
         engine.on_click(d.selection_rects[idx].center)
         check("点击后退出菜单", not d.system_menu_active
               and not engine.paused, f"paused={engine.paused}")
@@ -3340,6 +3347,7 @@ lab_b:
                 os.path.join(_ROOT, "framework", "plugins"))
             engine4.runtime.load_script(
                 os.path.join(_ROOT, "test", "engine_demo", "demo.gal"))
+            engine4.i18n.set_lang("zh-CN")   # demo 默认 en, 断言用中文
             plug4 = engine4.plugins._classes["auto_skip"]
             items4 = engine4.runtime._menu_items("system") or []
             check("脚本按钮不重复",
@@ -3349,9 +3357,10 @@ lab_b:
             check("image_active 配置", bool(cfg4.get("image_active")),
                   str(cfg4))
             plug4._toggle_auto(engine4, {}, "menu")
+            auto_text = engine4.i18n.resolve("{@system.auto}")
             cfg_on = [c for t, _a, c in
                       (engine4.runtime._menu_items("system") or [])
-                      if t == "自动模式"][0]
+                      if t == auto_text][0]
             check("激活样式切换", cfg_on["image"] == cfg_on["image_active"],
                   str(cfg_on))
             plug4._toggle_auto(engine4, {}, "menu")
@@ -3367,14 +3376,14 @@ lab_b:
         # ESC 菜单二次点击: 能正常关闭自动模式 (bug 回归)
         engine.open_system_menu()
         idx_a = next(i for i, it in enumerate(d.selection_items)
-                     if it[0] == "自动模式")
+                     if it[1].get("type") == "auto_toggle")
         engine.on_click(d.selection_rects[idx_a].center)   # 开启
         check("ESC 首次点击开启", plug.auto_on and not engine.paused)
         engine.open_system_menu()                          # 再开菜单
         plug._sync_auto_state()                            # 菜单中显示关闭
         check("菜单中显示关闭", not plug.auto_on)
         idx_b = next(i for i, it in enumerate(d.selection_items)
-                     if it[0] == "自动模式")
+                     if it[1].get("type") == "auto_toggle")
         engine.on_click(d.selection_rects[idx_b].center)   # 再次点击 -> 关闭
         check("ESC 二次点击关闭",
               not plug.auto_on and not plug._auto_wanted,
@@ -3387,6 +3396,7 @@ lab_b:
                 os.path.join(_ROOT, "framework", "plugins"))
             engine5.runtime.load_script(
                 os.path.join(_ROOT, "test", "engine_demo", "demo.gal"))
+            engine5.i18n.set_lang("zh-CN")   # demo 默认 en, 断言用中文
             plug5 = engine5.plugins._classes["auto_skip"]
             d5 = engine5.display
             bar_cfg = [c for t, _a, c in d5.menu_bar_items
@@ -3395,8 +3405,9 @@ lab_b:
             check("bar 激活前默认图", bar_cfg["image"] != active_img
                   and active_img, str(bar_cfg))
             plug5._toggle_auto(engine5, {}, "bar")
+            auto_text5 = engine5.i18n.resolve("{@system.auto}")
             bar_cfg2 = [c for t, _a, c in d5.menu_bar_items
-                        if t == "自动模式"][0]
+                        if t == auto_text5][0]
             check("bar 激活图生效", bar_cfg2["image"] == active_img,
                   str(bar_cfg2))
             engine5.draw()
@@ -3493,7 +3504,7 @@ game_start:
         s.set("bgm_volume", 0.5)
         # 分栏 (默认内置分类)
         check("分栏列表", s._sections() == ["音量", "语音", "显示",
-                                           "按键", "游戏"],
+                                           "游戏", "按键"],
               str(s._sections()))
         voice_secs = [s._get_item(k)["section"] for k in s.order
                       if k.startswith("voice:") or k == "voice_volume"]
@@ -3534,7 +3545,8 @@ game_start:
         s._handle_click(rects[fs_idx].center)
         check("checkbox 再切", engine.fullscreen is False)
         # 切 -> 按键 (keybind)
-        s._handle_click(s._tab_rects[3][1].center)
+        s._handle_click(s._tab_rects[
+            s._sections().index("按键")][1].center)
         check("按键栏切换", s._current_section == "按键")
         keys = s.visible_keys()
         rects = s._item_rects()
@@ -4022,7 +4034,8 @@ def test_keybinds():
         s = engine.settings
         s.open()
         engine.draw()
-        s._handle_click(s._tab_rects[4][1].center)    # 按键栏
+        s._handle_click(s._tab_rects[
+            s._sections().index("按键")][1].center)    # 按键栏
         keys_now = s.visible_keys()
         rects = s._item_rects()
         k_idx = keys_now.index("key_up")
@@ -4130,6 +4143,142 @@ def test_plugin_extras():
         engine.quit()
         import pygame as pg16
         pg16.quit()
+
+
+def test_i18n():
+    print("== 多语言系统 (i18n) ==")
+    import shutil
+    base = os.path.dirname(os.path.abspath(__file__))
+    sd = os.path.join(base, "save")
+    if os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    engine = GameEngine(640, 360, "test69")
+    rt = engine.runtime
+    engine.project_dir = base
+    try:
+        i18n = engine.i18n
+        check("核心语言加载", "zh-CN" in i18n.langs()
+              and "en" in i18n.langs(), str(i18n.langs()))
+        check("核心文本", i18n.t("menu.quit") == "退出游戏"
+              and i18n.t("dialog.quit.text") == "确定要退出游戏吗？")
+        i18n.set_lang("en")
+        check("切换英文", i18n.t("menu.quit") == "Quit")
+        check("未加载回退原文", i18n.t("menu.quit", ns="plugin")
+              == "menu.quit")
+        # 插件语言 (plugins/lang)
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        check("插件语言", i18n.t("gallery.button", ns="plugin")
+              == "Gallery")
+        # 游戏文本 ({@key} + demo 项目 lang/)
+        demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
+        rt.load_script(demo)          # 加载 <项目目录>/lang -> ns="game"
+        game_tables = i18n._tables.get("game", {})
+        check("游戏文本加载", "zh-CN" in game_tables and "en" in game_tables,
+              str(list(game_tables)))
+        i18n.set_lang("zh-CN")
+        check("resolve 中文", i18n.resolve("{@welcome}")
+              == "欢迎来到 Galgame Maker 引擎演示！")
+        i18n.set_lang("en")
+        check("resolve 英文", i18n.resolve("{@welcome}")
+              == "Welcome to the Galgame Maker engine demo!")
+        check("未找到保留原文", i18n.resolve("hi {@nope}") == "hi {@nope}")
+        # language 设置项
+        s = engine.settings
+        check("language 设置项", "language" in s.items
+              and s.items["language"]["kind"] == "cycle",
+              str(s.items.get("language", {}).get("kind")))
+        check("language 切换", s.set("language", "zh-CN")
+              and i18n.current == "zh-CN")
+        # 台词经 resolve (切换语言即时生效于新台词)
+        d = engine.display
+        d.show_text("{@thanks}")
+        check("台词 resolve", "谢谢游玩" in d.full_text,
+              str(d.full_text))
+        i18n.set_lang("en")
+        d.show_text("{@thanks}")
+        check("台词英文", "thanks for playing" in d.full_text,
+              str(d.full_text))
+        # 设置项 label 即时刷新 (label_key 走 i18n)
+        check("设置 label 英文", s._item_label(
+            s.items["bgm_volume"]) == "Music Volume",
+            s._item_label(s.items["bgm_volume"]))
+        i18n.set_lang("zh-CN")
+        check("设置 label 中文", s._item_label(
+            s.items["bgm_volume"]) == "音乐音量",
+            s._item_label(s.items["bgm_volume"]))
+        # 语言变量 ($lang / $language)
+        i18n.set_lang("en")
+        check("语言变量", rt.vars.get("lang") == "en"
+              and rt.vars.get("language") == "en",
+              str(rt.vars.get("lang")))
+        # 语言切换即时刷新标题菜单 (menu_texts 联动)
+        i18n.set_lang("zh-CN")
+        engine.goto_title()
+        check("标题显示", d.title_active)
+        i18n.set_lang("en")
+        check("菜单即时英文", any(
+            t == "Quit" for t, _a, _c in d.selection_items),
+            str([t for t, _a, _c in d.selection_items]))
+        i18n.set_lang("zh-CN")
+        check("菜单切回中文", any(
+            t == "退出游戏" for t, _a, _c in d.selection_items))
+        # 系统菜单即时刷新
+        engine.on_click(d.selection_rects[0].center)   # 开始
+        engine.on_escape()
+        i18n.set_lang("en")
+        check("系统菜单即时英文", any(
+            t == "Quit" for t, _a, _c in d.selection_items),
+            str([t for t, _a, _c in d.selection_items]))
+        engine.close_system_menu()
+        i18n.set_lang("zh-CN")
+        # {lang} UI 图片路径变体
+        d2 = d
+        check("图片 {lang} 替换",
+              d2._localized_path("materials/title_{lang}.png")
+              == "materials/title_zh-CN.png")
+        # 字体切换 API (sys 字体)
+        engine.apply_font("sys:Microsoft YaHei")
+        check("系统字体切换", engine._font_sys
+              == "Microsoft YaHei" and engine._font_path is None)
+        engine.apply_font("")          # 恢复默认
+        check("字体恢复默认", engine._font_sys is None
+              and engine._font_path is not None)
+        # log.i 翻译 (日志接入 i18n)
+        import framework.engine as eng_mod
+        i18n.set_lang("en")
+        check("log i18n 翻译",
+              eng_mod.log._tr("menu.quit") == "Quit")
+        i18n.set_lang("zh-CN")
+        check("log i18n 中文",
+              eng_mod.log._tr("menu.quit") == "退出游戏")
+        # language 块: 默认语言 / 显示名 / 选项
+        check("language 默认 en", i18n.default_lang == "en",
+              f"{i18n.default_lang}/{i18n.current}")
+        check("语言显示名", i18n.lang_name("en") == "English"
+              and i18n.lang_name("zh-CN") == "简体中文")
+        check("语言选项", (i18n.lang_options()
+              == [("English", "en"), ("简体中文", "zh-CN")]),
+              str(i18n.lang_options()))
+        check("语言项选项为显示名",
+              s.items["language"]["options"]
+              == ["English", "简体中文"],
+              str(s.items["language"]["options"]))
+        # 回退默认语言: 当前语言缺 key -> 默认语言 -> 原文
+        i18n.set_lang("zh-CN")
+        check("回退默认语言",
+              i18n.t("choice_dislike", ns="game") == "不感兴趣")
+        # 切换语言后设置项同步
+        i18n.set_lang("en")
+        check("语言项显示名同步", s.get("language") == "English",
+              str(s.get("language")))
+        i18n.set_lang("zh-CN")
+        check("语言项中文名", s.get("language") == "简体中文")
+    finally:
+        engine.quit()
+        import pygame as pg17
+        pg17.quit()
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
 
 
 def test_window_config_scaling():
@@ -4570,6 +4719,12 @@ def main():
         test_plugin_extras()
     except Exception as exc:
         print(f"  [ERROR] 插件扩展测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_i18n()
+    except Exception as exc:
+        print(f"  [ERROR] 多语言测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

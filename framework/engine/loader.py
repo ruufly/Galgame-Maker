@@ -54,7 +54,7 @@ def load_script_with_imports(path: str) -> Script:
             if stmt.op == "import":
                 target = stmt.args[0] if stmt.args else None
                 if not target:
-                    log.warning(f"import 缺少路径 (第{stmt.line}行)")
+                    log.w("log.loader.import_no_path", line=stmt.line)
                     continue
                 sub_path = os.path.join(base, str(target))
                 if not os.path.isfile(sub_path):

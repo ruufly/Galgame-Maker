@@ -173,5 +173,5 @@ class TransitionPlugin(Plugin):
                     SweepTransition, FadeWhiteTransition,
                     CheckerTransition, StripesTransition):
             self.engine.display.register_transition(cls.name, cls)
-        print("[插件] 已注册扩展过渡: "
-              "wipe, iris, curtain, sweep, fade_white, checker, stripes")
+        from framework.engine import log
+        log.i("log.plugin.loaded", name=self.name, version=self.version)

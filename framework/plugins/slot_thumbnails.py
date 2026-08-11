@@ -28,10 +28,10 @@ def _on_save(engine, slot, path, **kw):
         pygame.image.save(thumb, abs_path)
         engine.save.set_meta(slot, "screenshot", rel)
         from framework.engine import log
-        log.info(f"存档快照已保存: {rel}")
+        log.i("log.slot_thumbnails.saved", path=rel)
     except Exception as exc:
         from framework.engine import log
-        log.warning(f"存档快照保存失败: {exc}")
+        log.w("log.slot_thumbnails.save_failed", exc=exc)
 
 
 class SlotThumbnailsPlugin(Plugin):
@@ -56,9 +56,11 @@ class SlotThumbnailsPlugin(Plugin):
                 return None
 
         engine.display.register_slot_thumbnail_provider(provider)
-        print("[插件] 存档快照: 存档时保存画面缩略图 (相对路径)")
+        from framework.engine import log
+        log.i("log.plugin.loaded", name=self.name, version=self.version)
 
     def on_unload(self):
         engine = self.engine
         engine.display.register_slot_thumbnail_provider(None)
-        print("[插件] slot_thumbnails 已卸载")
+        from framework.engine import log
+        log.i("log.plugin.unloaded", name=self.name)

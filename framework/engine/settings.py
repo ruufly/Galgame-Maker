@@ -68,7 +68,7 @@ class SettingsManager:
                  setter=None, min=0.0, max=1.0, step=0.05,
                  options=None, visible=True, on_click=None,
                  section="通用", var=None, default=None,
-                 apply=None) -> None:
+                 apply=None, label_key=None) -> None:
         """插件 API: 注册一个设置项。
 
         kind: slider (数值滑条) / checkbox (开关) / cycle (枚举循环) /
@@ -79,6 +79,8 @@ class SettingsManager:
         default: 默认值 (设置文件读不到时使用)。
         apply: var 绑定项写入变量后同步应用到实际的回调
                (如 audio 音量/窗口尺寸), 语音等运行时行为全局读变量。
+        label_key: i18n 语言表 key (绘制时动态取文本, 切换语言即时生效);
+            不传则用 label 原文。
         """
         if var is not None:
             getter, setter = self._make_var_accessors(kind, str(var),
@@ -100,9 +102,19 @@ class SettingsManager:
             "section": str(section),
             "var": str(var) if var is not None else None,
             "_default": default,
+            "label_key": label_key,
         }
         if key not in self.order:
             self.order.append(key)
+
+    def _item_label(self, item) -> str:
+        """设置项显示名: label_key 走 i18n (切换语言即时生效);
+        否则 label 原文 (支持 {@key} 占位符, 绘制时按当前语言解析)。"""
+        lk = item.get("label_key")
+        if lk:
+            return self.engine.i18n.t(lk, default=item.get("label", lk))
+        return self.engine.i18n.resolve(
+            str(item.get("label", item.get("key", ""))))
 
     def _make_var_accessors(self, kind, var, default=None):
         """按类型生成绑定引擎变量的 getter/setter (值自动转换)。"""
@@ -136,22 +148,27 @@ class SettingsManager:
         d = self.engine.display
         # 音量类: 值存引擎变量 (bgm_volume/sfx_volume/voice_volume),
         # apply 同步到音频系统 —— 语音等运行时行为全局读变量
+        # (label_key 走 i18n, 切换语言即时生效)
         self.register("bgm_volume", "音乐音量", "slider",
                       var="bgm_volume", default=0.8,
                       apply=lambda v: a.set_bgm_volume(v),
-                      min=0, max=1, step=0.05, section="音量")
+                      min=0, max=1, step=0.05, section="音量",
+                      label_key="settings.bgm_volume")
         self.register("sfx_volume", "音效音量", "slider",
                       var="sfx_volume", default=1.0,
                       apply=lambda v: a.set_sfx_volume(v),
-                      min=0, max=1, step=0.05, section="音量")
+                      min=0, max=1, step=0.05, section="音量",
+                      label_key="settings.sfx_volume")
         self.register("voice_volume", "语音音量", "slider",
                       var="voice_volume", default=1.0,
                       apply=lambda v: a.set_voice_volume(v),
-                      min=0, max=1, step=0.05, section="语音")
+                      min=0, max=1, step=0.05, section="语音",
+                      label_key="settings.voice_volume")
         self.register("text_speed", "文字速度", "slider",
                       var="text_speed", default=45.0,
                       apply=lambda v: setattr(d, "type_speed", v),
-                      min=10, max=120, step=5, section="显示")
+                      min=10, max=120, step=5, section="显示",
+                      label_key="settings.text_speed")
         # 分辨率: 值存变量 resolution ("WxH"), 同步窗口尺寸并写入
         # res_w/res_h 变量 (window 块声明可用 $res_w/$res_h)
         self.register("resolution", "分辨率", "cycle",
@@ -159,21 +176,36 @@ class SettingsManager:
                                "1920x1080"],
                       var="resolution", default="1280x720",
                       apply=self._apply_resolution_item,
-                      section="显示")
+                      section="显示", label_key="settings.resolution")
         self.register("fullscreen", "全屏", "checkbox",
                       var="fullscreen", default=False,
                       apply=lambda v: self.engine.set_fullscreen(bool(v)),
-                      section="显示")
+                      section="显示", label_key="settings.fullscreen")
         self.register("resizable", "窗口可缩放", "checkbox",
                       var="resizable", default=True,
                       apply=lambda v: (setattr(self.engine, "resizable",
                                                bool(v)),
                                        self.engine._rebuild_window()),
-                      section="显示")
+                      section="显示", label_key="settings.resizable")
         self.register("player_name", "主角名字", "cycle",
                       options=["阿明", "小明", "未命名"],
                       var="player_name", default="未命名",
-                      section="游戏")
+                      section="游戏", label_key="settings.player_name")
+        # 语言切换 (language 块配置: 显示名 + 默认语言; 未配置时全部语言)
+        i18n = self.engine.i18n
+        self.register("language", "语言", "cycle",
+                      options=[o[0] for o in i18n.lang_options()],
+                      getter=lambda: i18n.lang_name(i18n.current),
+                      setter=lambda v: i18n.set_lang(
+                          i18n.code_by_name(str(v))),
+                      section="游戏", label_key="settings.language")
+
+    def refresh_language_item(self) -> None:
+        """language 块配置后刷新"语言"设置项 (显示名/选项)。"""
+        if "language" not in self.items:
+            return
+        opts = self.engine.i18n.lang_options()
+        self.items["language"]["options"] = [o[0] for o in opts]
         # 键位 (key_up/key_down/key_confirm/key_left/key_right) 由
         # KeyBindManager 注册 (自动生成设置项, 支持多键/冲突处理)
 
@@ -207,7 +239,12 @@ class SettingsManager:
                 ch = rt.characters.get(cid)
                 if ch:
                     ch["voice_volume"] = max(0.0, min(1.0, float(v)))
-            return {"key": key, "label": f"{cid} 语音", "kind": "slider",
+            # 显示名: 角色名 (支持 {@key}) + 全局语音项模板
+            ch = rt.characters.get(cid, {})
+            name = self.engine.i18n.resolve(str(ch.get("name") or cid))
+            label = self.engine.i18n.t("settings.voice_char", name=name,
+                                       default=f"{name} 语音")
+            return {"key": key, "label": label, "kind": "slider",
                     "getter": getter, "setter": setter,
                     "min": 0.0, "max": 1.0, "step": 0.05,
                     "options": None, "visible": True, "on_click": None,
@@ -301,7 +338,7 @@ class SettingsManager:
             self.engine.emit("setting_changed", key=key, value=value)
             return True
         except Exception as exc:
-            log.warning(f"设置 {key} 写入失败: {exc}")
+            log.w("log.settings.write_failed", key=key, exc=exc)
             return False
 
     def _apply_resolution(self, v):
@@ -409,8 +446,8 @@ class SettingsManager:
             if key in self.order:
                 self.order.remove(key)
             self.order.append(key)
-        log.info(f"设置配置已应用: {self.title} 列x{self.columns} "
-                 f"{len(self.order)} 项")
+        log.i("log.settings.config_applied", title=self.title,
+              cols=self.columns, count=len(self.order))
 
     # ==================================================================
     # 打开 / 关闭
@@ -598,12 +635,12 @@ class SettingsManager:
                     return
                 self._binding = (key, slot)
                 self.engine.display.show_notice(
-                    "按下按键 (Backspace 清空 · Enter 保持)", 2.0)
+                    self.engine.i18n.t("settings.keybind_enter_hint"), 2.0)
             elif kind == "button" and item.get("on_click"):
                 try:
                     item["on_click"](self.engine)
                 except Exception as exc:
-                    log.warning(f"设置按钮 {key} 执行失败: {exc}")
+                    log.w("log.settings.button_failed", key=key, exc=exc)
             return
 
     def _click_slider(self, item, pos, rect) -> None:
@@ -651,6 +688,15 @@ class SettingsManager:
     def _keys_to_str(self, keys) -> str:
         return ", ".join(pygame.key.name(k) for k in keys)
 
+    def _section_label(self, sec) -> str:
+        """分栏显示名: 优先语言表 ``settings.section.<值>``, 其次 {@key} 解析,
+        最后原样 (自定义分栏可直接用任意文本或 {@key})。"""
+        key = f"settings.section.{sec}"
+        txt = self.engine.i18n.t(key)
+        if txt != key:
+            return txt
+        return self.engine.i18n.resolve(str(sec))
+
     def _draw(self, surface, **kw):
         if not self.active:
             return
@@ -666,8 +712,9 @@ class SettingsManager:
         bg = self._load_img(self.bg)
         self._panel_or_image(surface, panel, bg,
                              (22, 22, 36, 245), (120, 120, 160), 2, 12)
-        # 标题 + 返回
-        ui.text(surface, self.engine.get_font(34), self.title,
+        # 标题 + 返回 (文案支持 {@key}, 按当前语言解析)
+        title = self.engine.i18n.resolve(self.title)
+        ui.text(surface, self.engine.get_font(34), title,
                 color=(255, 220, 130), center=(panel.centerx, panel.y + 30))
         back = pygame.Rect(panel.right - 96, panel.y + 12, 76, 34)
         self._back_rect = back
@@ -677,7 +724,8 @@ class SettingsManager:
                  bg_color=(*(80, 50, 50), 235) if hover_back else (50, 40, 40),
                  border_color=(220, 130, 130) if hover_back else (120, 80, 80),
                  border_width=2, radius=8)
-        ui.text(surface, self.engine.get_font(18), "返回",
+        ui.text(surface, self.engine.get_font(18),
+                self.engine.i18n.t("settings.back"),
                 color=(255, 255, 255), center=back.center)
         # 分栏 (tab) 行
         secs = self._sections()
@@ -687,7 +735,8 @@ class SettingsManager:
         tx = panel.x + 20
         ty = panel.y + 56
         for sec in secs:
-            w_sec = tab_font.size(sec)[0] + 32
+            sec_label = self._section_label(sec)
+            w_sec = tab_font.size(sec_label)[0] + 32
             rect = pygame.Rect(tx, ty, w_sec, 34)
             self._tab_rects.append((sec, rect))
             active = (sec == cur)
@@ -697,7 +746,7 @@ class SettingsManager:
                      else (*(70, 60, 80), 230) if hovered else (45, 45, 66),
                      border_color=(255, 210, 130) if active else (90, 90, 120),
                      border_width=2, radius=8)
-            ui.text(surface, tab_font, sec,
+            ui.text(surface, tab_font, sec_label,
                     color=(255, 255, 255), center=rect.center)
             tx += w_sec + 10
         # 条目
@@ -717,7 +766,8 @@ class SettingsManager:
         # 绑定提示
         if self._binding:
             ui.text(surface, self.engine.get_font(18),
-                    "按下新按键 (Backspace 取消) …", color=(255, 210, 130),
+                    self.engine.i18n.t("settings.keybind_hint"),
+                    color=(255, 210, 130),
                     center=(w // 2, h - 28))
 
     def _draw_item(self, surface, item, rect, hovered, mouse):
@@ -727,7 +777,7 @@ class SettingsManager:
                  border_color=(255, 210, 130) if hovered else (80, 80, 110),
                  border_width=2, radius=8)
         font = self.engine.get_font(20)
-        label = str(item.get("label", item["key"]))
+        label = self._item_label(item)
         ui.text(surface, font, label, color=(230, 230, 238),
                 pos=(rect.x + 12, rect.y + 8))
         kind = item["kind"]
@@ -764,6 +814,7 @@ class SettingsManager:
                         color=(255, 255, 255), center=box.center)
         elif kind == "cycle":
             txt = str(value if value is not None else "")
+            txt = self.engine.i18n.resolve(txt)   # 选项值支持 {@key}
             # 左右箭头用多边形绘制 (不依赖字体符号)
             cy = rect.centery + 4
             pygame.draw.polygon(
@@ -783,7 +834,8 @@ class SettingsManager:
                        and self._binding[0] == name)
             sx = rect.x + 12
             sy = rect.y + 30          # label 下方 (条目下半部)
-            for slot, sname in (("primary", "主"), ("alt", "副")):
+            for slot, sname in (("primary", self.engine.i18n.t("settings.primary")),
+                                ("alt", self.engine.i18n.t("settings.alt"))):
                 key = kb.get_key(name, slot)
                 active = editing and self._binding[1] == slot
                 box = pygame.Rect(sx, sy, 60, 24)
@@ -803,12 +855,15 @@ class SettingsManager:
                 sx += 60 + 6
             if editing:
                 ui.text(surface, self.engine.get_font(13),
-                        "按下按键…", color=(170, 170, 190),
+                        self.engine.i18n.t("settings.keybind_listen"),
+                        color=(170, 170, 190),
                         pos=(sx + 2, sy + 5))
         elif kind == "input":
             editing = (self._input_key == item["key"])
             txt = self._input_text if editing else str(
                 value if value is not None else "")
+            # 值文本支持 {@key} (按当前语言解析)
+            txt = self.engine.i18n.resolve(txt)
             font_i = self.engine.get_font(18)
             # 值文本放在条目中部 (label 在顶部, 避免重叠)
             if editing:
@@ -821,12 +876,13 @@ class SettingsManager:
                     pygame.draw.rect(surface, (255, 210, 130),
                                      (cx, rect.y + 30, 2, 18))
                 ui.text(surface, self.engine.get_font(14),
-                        "Enter 确认 · ESC 取消",
+                        self.engine.i18n.t("settings.input_hint"),
                         color=(150, 150, 170),
                         pos=(rect.right - 150, rect.y + 32))
             else:
                 ui.text(surface, font_i,
-                        txt if txt else "点击输入…",
+                        txt if txt else self.engine.i18n.t(
+                            "settings.input_placeholder"),
                         color=(220, 220, 230) if txt else (140, 140, 155),
                         pos=(rect.x + 12, rect.y + 30))
         elif kind == "button":

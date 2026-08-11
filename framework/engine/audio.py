@@ -29,7 +29,7 @@ class Audio:
             except Exception:
                 pass
         except Exception as exc:
-            log.warning(f"音频初始化失败, 游戏将静音运行: {exc}")
+            log.w("log.audio.init_failed", exc=exc)
 
     # ------------------------------------------------------------------
     def resolve(self, path: str) -> str:
@@ -76,7 +76,7 @@ class Audio:
         try:
             real = self.resolve(path)
             if not os.path.isfile(real):
-                log.warning(f"BGM 文件不存在: {real}")
+                log.w("log.audio.bgm_missing", path=real)
                 return False
             if self._music_playing() and self.current_bgm != path and fade > 0:
                 # 切换: 先淡出旧曲, 完成后淡入新曲
@@ -85,7 +85,7 @@ class Audio:
                 return True
             return self._do_play(path, loop, fade, name)
         except Exception as exc:
-            log.warning(f"BGM 播放失败 {path}: {exc}")
+            log.w("log.audio.bgm_play_failed", path=path, exc=exc)
             return False
 
     def stop_music(self, fade: float = None) -> None:
@@ -104,7 +104,7 @@ class Audio:
                 self.current_bgm_name = None
                 self.engine.emit("music_stop")
         except Exception as exc:
-            log.warning(f"停止 BGM 失败: {exc}")
+            log.w("log.audio.bgm_stop_failed", exc=exc)
 
     def pause_music(self, fade: float = None) -> None:
         """暂停 BGM (默认淡出后暂停)。"""
@@ -120,7 +120,7 @@ class Audio:
                 pygame.mixer.music.pause()
             self.engine.emit("music_pause")
         except Exception as exc:
-            log.warning(f"暂停 BGM 失败: {exc}")
+            log.w("log.audio.bgm_pause_failed", exc=exc)
 
     def resume_music(self, fade: float = None) -> None:
         """恢复 BGM (默认淡入)。"""
@@ -135,7 +135,7 @@ class Audio:
                               "pending": None}
             self.engine.emit("music_resume")
         except Exception as exc:
-            log.warning(f"恢复 BGM 失败: {exc}")
+            log.w("log.audio.bgm_resume_failed", exc=exc)
 
     def stop_all_sfx(self) -> None:
         """立即停止所有音效 (剧情 + UI, 非 BGM)。"""
@@ -208,7 +208,7 @@ class Audio:
             import pygame
             real = self.resolve(path)
             if not os.path.isfile(real):
-                log.warning(f"音效文件不存在: {real}")
+                log.w("log.audio.sfx_missing", path=real)
                 return False
             snd = pygame.mixer.Sound(real)
             snd.set_volume(self.sfx_volume)
@@ -216,7 +216,7 @@ class Audio:
             self.engine.emit("sound_play", path=path)
             return True
         except Exception as exc:
-            log.warning(f"音效播放失败 {path}: {exc}")
+            log.w("log.audio.sfx_play_failed", path=path, exc=exc)
             return False
 
     def set_bgm_volume(self, vol: float) -> None:
@@ -251,7 +251,7 @@ class Audio:
             import pygame
             real = self.resolve(path)
             if not os.path.isfile(real):
-                log.warning(f"语音文件不存在: {real}")
+                log.w("log.audio.voice_missing", path=real)
                 return False
             snd = pygame.mixer.Sound(real)
             extra = 1.0 if volume is None else max(0.0, min(1.0, float(volume)))
@@ -264,7 +264,7 @@ class Audio:
             self.engine.emit("voice_play", path=path)
             return True
         except Exception as exc:
-            log.warning(f"语音播放失败 {path}: {exc}")
+            log.w("log.audio.voice_play_failed", path=path, exc=exc)
             return False
 
     def stop_voice(self) -> None:

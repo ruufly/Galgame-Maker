@@ -49,7 +49,7 @@ class GameEngine:
             self.screen = pygame.display.set_mode(
                 (width, height), self._window_flags())
         except pygame.error as exc:
-            log.error(f"无法创建窗口: {exc}")
+            log.e("log.core.window_create_failed", exc=exc)
             raise
         pygame.display.set_caption(title)
 
@@ -62,14 +62,23 @@ class GameEngine:
         # 字体缓存 (需在 Display 之前初始化, Display 构造会取字体)
         self._font_cache = {}
         self._font_path = self._find_font()
+        self._font_sys = None      # "sys:<系统字体名>" (window font 配置)
         if self._font_path:
-            log.info(f"使用字体: {self._font_path}")
+            log.i("log.core.font_used", path=self._font_path)
 
         # 模块组装
         self.events = EventBus()
         self.commands = CommandRegistry(self)
         self.plugins = PluginManager(self)
         self.audio = Audio(self)
+
+        # 多语言系统 (需在 dialogs/menu_texts/settings 之前)
+        from framework.engine.i18n import I18n
+        self.i18n = I18n(self)
+        self.events.on("lang_change", self._on_lang_change)
+        # 日志接入多语言 (log.i/w/e 按 key 翻译)
+        from framework.engine import log as _log_mod
+        _log_mod.set_i18n(self.i18n)
 
         # 富文本渲染器 (标记解析 + 行内样式 + LaTeX 公式), 需在 Display 之前
         from framework.engine.rich import RichTextRenderer
@@ -87,15 +96,16 @@ class GameEngine:
         self.plugins_dir = plugins_dir
         self.autoload_plugins = autoload_plugins
 
-        # 退出确认 (window 配置, 脚本可自定义)
+        # 退出确认 (window 配置, 脚本可自定义; 默认文案走 i18n {@key},
+        # 显示时按当前语言解析, 语言切换即时生效)
         self.confirm_quit_enabled = False
-        self.confirm_quit_text = "确定要退出游戏吗？"
-        self.confirm_quit_yes = "退出"
-        self.confirm_quit_no = "继续游戏"
+        self.confirm_quit_text = "{@dialog.quit.text}"
+        self.confirm_quit_yes = "{@dialog.quit.yes}"
+        self.confirm_quit_no = "{@dialog.quit.no}"
         self.confirm_load_enabled = False
-        self.confirm_load_text = "确定要读取这个存档吗？"
-        self.confirm_load_yes = "读档"
-        self.confirm_load_no = "取消"
+        self.confirm_load_text = "{@dialog.load.text}"
+        self.confirm_load_yes = "{@dialog.load.yes}"
+        self.confirm_load_no = "{@dialog.load.no}"
         self._confirm_callback = None
         self._confirm_no_callback = None
         self._stacked_confirm = None   # 多层确认: 叠加退出确认时保存原框
@@ -137,13 +147,18 @@ class GameEngine:
                      "text": self.confirm_load_text,
                      "yes": self.confirm_load_yes,
                      "no": self.confirm_load_no},
-            "title": {"enabled": False, "text": "确定要返回标题画面吗？",
-                      "yes": "返回标题", "no": "取消"},
+            "title": {"enabled": False,
+                      "text": "{@dialog.title.text}",
+                      "yes": "{@dialog.title.yes}",
+                      "no": "{@dialog.title.no}"},
         }
-        # ESC 系统菜单文案 (window 配置可自定义)
+        # ESC 系统菜单文案 (window 配置可自定义; 默认走 i18n {@key})
         self.menu_texts = {
-            "continue": "继续游戏", "save": "存档", "load": "读取存档",
-            "title": "返回标题", "quit": "退出游戏",
+            "continue": "{@menu.continue}",
+            "save": "{@menu.save}",
+            "load": "{@menu.load}",
+            "title": "{@menu.title}",
+            "quit": "{@menu.quit}",
         }
 
         # 动作注册表 (selection 按钮/插件触发的事件)
@@ -193,12 +208,18 @@ class GameEngine:
         """按 (字号, 字体族, 粗体, 斜体) 获取 pygame 字体 (带缓存)。
 
         同一字号的不同样式使用独立 Font 对象, 避免样式状态互相污染。
+        字体来源: window font 配置的文件 / "sys:<系统字体名>" / 默认。
         """
         key = (family, size, bold, italic)
         if key in self._font_cache:
             return self._font_cache[key]
         font = None
-        if self._font_path:
+        if self._font_sys:
+            try:
+                font = pygame.font.SysFont(self._font_sys, size)
+            except Exception:
+                font = None
+        if font is None and self._font_path:
             try:
                 font = pygame.font.Font(self._font_path, size)
             except Exception:
@@ -211,6 +232,30 @@ class GameEngine:
             font.set_italic(True)
         self._font_cache[key] = font
         return font
+
+    def apply_font(self, font: str) -> None:
+        """切换渲染字体 (window 块 font: 配置; 立即生效)。
+
+        font: 相对脚本目录的字体文件路径, 或 "sys:<系统字体名>"
+        (如 "sys:Microsoft YaHei"), 空/默认恢复内置字体。
+        """
+        font = str(font or "").strip()
+        if font.lower().startswith("sys:"):
+            self._font_sys = font[4:]
+            self._font_path = None
+        elif font:
+            real = self.resolve_path(font)
+            if not os.path.isfile(real):
+                log.w("log.core.font_missing", path=real)
+                return
+            self._font_path = real
+            self._font_sys = None
+        else:
+            self._font_sys = None
+            self._font_path = self._find_font()
+        self._font_cache.clear()
+        self.display.refresh_fonts()
+        log.i("log.font_switched", font=font or "default")
 
     # ==================================================================
     # 资源路径
@@ -232,9 +277,9 @@ class GameEngine:
             icon = pygame.image.load(real)
             pygame.display.set_icon(icon)
             self._icon_path = path
-            log.info(f"窗口图标已设置: {real}")
+            log.i("log.core.icon_set", path=real)
         except Exception as exc:
-            log.warning(f"设置窗口图标失败 {path}: {exc}")
+            log.w("log.core.icon_failed", path=path, exc=exc)
 
     # ==================================================================
     # 窗口运行时配置 (window config 命令 / 全屏 / 等比缩放)
@@ -252,19 +297,21 @@ class GameEngine:
         try:
             self.screen = pygame.display.set_mode(size, self._window_flags())
         except pygame.error as exc:
-            log.warning(f"重建窗口失败: {exc}")
+            log.w("log.core.window_rebuild_failed", exc=exc)
             return
         pygame.display.set_caption(self.title)
         if self._icon_path:
             self.set_icon(self._icon_path)
-        log.info(f"窗口已重建: {'全屏' if self.fullscreen else '窗口'} "
-                 f"{self.screen.get_size()} title={self.title!r}")
+        mode = (self.i18n.t("log.core.mode_fullscreen")
+                if self.fullscreen else self.i18n.t("log.core.mode_window"))
+        log.i("log.core.window_rebuilt", mode=mode,
+              size=self.screen.get_size(), title=self.title)
 
     def set_window_title(self, title: str) -> None:
         """运行中修改窗口标题。"""
         self.title = str(title)
         pygame.display.set_caption(self.title)
-        log.info(f"窗口标题已更新: {self.title}")
+        log.i("log.core.window_title_updated", title=self.title)
 
     def set_window_size(self, width: int, height: int) -> None:
         """运行中修改窗口尺寸 (逻辑分辨率不变, 内容等比缩放)。"""
@@ -321,10 +368,12 @@ class GameEngine:
                 h = int(cfg.get("height", self.window_h))
                 self.set_window_size(w, h)
             except (TypeError, ValueError):
-                log.warning(f"窗口尺寸配置无效, 忽略: "
-                            f"{cfg.get('width')}x{cfg.get('height')}")
+                log.w("log.core.window_size_invalid",
+                           w=cfg.get("width"), h=cfg.get("height"))
         if "icon" in cfg:
             self.set_icon(str(cfg["icon"]))
+        if "font" in cfg:
+            self.apply_font(str(cfg["font"]))
         if "fullscreen" in cfg:
             self.set_fullscreen(str(cfg["fullscreen"]).lower() in (
                 "true", "1", "yes", "on"))
@@ -369,7 +418,7 @@ class GameEngine:
             self.runtime.load_script(script_path)
             self.runtime.start()
         except Exception as exc:
-            log.error(f"脚本加载/启动失败: {exc}")
+            log.e("log.core.script_start_failed", exc=exc)
             import traceback
             traceback.print_exc()
             self.running = False
@@ -488,13 +537,14 @@ class GameEngine:
             return
         items = self.runtime._menu_items("system")
         if items is None:
+            res = self.i18n.resolve
             items = [
-                (self.menu_texts["save"],
+                (res(self.menu_texts["save"]),
                  {"type": "slot_menu", "mode": "save"}, {}),
-                (self.menu_texts["load"],
+                (res(self.menu_texts["load"]),
                  {"type": "slot_menu", "mode": "load"}, {}),
-                (self.menu_texts["title"], {"type": "title"}, {}),
-                (self.menu_texts["quit"], {"type": "quit"}, {}),
+                (res(self.menu_texts["title"]), {"type": "title"}, {}),
+                (res(self.menu_texts["quit"]), {"type": "quit"}, {}),
             ]
         else:
             self._set_ui_sounds(self.runtime._menu_ui("system"))
@@ -505,14 +555,20 @@ class GameEngine:
         d.set_menu_bar(items)
 
     def default_system_items(self) -> list:
-        """默认系统菜单项 (含"设置"; 供 open_system_menu 与插件补全用)。"""
+        """默认系统菜单项 (含"设置"; 供 open_system_menu 与插件补全用)。
+
+        文案可含 ``{@key}``, 构建时按当前语言解析。
+        """
+        res = self.i18n.resolve
         return [
-            (self.menu_texts["continue"], {"type": "continue"}, {}),
-            (self.menu_texts["save"], {"type": "slot_menu", "mode": "save"}, {}),
-            (self.menu_texts["load"], {"type": "slot_menu", "mode": "load"}, {}),
-            (self.menu_texts["title"], {"type": "title"}, {}),
-            (self.menu_texts["quit"], {"type": "quit"}, {}),
-            ("设置", {"type": "settings_open"}, {}),
+            (res(self.menu_texts["continue"]), {"type": "continue"}, {}),
+            (res(self.menu_texts["save"]),
+             {"type": "slot_menu", "mode": "save"}, {}),
+            (res(self.menu_texts["load"]),
+             {"type": "slot_menu", "mode": "load"}, {}),
+            (res(self.menu_texts["title"]), {"type": "title"}, {}),
+            (res(self.menu_texts["quit"]), {"type": "quit"}, {}),
+            (self.i18n.t("menu.settings"), {"type": "settings_open"}, {}),
         ]
 
     def open_system_menu(self) -> None:
@@ -594,9 +650,11 @@ class GameEngine:
                 text = d.error_info.get("traceback") \
                     if d.error_info else ""
                 if self.copy_to_clipboard(text):
-                    d.show_notice("完整报错已复制到剪贴板", 2.0)
+                    d.show_notice(
+                        self.i18n.t("notice.copied"), 2.0)
                 else:
-                    d.show_notice("复制失败, 请从日志文件复制", 2.0)
+                    d.show_notice(
+                        self.i18n.t("notice.copy_failed"), 2.0)
             elif idx == 2:    # 退出游戏
                 self.quit()
             return
@@ -634,10 +692,11 @@ class GameEngine:
                 d.slot_menu_active = False
                 d.system_menu_active = False
                 self.paused = False
-                d.show_notice(f"已保存到槽位 {info['slot'] + 1}", 1.5)
+                d.show_notice(self.i18n.t(
+                    "notice.saved_slot", slot=info["slot"] + 1), 1.5)
             else:
                 if info.get("empty"):
-                    d.show_notice("该槽位没有存档", 1.5)
+                    d.show_notice(self.i18n.t("notice.slot_empty"), 1.5)
                     return
                 if self.confirm_load_enabled:
                     self.ask_confirm(
@@ -806,10 +865,10 @@ class GameEngine:
                     if ex:
                         cfg["except"] = [s.strip() for s in str(ex).split(",")
                                          if s.strip()]
-                    log.info(f"插件装载配置: {cfg}")
+                    log.i("log.core.plugin_config", cfg=cfg)
                     return cfg
         except Exception as exc:
-            log.warning(f"解析插件配置失败: {exc}")
+            log.w("log.core.plugin_config_failed", exc=exc)
         return {}
 
     _KEY_NAMES = {
@@ -898,9 +957,11 @@ class GameEngine:
             elif pos in ("bottom", "down"):
                 self.menu_bar_pos = "bottom"
         self.refresh_menu_bar()
-        log.info(f"对话框: " + ", ".join(
-            f"{k}={'开' if v['enabled'] else '关'}"
-            for k, v in self.dialogs.items()))
+        items = ", ".join(
+            "{k}={v}".format(k=k, v=self.i18n.t(
+                "log.core.on" if v["enabled"] else "log.core.off"))
+            for k, v in self.dialogs.items())
+        log.i("log.core.dialogs", items=items)
 
     def ask_dialog(self, name: str, callback) -> None:
         """按 dialog 配置弹确认框; 未启用时直接执行 callback。"""
@@ -916,6 +977,7 @@ class GameEngine:
 
         on_no 供 confirm DSL 等需要"否"返回值的使用方; 原有调用
         (退出/读档确认) 不传则"否"无动作。
+        文本可含 ``{@key}``, 由显示层按当前语言解析 (语言切换即时刷新)。
         """
         self._confirm_callback = callback
         self._confirm_no_callback = on_no
@@ -930,7 +992,7 @@ class GameEngine:
         handler(engine, params, source) -> bool (True=执行后关闭选择列表)
         """
         self.actions[name] = handler
-        log.info(f"动作已注册: {name}")
+        log.i("log.core.action_registered", name=name)
 
     def run_action(self, action, source: str = None) -> bool:
         """执行一个动作 dict {"type": ..., 其他参数}, 返回是否已处理。"""
@@ -941,12 +1003,12 @@ class GameEngine:
         self.emit("action", type=atype, params=params, source=source)
         handler = self.actions.get(atype)
         if handler is None:
-            log.warning(f"未知动作类型: {atype}")
+            log.w("log.core.action_unknown", atype=atype)
             return False
         try:
             return bool(handler(self, params, source))
         except Exception as exc:
-            log.warning(f"动作 {atype} 执行失败: {exc}")
+            log.w("log.core.action_failed", atype=atype, exc=exc)
             return False
 
     def _act_start(self, engine, params, source):
@@ -992,7 +1054,7 @@ class GameEngine:
         d.close_selection()
         d.slot_menu_active = False
         self.paused = False
-        d.show_notice(f"已保存到槽位 {slot + 1}", 1.5)
+        d.show_notice(self.i18n.t("notice.saved", slot=slot + 1), 1.5)
         return True
 
     def _act_load(self, engine, params, source):
@@ -1008,6 +1070,30 @@ class GameEngine:
         self.paused = False
         return True
 
+    def _on_lang_change(self, lang, **kw) -> None:
+        """语言切换: 刷新所有显示中的界面 (菜单/常驻栏/确认框/图片语言变体)。"""
+        d = self.display
+        d.clear_ui_cache()                       # {lang} 图片变体重新加载
+        rt = self.runtime
+        # 显示中的确认框: 基于原始串重新解析
+        if d.confirm_active:
+            d.confirm_text = self.i18n.resolve(
+                getattr(d, "confirm_text_raw", d.confirm_text))
+            d.confirm_yes = self.i18n.resolve(
+                getattr(d, "confirm_yes_raw", d.confirm_yes))
+            d.confirm_no = self.i18n.resolve(
+                getattr(d, "confirm_no_raw", d.confirm_no))
+        # 显示中的台词名字框 (角色名可能含 {@key})
+        if d.text_active and getattr(d, "speaker_raw", None):
+            d.speaker = self.i18n.resolve(d.speaker_raw)
+        if d.selection_active:
+            mid = "title" if d.title_active else "system"
+            items = rt._menu_items(mid)
+            if items:
+                d.refresh_selection_items(items)
+        if d.menu_bar_active:
+            self.refresh_menu_bar()
+
     def _on_log_warning(self, msg: str) -> None:
         """WARN 日志: 游戏界面顶部小提示 (节流), 提醒检查日志文件。"""
         import time
@@ -1017,7 +1103,7 @@ class GameEngine:
         self._last_warn_notice = now
         try:
             self.display.show_notice(
-                f"警告：{str(msg)[:44]}（详见 logs/engine.log）", 2.5)
+                self.i18n.t("log.warn_toast", msg=str(msg)[:44]), 2.5)
         except Exception:
             pass
 
@@ -1066,7 +1152,7 @@ class GameEngine:
                 self.display.show_error(info)
                 self.paused = True   # 弹窗期间暂停游戏
         except Exception as exc:
-            log.error(f"错误处理失败: {exc}")
+            log.e("log.core.error_handler_failed", exc=exc)
 
     # ==================================================================
     # 音频 API (供插件/游戏代码调用; 名称可为注册名或路径)
@@ -1136,7 +1222,7 @@ class GameEngine:
         if name and name not in endings:
             endings.append(name)
             self.save.set_global("endings", endings)
-            log.info(f"结局已记录: {name}")
+            log.i("log.core.ending_recorded", name=name)
         self.emit("ending_recorded", name=name, endings=endings)
 
     def get_endings(self) -> list:
@@ -1152,7 +1238,8 @@ class GameEngine:
             poses.append(key)
             cgs[scene_id] = poses
             self.save.set_global("cgs", cgs)
-            log.info(f"CG 已记录: {scene_id} ({pose or '默认'})")
+            log.i("log.core.cg_recorded", scene=scene_id,
+                          pose=(pose or self.i18n.t("log.core.default_pose")))
         self.emit("cg_unlocked", scene_id=scene_id, pose=pose, cgs=cgs)
 
     def get_unlocked_cgs(self) -> dict:
@@ -1223,7 +1310,7 @@ class GameEngine:
             pygame.scrap.put(pygame.SCRAP_TEXT, text.encode("utf-8"))
             return True
         except Exception as exc:
-            log.warning(f"复制到剪贴板失败: {exc}")
+            log.w("log.core.clipboard_failed", exc=exc)
             return False
 
     # ==================================================================
@@ -1233,12 +1320,13 @@ class GameEngine:
         data = self.runtime.snapshot()
         path = self.save.save(slot, data)
         if not silent:
-            self.display.show_notice(f"已存档 (槽位 {slot})  按 F9 读档")
+            self.display.show_notice(
+                self.i18n.t("notice.saved", slot=slot))
 
     def load_game(self, slot: int = 0) -> None:
         data = self.save.load(slot)
         if data is None:
-            self.display.show_notice(f"槽位 {slot} 没有存档")
+            self.display.show_notice(self.i18n.t("notice.slot_empty"))
             return
         # 恢复运行时 (变量/剧情位置/调用栈/阻塞状态)
         self.runtime.restore(data)
@@ -1250,5 +1338,5 @@ class GameEngine:
             self.play_music(music)
         else:
             self.audio.stop_music()
-        self.display.show_notice(f"已读档 (槽位 {slot})")
+        self.display.show_notice(self.i18n.t("notice.loaded", slot=slot))
         self.runtime.advance()

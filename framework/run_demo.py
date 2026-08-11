@@ -29,7 +29,7 @@ def main():
     else:
         script = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
     if not os.path.isfile(script):
-        log.error(f"脚本不存在: {script}")
+        log.e("log.launcher.script_missing", path=script)
         sys.exit(1)
 
     engine = GameEngine(1280, 720, "Galgame Maker Engine Demo")

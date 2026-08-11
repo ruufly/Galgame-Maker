@@ -34,12 +34,15 @@ class KeyBindManager:
     # 注册 / 查询
     # ------------------------------------------------------------------
     def register(self, name: str, label: str, callback,
-                 primary=None, alt=None, section="按键") -> str:
+                 primary=None, alt=None, section="按键",
+                 label_key=None) -> str:
         """插件 API: 注册快捷键 (主键 primary + 副键 alt 两个槽位)。
 
         name: 唯一名 (也是设置项 key, setting.gal 可引用)。
         callback(key) -> bool (返回 False 表示不消费该按键)。
         primary/alt: 键常量或键名串 ("up"/pygame.K_UP), 可留空。
+        label_key: i18n 语言表 key (设置界面显示名走翻译, 即时生效);
+            不传则用 label 原文。
         """
         self.bindings[name] = {
             "label": label,
@@ -55,9 +58,9 @@ class KeyBindManager:
             name, label, "keybind",
             getter=lambda n=name: self._keys_to_str(self.get_keys(n)),
             setter=lambda v, n=name: self.set_keys(n, self.parse_keys(v)),
-            section=section)
+            section=section, label_key=label_key)
         self.engine.emit("keybind_register", name=name, label=label)
-        log.info(f"快捷键已注册: {name} ({label})")
+        log.i("log.keybind.registered", name=name, label=label)
         return name
 
     def set_key(self, name: str, slot: str, key) -> None:
@@ -77,7 +80,8 @@ class KeyBindManager:
         self._sync_core(name)
         if conflicts:
             self.engine.display.show_notice(
-                f"快捷键冲突：已从 {'/'.join(conflicts)} 移除该键", 1.8)
+                self.engine.i18n.t("keybind.conflict",
+                                   names="/".join(conflicts)), 1.8)
         self.engine.emit("keybind_change", name=name, slot=slot, key=key)
 
     def set_keys(self, name: str, keys) -> None:
@@ -119,7 +123,7 @@ class KeyBindManager:
                 try:
                     result = b["callback"](key)
                 except Exception as exc:
-                    log.warning(f"快捷键 {name} 回调出错: {exc}")
+                    log.w("log.keybind.callback_failed", name=name, exc=exc)
                     result = True
                 return result is not False
         return False
@@ -183,21 +187,28 @@ class KeyBindManager:
     def _register_core(self) -> None:
         eng = self.engine
         d = lambda: eng.display
+        # 核心键位: 显示名走 i18n (label_key), 中文 label 作未配置时兜底
         self.register("key_up", "上移键",
                       lambda key: d().move_active(-1),
-                      primary="up", alt="w")
+                      primary="up", alt="w",
+                      label_key="keybind.key_up")
         self.register("key_down", "下移键",
                       lambda key: d().move_active(1),
-                      primary="down", alt="s")
+                      primary="down", alt="s",
+                      label_key="keybind.key_down")
         self.register("key_left", "左移键",
                       lambda key: d().move_active(-1),
-                      primary="left", alt="a")
+                      primary="left", alt="a",
+                      label_key="keybind.key_left")
         self.register("key_right", "右移键",
                       lambda key: d().move_active(1),
-                      primary="right", alt="d")
+                      primary="right", alt="d",
+                      label_key="keybind.key_right")
         self.register("key_confirm", "确认键",
                       eng._key_confirm_action,
-                      primary="return", alt="space")
+                      primary="return", alt="space",
+                      label_key="keybind.key_confirm")
         self.register("key_escape", "菜单键(ESC)",
                       lambda key: eng.on_escape(),
-                      primary="esc")
+                      primary="esc",
+                      label_key="keybind.key_escape")

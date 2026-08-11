@@ -95,6 +95,7 @@ class Runtime:
             "pass": self._cmd_pass,
             "window": self._cmd_window,
             "config": self._cmd_window,
+            "language": self._cmd_language,
             "fullscreen": self._cmd_fullscreen,
             "style": self._cmd_style,
             "use": self._cmd_use,
@@ -124,6 +125,9 @@ class Runtime:
         # 递归展开 import 后解析
         from framework.engine.loader import load_script_with_imports
         script = load_script_with_imports(path)
+        # 游戏文本多语言: <项目目录>/lang/*.json (存在即启用 {@key})
+        self.engine.i18n.load_dir(os.path.join(self.script_dir, "lang"),
+                                  ns="game")
         self.labels = script.labels
         self.statements = script.statements
         self.ip = 0
@@ -158,6 +162,9 @@ class Runtime:
             elif stmt.op == "settings":
                 # 设置界面配置 (setting.gal: 布局 + 条目)
                 self.engine.settings.apply_config(stmt)
+            elif stmt.op == "language":
+                # 主文件 language 块: 支持的语言 / 默认语言 / 显示名
+                self._cmd_language(stmt)
             elif stmt.kwargs or stmt.block:
                 # 其他属性块: 广播给插件处理 (如 gallery 块由 gallery
                 # 插件解析; 未装载对应插件时安全忽略)
@@ -166,10 +173,9 @@ class Runtime:
             # 预解析 (extract_window_config), 交互配置由启动器 apply_config;
             # 运行中的 `window config` 命令在执行到该语句时即时生效。
         self.engine.emit("script_load", path=path, name=script.name)
-        log.info(f"脚本已加载: {path} (标签 {len(script.labels)} 个, "
-                 f"对象 {len(self.script_objects)} 个, "
-                 f"角色 {len(self.characters)} 个, "
-                 f"场景 {len(self.scenes)} 个)")
+        log.i("log.script_loaded", path=path, labels=len(script.labels),
+              objects=len(self.script_objects), chars=len(self.characters),
+              scenes=len(self.scenes))
         # 按 menu_mode 构建常驻菜单栏 (bar 模式; menu system 已静态注册)
         self.engine.refresh_menu_bar()
         # widgets 模板
@@ -447,7 +453,7 @@ class Runtime:
     # ------------------------------------------------------------------
     def load_widget_templates(self, directory: str) -> None:
         if not os.path.isdir(directory):
-            log.warning(f"widgets 目录不存在: {directory}")
+            log.w("log.runtime.widgets_missing", path=directory)
             return
         for name in sorted(os.listdir(directory)):
             if not name.endswith(".wid"):
@@ -459,9 +465,9 @@ class Runtime:
                 tpl = self._parse_wid(text, name)
                 if tpl:
                     self.widgets_templates[tpl["name"]] = tpl
-                    log.info(f"widget 模板已注册: {tpl['name']}")
+                    log.i("log.runtime.widget_registered", name=tpl["name"])
             except Exception as exc:
-                log.warning(f"widget 模板加载失败 {path}: {exc}")
+                log.w("log.runtime.widget_load_failed", path=path, exc=exc)
 
     def _parse_wid(self, text: str, filename: str):
         """解析 .wid: 提取 reg class / @parent / 各事件块。
@@ -565,7 +571,7 @@ class Runtime:
                 handler = self.engine.commands.get(name, ns)
                 if handler is not None:
                     return handler(self.engine, stmt)
-            log.warning(f"第{stmt.line}行: 未知指令 {op!r}, 已跳过")
+            log.w("log.runtime.cmd_unknown", line=stmt.line, op=op)
             return None
         # 无命名空间: builtin:: 优先
         handler = self._builtins.get(op)
@@ -588,17 +594,16 @@ class Runtime:
         loc = self.engine.commands.find(op)
         if loc:
             hint = "、".join(f"{ns}::{op}" for ns, _ in loc)
-            log.warning(f"第{stmt.line}行: 指令 {op!r} 位于 {hint}, "
-                        f"需 using 对应命名空间或用完整命名空间调用")
+            log.w("log.runtime.cmd_ns_hint", line=stmt.line, op=op, ns=hint)
         else:
-            log.warning(f"第{stmt.line}行: 未知指令 {op!r}, 已跳过")
+            log.w("log.runtime.cmd_unknown", line=stmt.line, op=op)
         return None
 
     def _end_script(self) -> None:
         self.ended = True
         self.running = False
         self.engine.emit("script_end")
-        log.info("脚本执行结束")
+        log.i("log.runtime.script_end")
 
     # ------------------------------------------------------------------
     def _jump_to(self, label: str) -> None:
@@ -671,8 +676,8 @@ class Runtime:
             "props": dict(stmt.kwargs),
         }
         self.engine.emit("scene_register", id=sid, name=name, type=stype)
-        log.info(f"场景已注册: {sid} ({name}) [{stype}], "
-                 f"背景 {len(props)} 张")
+        log.i("log.runtime.scene_registered", sid=sid, name=name,
+              stype=stype, count=len(props))
         return None
 
     def _cmd_bg(self, stmt):
@@ -710,8 +715,8 @@ class Runtime:
             if pose and pose in scene["backgrounds"]:
                 img = scene["backgrounds"][pose]
             elif pose:
-                log.warning(f"第{stmt.line}行: 场景 {target} 无背景 {pose!r}, "
-                            f"改用默认背景")
+                log.w("log.runtime.scene_pose_fallback", line=stmt.line,
+              sid=target, pose=pose)
                 pose = None
             if img is None:
                 img = scene.get("default")
@@ -774,7 +779,8 @@ class Runtime:
             "props": dict(stmt.kwargs),
         }
         self.engine.emit("character_register", id=cid, name=name)
-        log.info(f"角色已注册: {cid} ({name}), 立绘 {len(props)} 张")
+        log.i("log.runtime.char_registered", cid=cid, name=name,
+              count=len(props))
         return None
 
     def _cmd_show(self, stmt):
@@ -807,7 +813,8 @@ class Runtime:
                 pose = char.get("default")
             img = char["sprites"].get(pose) or char.get("default")
             if not img:
-                log.warning(f"第{stmt.line}行: 角色 {sid} 的立绘 {pose!r} 未定义")
+                log.w("log.runtime.char_pose_undefined", line=stmt.line,
+              cid=sid, pose=pose)
                 return None
             self.engine.display.show_sprite(
                 sid, img, pos or char.get("pos"), char.get("scale"),
@@ -838,7 +845,7 @@ class Runtime:
                     sid, obj.get("image"), "center", mode="full",
                     effect=obj.get("effect"))
             return None
-        log.warning(f"第{stmt.line}行: show 的对象 {sid!r} 不存在")
+        log.w("log.runtime.show_unknown", line=stmt.line, sid=sid)
         return None
 
     def _cmd_hide(self, stmt):
@@ -856,7 +863,7 @@ class Runtime:
         if sid in self.engine.display.sprites:
             self.engine.display.hide_sprite(sid, effect)
         else:
-            log.warning(f"第{stmt.line}行: hide 的对象 {sid!r} 不存在")
+            log.w("log.runtime.hide_unknown", line=stmt.line, sid=sid)
         return None
 
     def _cmd_clear(self, stmt):
@@ -901,7 +908,7 @@ class Runtime:
         例: move girl to left / move girl to 640,360 / move girl to 400,300 2 ease in_out
         """
         if len(stmt.args) < 2:
-            log.warning(f"第{stmt.line}行: move 需要 move <id> to <位置>")
+            log.w("log.runtime.move_syntax", line=stmt.line)
             return None
         sid = stmt.args[0]
         tokens = stmt.args[2:] if stmt.args[1] == "to" else stmt.args[1:]
@@ -935,13 +942,14 @@ class Runtime:
     def _cmd_rotate(self, stmt):
         """rotate <id> <角度> [duration] [ease 缓动] (逆时针为正)"""
         if len(stmt.args) < 2:
-            log.warning(f"第{stmt.line}行: rotate 需要 rotate <id> <角度>")
+            log.w("log.runtime.rotate_syntax", line=stmt.line)
             return None
         sid = stmt.args[0]
         try:
             angle = float(stmt.args[1])
         except ValueError:
-            log.warning(f"第{stmt.line}行: rotate 角度无效: {stmt.args[1]!r}")
+            log.w("log.runtime.rotate_invalid", line=stmt.line,
+              value=stmt.args[1])
             return None
         duration = 0.0
         ease = "linear"
@@ -999,7 +1007,7 @@ class Runtime:
             return None
         ident = stmt.args[0]
         if self.pending_create is None:
-            log.warning(f"第{stmt.line}行: -> {ident} 没有待绑定的对象")
+            log.w("log.runtime.arrow_no_target", line=stmt.line, ident=ident)
             return None
         p = self.pending_create
         self.pending_create = None
@@ -1014,8 +1022,7 @@ class Runtime:
             return
         if kind == "weight":
             self._created_objects[ident] = obj
-            log.warning(f"对象 {ident}: weight 已不承担背景职责, "
-                        f"背景请改用 scene/bg 指令")
+            log.w("log.runtime.weight_deprecated", ident=ident)
         else:
             self.engine.display.show_sprite(
                 ident, obj.get("image"), obj.get("pos"),
@@ -1032,8 +1039,11 @@ class Runtime:
                 voice = args[vi + 1]
             del args[vi:vi + 2]
         text = self._interp(" ".join(args)) if args else ""
+        # 游戏文本多语言 {@key} 解析 (key 文本内的 $var 再插值一次)
+        text = self.engine.i18n.resolve(text)
+        text = self._interp(text) if text else text
         if not text:
-            log.warning(f"第{stmt.line}行: text 内容为空")
+            log.w("log.runtime.text_empty", line=stmt.line)
             return None
         self._play_voice(voice)
         self.engine.display.show_text(text)
@@ -1053,14 +1063,18 @@ class Runtime:
             del args[vi:vi + 2]
         speaker = self._interp(args[0])
         text = self._interp(" ".join(args[1:])) if len(args) > 1 else ""
+        # 游戏文本多语言 {@key} 解析 (key 文本内的 $var 再插值一次)
+        text = self.engine.i18n.resolve(text)
+        text = self._interp(text) if text else text
         if not text:
-            log.warning(f"第{stmt.line}行: say 内容为空")
+            log.w("log.runtime.say_empty", line=stmt.line)
             return None
-        # 台词分类: 角色 id -> 显示角色名; 旁白 -> 无名字框; 其他 -> 原样
+        # 台词分类: 角色 id -> 显示角色名 (支持 {@key}, 显示层按当前语言解析);
+        # 旁白 -> 无名字框; 其他 -> 原样
         display_speaker = None
         if speaker in self.characters:
             display_speaker = self.characters[speaker]["name"]
-        elif speaker and speaker != "旁白":
+        elif speaker and speaker != "旁白" and speaker != "narrator":
             display_speaker = speaker
         self._play_voice(voice, speaker)
         self.engine.display.show_text(text, display_speaker)
@@ -1084,7 +1098,7 @@ class Runtime:
             self.engine.audio.play_voice(
                 path, volume=self._voice_volume(voice_name, speaker))
         else:
-            log.warning(f"语音 {voice_name!r} 未注册")
+            log.w("log.runtime.voice_unregistered", name=voice_name)
 
     def _voice_volume(self, voice_name, speaker=None) -> float:
         """计算语音音量系数: 声音块 volume × 角色 voice_volume。
@@ -1117,7 +1131,8 @@ class Runtime:
         name = stmt.args[0]
         self.styles[name] = dict(stmt.kwargs)
         self.engine.emit("style_register", name=name)
-        log.info(f"样式已注册: {name} ({len(stmt.kwargs)} 项)")
+        log.i("log.runtime.style_registered", name=name,
+              count=len(stmt.kwargs))
         return None
 
     def _cmd_use(self, stmt):
@@ -1134,7 +1149,7 @@ class Runtime:
             self.engine.emit("style_change", name="default")
             return None
         if name not in self.styles:
-            log.warning(f"第{stmt.line}行: 样式 {name!r} 未定义")
+            log.w("log.runtime.style_undefined", line=stmt.line, name=name)
             return None
         self.current_style_name = name
         # 先回默认再应用: style 未定义的键用默认值, 不残留上一套样式
@@ -1273,7 +1288,7 @@ class Runtime:
         else:
             self.menus[mid] = items
         self.engine.emit("menu_register", name=mid, items=len(items))
-        log.info(f"菜单已注册: {mid} ({len(items)} 个按键)")
+        log.i("log.runtime.menu_registered", mid=mid, count=len(items))
         return None
 
     def add_menu_button(self, mid: str, text: str, action,
@@ -1316,7 +1331,7 @@ class Runtime:
                 and "items" in self.menus[mid]):
             self.menus[mid] = {"ui": ui, "items": items}
         self.engine.emit("menu_button_added", name=mid, text=str(text))
-        log.info(f"菜单按钮已添加: {mid} -> {item['name']}")
+        log.i("log.runtime.menu_button_added", mid=mid, name=item["name"])
         return item
 
     def set_menu_button_state(self, mid: str, key, enabled: bool) -> bool:
@@ -1340,6 +1355,13 @@ class Runtime:
                 if it.get("name") == key_s or str(it.get("text")) == key_s:
                     idx = i
                     break
+            # 兼容: 外部传 {@key} 解析后的文本 (如 "Gallery"/"鉴赏")
+            if idx is None:
+                for i, it in enumerate(items):
+                    if (self.engine.i18n.resolve(str(it.get("text")))
+                            == key_s):
+                        idx = i
+                        break
         if idx is None or not (0 <= idx < len(items)):
             return False
         items[idx].setdefault("cfg", {})["enabled"] = bool(enabled)
@@ -1368,6 +1390,13 @@ class Runtime:
                 if it.get("name") == key_s or str(it.get("text")) == key_s:
                     idx = i
                     break
+            # 兼容: 外部传 {@key} 解析后的文本
+            if idx is None:
+                for i, it in enumerate(items):
+                    if (self.engine.i18n.resolve(str(it.get("text")))
+                            == key_s):
+                        idx = i
+                        break
         if idx is None or not (0 <= idx < len(items)):
             return False
         items[idx].setdefault("cfg", {}).update(dict(cfg_update))
@@ -1387,7 +1416,9 @@ class Runtime:
             action = it["action"]
             if action is None:
                 action = {"type": "close"}
-            out.append((it["text"], action, it["cfg"]))
+            # 按钮文本支持游戏文本多语言 {@key}
+            out.append((self.engine.i18n.resolve(it["text"]),
+                        action, it["cfg"]))
         return out
 
     def _cmd_typing(self, stmt):
@@ -1425,7 +1456,7 @@ class Runtime:
         f = props.pop("file", "")
         self.sounds[name] = {"type": str(stype), "file": str(f), **props}
         self.engine.emit("sound_register", name=name, type=stype)
-        log.info(f"声音已注册: {name} ({stype})")
+        log.i("log.runtime.sound_registered", name=name, stype=stype)
         return None
 
     def _cmd_sfx(self, stmt):
@@ -1437,7 +1468,7 @@ class Runtime:
         if path:
             self.engine.audio.play_sound(path)
         else:
-            log.warning(f"第{stmt.line}行: 音效 {name!r} 未注册")
+            log.w("log.runtime.sfx_unregistered", line=stmt.line, name=name)
         return None
 
     def _cmd_music(self, stmt):
@@ -1542,10 +1573,10 @@ class Runtime:
                     return None
                 if cid in self.characters:
                     self.characters[cid]["voice_volume"] = vol
-                    log.info(f"角色 {cid} 语音音量 -> {vol}")
+                    log.i("log.runtime.voice_volume_set", cid=cid, vol=vol)
                 else:
-                    log.warning(f"第{stmt.line}行: 角色 {cid!r} 未定义, "
-                                f"无法设置语音音量")
+                    log.w("log.runtime.voice_volume_char_missing", line=stmt.line,
+              cid=cid)
             else:
                 # volume voice <音量>: 全局语音音量
                 try:
@@ -1603,27 +1634,30 @@ class Runtime:
             self.engine._set_ui_sounds(self._menu_ui(str(menu_id)))
             items = self._menu_items(str(menu_id))
             if items is None:
-                log.warning(f"第{stmt.line}行: 菜单 {menu_id!r} 未定义")
+                log.w("log.runtime.menu_undefined", line=stmt.line, mid=menu_id)
                 items = []
         if items is None:
             items = []
             start_label = props.get("start")
             if start_label:
-                text = str(props.get("start_text") or "开始游戏")
+                text = str(props.get("start_text")
+                           or self.engine.i18n.t("menu.start"))
                 items.append((text, {"type": "start", "label": str(start_label)}, {}))
             if "load" in props:
                 try:
                     slot = int(props["load"])
                 except (TypeError, ValueError):
                     slot = 0
-                    log.warning(f"第{stmt.line}行: title 的 load 槽位无效")
-                text = str(props.get("load_text") or "读取存档")
+                    log.w("log.runtime.title_load_invalid", line=stmt.line)
+                text = str(props.get("load_text")
+                           or self.engine.i18n.t("menu.load"))
                 items.append((text, {"type": "slot_menu", "mode": "load"}, {}))
             if str(props.get("quit", "false")).lower() in ("true", "1", "yes", "on"):
-                text = str(props.get("quit_text") or "退出游戏")
+                text = str(props.get("quit_text")
+                           or self.engine.i18n.t("menu.quit"))
                 items.append((text, {"type": "quit"}, {}))
         if not items:
-            log.warning(f"第{stmt.line}行: title 没有菜单项")
+            log.w("log.runtime.title_no_items", line=stmt.line)
             return None
         self.engine.display.show_title(caption, items, image, pos)
         self.blocked = "title"
@@ -1643,8 +1677,13 @@ class Runtime:
                 ui_cfg["ui_hover_sound"] = args[ai + 1]
         self.engine._set_ui_sounds(ui_cfg)
         options = stmt.kwargs.get("options", [])
-        # 选项文本支持变量插值
-        rendered = [(self._interp(t), lbl) for t, lbl in options]
+        # 选项文本支持变量插值 + 游戏文本多语言 {@key}
+        rendered = []
+        for t, lbl in options:
+            t = self._interp(t)
+            t = self.engine.i18n.resolve(t)
+            t = self._interp(t) if t else t
+            rendered.append((t, lbl))
         self.engine.display.show_choices(rendered)
         self.blocked = "choice"
         return BLOCK
@@ -1675,7 +1714,8 @@ class Runtime:
                 var = args[vi + 1]
             del args[vi:vi + 2]
         text = self._interp(args[0]) if args else ""
-        yes, no = "是", "否"
+        yes, no = (self.engine.i18n.t("confirm.yes"),
+                   self.engine.i18n.t("confirm.no"))
         if "yes" in args:
             yi = args.index("yes")
             if yi + 1 < len(args):
@@ -1687,7 +1727,7 @@ class Runtime:
                 no = self._interp(args[ni + 1])
             del args[ni:ni + 2]
         if not text:
-            log.warning(f"第{stmt.line}行: confirm 内容为空")
+            log.w("log.runtime.confirm_empty", line=stmt.line)
             return None
 
         def _done(choice):
@@ -1734,20 +1774,20 @@ class Runtime:
         if action in ("load", "enable"):
             directory = pm.directory
             if not directory:
-                log.warning(f"第{stmt.line}行: 插件目录未知, 请先执行 discover")
+                log.w("log.runtime.plugin_no_dir", line=stmt.line)
                 return None
             for name in names:
                 path = os.path.join(directory, name + ".py")
                 if not os.path.isfile(path):
-                    log.warning(f"第{stmt.line}行: 插件文件不存在: {path}")
+                    log.w("log.runtime.plugin_file_missing", line=stmt.line, name=path)
                     continue
                 mod_name = "gm_plugin_" + name
                 if mod_name in pm._modules:
-                    log.info(f"插件已加载, 跳过: {name}")
+                    log.i("log.runtime.plugin_already_loaded", name=name)
                     continue
                 if pm.load_module_from_path(mod_name, path):
                     self.using_ns.add(name)
-                    log.info(f"插件已装载: {name}")
+                    log.i("log.runtime.plugin_loaded", name=name)
             return None
         if action in ("unload", "disable"):
             for name in names:
@@ -1755,16 +1795,17 @@ class Runtime:
                 if mod_name in pm._modules:
                     pm.unload_module(mod_name)
                     self.using_ns.discard(name)
-                    log.info(f"插件已卸载: {name}")
+                    log.i("log.runtime.plugin_unloaded", name=name)
                 else:
-                    log.warning(f"第{stmt.line}行: 插件未加载: {name}")
+                    log.w("log.runtime.plugin_not_loaded", line=stmt.line, name=name)
             return None
         if action == "list":
             loaded = sorted(m.replace("gm_plugin_", "")
                             for m in pm._modules)
-            log.info("已加载插件: " + (", ".join(loaded) or "无"))
+            log.i("log.runtime.plugin_list",
+              names=", ".join(loaded) or self.engine.i18n.t("log.runtime.none"))
             return None
-        log.warning(f"第{stmt.line}行: 未知插件操作 {action!r} (load/unload/list)")
+        log.w("log.runtime.plugin_op_unknown", line=stmt.line, op=action)
         return None
 
     def _norm_var_name(self, name: str) -> str:
@@ -1785,7 +1826,7 @@ class Runtime:
 
     def _cmd_set(self, stmt):
         if len(stmt.args) < 2:
-            log.warning(f"第{stmt.line}行: set 需要 变量 = 值")
+            log.w("log.runtime.set_syntax", line=stmt.line)
             return None
         name = self._norm_var_name(stmt.args[0])
         expr = " ".join(stmt.args[1:])
@@ -1967,7 +2008,22 @@ class Runtime:
         self.engine.apply_config(cfg)
         self.engine.apply_window_config(cfg)
         self.engine.emit("window_config", config=cfg)
-        log.info(f"window config 已应用: {cfg}")
+        log.i("log.runtime.window_config_applied", cfg=cfg)
+        return None
+
+    def _cmd_language(self, stmt):
+        """language 块: 声明项目支持的语言、默认语言与显示名。
+
+        language:
+            default: en            # 默认语言 (当前语言缺翻译时回退)
+            en: "English"          # 语言码 -> 设置中显示的名字
+            zh-CN: "简体中文"
+        """
+        cfg = dict(stmt.kwargs)
+        if not cfg:
+            return None
+        self.engine.i18n.configure_language(
+            cfg, lang_dir=os.path.join(self.script_dir, "lang"))
         return None
 
     def _cmd_fullscreen(self, stmt):
@@ -1989,7 +2045,7 @@ class Runtime:
         if body:
             self._push_block(body)
         else:
-            log.info(f"widget {name} 无 when run 块, 实例化空操作")
+            log.i("log.runtime.widget_no_run", name=name)
 
     def _cmd_read_settings(self, stmt):
         """从设置文件读取设置并赋值到对应变量 (read_settings)。
@@ -2019,7 +2075,7 @@ class Runtime:
                            for k, v in stmt.kwargs.items()}
                     self.engine.apply_window_config(cfg)
         except Exception as exc:
-            log.warning(f"重新应用 window 配置失败: {exc}")
+            log.w("log.runtime.window_reapply_failed", exc=exc)
 
     # ==================================================================
     # 文本插值

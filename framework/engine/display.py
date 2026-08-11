@@ -580,6 +580,7 @@ class Display:
         # 文本
         self.text_active = False
         self.speaker = None
+        self.speaker_raw = None   # 名字框原始串 (含 {@key}, 语言切换重解析)
         self.full_text = ""
         self._logic_len = 0   # 逻辑字符数 (公式计 1)
         self._runs = []
@@ -625,8 +626,11 @@ class Display:
         # 确认对话框 (退出确认等)
         self.confirm_active = False
         self.confirm_text = ""
-        self.confirm_yes = "是"
-        self.confirm_no = "否"
+        self.confirm_yes = self.engine.i18n.t("confirm.yes")
+        self.confirm_no = self.engine.i18n.t("confirm.no")
+        self.confirm_text_raw = ""     # 原始串 (含 {@key}, 语言切换重解析)
+        self.confirm_yes_raw = ""
+        self.confirm_no_raw = ""
         self.confirm_panel = pygame.Rect(0, 0, 0, 0)
         self.confirm_rects = []    # [是, 否]
 
@@ -707,10 +711,20 @@ class Display:
     # ==================================================================
     # UI 图片 (9-slice) 加载
     # ==================================================================
+    def _localized_path(self, path):
+        """UI 图片路径语言变体: 含 {lang} 占位符时替换为当前语言码。
+
+        (如 "materials/title_{lang}.png" -> "materials/title_zh-CN.png")
+        """
+        if isinstance(path, str) and "{lang}" in path:
+            return path.replace("{lang}", self.engine.i18n.current)
+        return path
+
     def _ui_image(self, path):
-        """加载 UI 背景图 (带缓存), 路径相对脚本目录。"""
+        """加载 UI 背景图 (带缓存), 路径相对脚本目录; 支持 {lang} 变体。"""
         if not path:
             return None
+        path = self._localized_path(path)
         if path in self._ui_cache:
             return self._ui_cache[path]
         real = self.engine.resolve_path(path)
@@ -719,7 +733,7 @@ class Display:
             self._ui_cache[path] = img
             return img
         except Exception as exc:
-            log.warning(f"UI 图片加载失败 {path}: {exc}")
+            log.w("log.display.ui_image_failed", path=path, exc=exc)
             self._ui_cache[path] = None
             return None
 
@@ -779,7 +793,7 @@ class Display:
         img = d.get(state)
         if img is None and state != "default":
             img = d.get("default")
-        return img
+        return self._localized_path(img) if img else None
 
     def _update_sprite_effect(self, spr, dt: float) -> None:
         """推进立绘登场/退场效果, 退场完成后隐藏。"""
@@ -818,12 +832,12 @@ class Display:
         """加载图片并按 mode/scale 缩放。"""
         real = self.engine.resolve_path(path)
         if not os.path.isfile(real):
-            log.warning(f"图片文件不存在: {real}")
+            log.w("log.display.image_missing", path=real)
             return None
         try:
             img = pygame.image.load(real).convert_alpha()
         except Exception as exc:
-            log.warning(f"图片加载失败 {real}: {exc}")
+            log.w("log.display.image_failed", path=real, exc=exc)
             return None
         return img
 
@@ -911,12 +925,12 @@ class Display:
         """
         self.sprite_effects[name] = apply_func
         self.sprite_effect_durations[name] = duration
-        log.info(f"立绘效果已注册: {name}")
+        log.i("log.display.sprite_effect_registered", name=name)
 
     def set_text_mode(self, name: str) -> bool:
         """切换对话框文字显示模式 (typing 指令)。"""
         if name not in self.text_modes:
-            log.warning(f"文字模式 {name!r} 未注册")
+            log.w("log.display.text_mode_unknown", name=name)
             return False
         self.text_mode = name
         self.text_mode_state = {}
@@ -931,7 +945,7 @@ class Display:
             update 每帧推进显示
         """
         self.text_modes[name] = mode
-        log.info(f"文字模式已注册: {name}")
+        log.i("log.display.text_mode_registered", name=name)
 
     def register_transition(self, name: str, transition_cls) -> None:
         """注册自定义背景过渡效果 (供插件使用)。
@@ -939,7 +953,7 @@ class Display:
         transition_cls 须为 Transition 子类 (实现 draw_bg, 可选 draw_overlay)。
         """
         self.transitions[name] = transition_cls
-        log.info(f"过渡效果已注册: {name}")
+        log.i("log.display.transition_registered", name=name)
 
     def register_effect_overlay(self, fn) -> None:
         """插件 API: 注册全屏特效覆盖层 (每帧调用 fn(surface)->surface|None)。
@@ -1007,7 +1021,7 @@ class Display:
             self.engine.emit("sprite_show", id=sid, path=old.props.get("image"))
             return True
         if path is None:
-            log.warning(f"立绘 {sid} 不存在且未提供 image")
+            log.w("log.display.sprite_missing", sid=sid)
             return False
 
         img = self.load_image(path)
@@ -1047,7 +1061,7 @@ class Display:
         """移动立绘到目标位置。duration>0 时为缓动动画。"""
         spr = self.sprites.get(sid)
         if spr is None:
-            log.warning(f"move: 立绘 {sid} 不存在")
+            log.w("log.display.sprite_move_missing", sid=sid)
             return False
         target = self._resolve_center(spr, pos)
         if duration and duration > 0:
@@ -1065,7 +1079,7 @@ class Display:
         """旋转立绘到指定角度 (pygame 惯例, 逆时针为正)。"""
         spr = self.sprites.get(sid)
         if spr is None:
-            log.warning(f"rotate: 立绘 {sid} 不存在")
+            log.w("log.display.sprite_rotate_missing", sid=sid)
             return False
         angle = float(angle) % 360
         if duration and duration > 0:
@@ -1083,7 +1097,7 @@ class Display:
         """翻转立绘 (默认水平; 再次调用可恢复)。"""
         spr = self.sprites.get(sid)
         if spr is None:
-            log.warning(f"flip: 立绘 {sid} 不存在")
+            log.w("log.display.sprite_flip_missing", sid=sid)
             return False
         if horizontal:
             spr.flip_h = not spr.flip_h
@@ -1164,7 +1178,7 @@ class Display:
                 # 旧存档兼容: 直接使用保存的路径
                 img, pos = item["image"], item.get("pos")
             else:
-                log.warning(f"读档: 立绘 {sid!r} 不在脚本对象注册表中")
+                log.w("log.display.sprite_load_unknown", sid=sid)
                 continue
             self.show_sprite(sid, img, pos, scale, mode)
             spr = self.sprites.get(sid)
@@ -1240,7 +1254,13 @@ class Display:
     # ==================================================================
     def show_text(self, text: str, speaker: str = None) -> None:
         self.text_active = True
-        self.speaker = speaker
+        # 名字框存原始串 (可能含 {@key}), 显示时按当前语言解析;
+        # 语言切换时由引擎重新解析 (speaker_raw)
+        self.speaker_raw = speaker
+        self.speaker = (self.engine.i18n.resolve(speaker)
+                        if speaker else None)
+        # 游戏文本多语言: 替换 {@key} 占位符
+        text = self.engine.i18n.resolve(text)
         self.full_text = text
         st = self.style
         self._runs = self._rich.parse(text, base_size=st["text_size"],
@@ -1258,6 +1278,7 @@ class Display:
     def clear_text(self) -> None:
         self.text_active = False
         self.speaker = None
+        self.speaker_raw = None
         self.full_text = ""
 
     def text_done(self) -> bool:
@@ -1272,7 +1293,8 @@ class Display:
     # ==================================================================
     def show_choices(self, options) -> None:
         """options: [(文本, 跳转标签), ...]"""
-        self.choices = list(options)
+        self.choices = [(self.engine.i18n.resolve(t), label)
+                        for t, label in options]
         self.choice_rects = []
         st = self.style
         self._choice_runs = [
@@ -1340,6 +1362,32 @@ class Display:
         """设置 selection 全局样式覆盖 (供 selection_style 脚本语句/插件)。"""
         self.selection_style_overrides.update(style_dict)
 
+    def clear_ui_cache(self) -> None:
+        """清空 UI 图片缓存 (语言切换后 {lang} 变体重载)。"""
+        self._ui_cache.clear()
+
+    def refresh_fonts(self) -> None:
+        """字体切换后重建渲染字体实例 (engine.apply_font 调用)。"""
+        self._font_title = self.engine.get_font(48)
+        self._font_text = self.engine.get_font(self._font_size)
+        self._font_speaker = self.engine.get_font(22)
+        self._font_choice = self.engine.get_font(28)
+        self._font_notice = self.engine.get_font(20)
+        self._font_end = self.engine.get_font(32)
+        self._rich._char_cache.clear()    # 字符缓存按字体渲染, 一并失效
+
+    def refresh_selection_items(self, items) -> None:
+        """语言切换后刷新正在显示的菜单按钮 (保留布局/标题图)。"""
+        if not self.selection_active:
+            return
+        is_title = bool(self.title_active)
+        caption = getattr(self, "title_caption_raw", None) if is_title else ""
+        if caption:
+            caption = self.engine.i18n.resolve(caption)
+        image = getattr(self, "title_image_path", None) if is_title else None
+        self.show_selection(items, caption or "", image,
+                            style=self.selection_style)
+
     def show_title(self, caption, items, image=None, pos=None):
         """显示标题画面 (selection 的标题专用实例)。
 
@@ -1349,7 +1397,9 @@ class Display:
         """
         pos = pos or {}
         self.title_active = True
-        self.title_caption = caption
+        self.title_caption_raw = caption          # 原始 (含 {@key} 可重解析)
+        self.title_image_path = image             # 语言变体重载用
+        self.title_caption = self.engine.i18n.resolve(caption)
         self.title_items = list(items)
         style = {
             "caption_x": pos.get("title_x", "center"),
@@ -1803,7 +1853,9 @@ class Display:
                              bg_color=(25, 25, 38, 245),
                              border_color=(200, 200, 220),
                              border_width=2, radius=10)
-        title = "选择存档" if self.slot_menu_mode == "save" else "选择读档"
+        title = (self.engine.i18n.t("slot.save_title")
+                 if self.slot_menu_mode == "save"
+                 else self.engine.i18n.t("slot.load_title"))
         runs_t = self._rich.parse(title, base_size=30)
         self._rich.draw_centered(buf, runs_t, w // 2, py + 22)
         # 槽位格子
@@ -1844,12 +1896,12 @@ class Display:
             size1 = 20 if tw >= 110 else 16
             size2 = 18 if tw >= 110 else 14
             if empty:
-                text1 = f"槽位 {slot_no}"
-                text2 = "（空存档）"
+                text1 = self.engine.i18n.t("slot.slot", n=slot_no)
+                text2 = self.engine.i18n.t("slot.empty")
                 color = (150, 150, 160)
             else:
                 time_str = info.get("time", "")
-                text1 = f"槽位 {slot_no}"
+                text1 = self.engine.i18n.t("slot.slot", n=slot_no)
                 if tw >= 140 and time_str:
                     text1 += f"  {time_str}"
                 text2 = str(info.get("preview") or info.get("label") or "")
@@ -1865,16 +1917,28 @@ class Display:
                  bg_color=(80, 60, 60, 235) if hovered else (60, 45, 45, 220),
                  border_color=(255, 200, 140) if hovered else (160, 130, 120),
                  border_width=2, radius=6)
-        runs_b = self._rich.parse("返回", base_size=20)
+        runs_b = self._rich.parse(
+            self.engine.i18n.t("slot.back"), base_size=20)
         self._rich.draw_centered(buf, runs_b, back.centerx, back.centery)
 
-    def show_confirm(self, text: str, yes_text: str = "是",
-                     no_text: str = "否") -> None:
-        """显示确认对话框 (如退出确认), 阻塞交互直到选择。"""
+    def show_confirm(self, text: str, yes_text: str = None,
+                     no_text: str = None) -> None:
+        """显示确认对话框 (如退出确认), 阻塞交互直到选择。
+
+        文本可含 ``{@key}``, 显示时按当前语言解析 (语言切换即时刷新);
+        未给按钮文本时用内置默认 (confirm.yes/confirm.no)。
+        """
+        yes_text = (yes_text if yes_text is not None
+                    else self.engine.i18n.t("confirm.yes"))
+        no_text = (no_text if no_text is not None
+                   else self.engine.i18n.t("confirm.no"))
         self.confirm_active = True
-        self.confirm_text = text
-        self.confirm_yes = yes_text
-        self.confirm_no = no_text
+        self.confirm_text_raw = text
+        self.confirm_yes_raw = yes_text
+        self.confirm_no_raw = no_text
+        self.confirm_text = self.engine.i18n.resolve(text)
+        self.confirm_yes = self.engine.i18n.resolve(yes_text)
+        self.confirm_no = self.engine.i18n.resolve(no_text)
         w, h = self.width, self.height
         pw, ph = int(w * 0.5), int(h * 0.30)
         self.confirm_panel = pygame.Rect((w - pw) // 2, (h - ph) // 2, pw, ph)
@@ -1973,26 +2037,31 @@ class Display:
                              border_width=3, radius=10)
         pw = self.error_panel.w
         pad = 26
-        runs_t = self._rich.parse("{c=#ff6060}⚠ 运行时错误{/c}",
-                                  base_size=30)
+        runs_t = self._rich.parse(
+            "{c=#ff6060}" + self.engine.i18n.t("error.title") + "{/c}",
+            base_size=30)
         self._rich.draw(buf, runs_t, self.error_panel.x + pad,
                         self.error_panel.y + 18, pw - pad * 2)
-        text = str(self.error_info.get("text", "未知错误"))
+        text = str(self.error_info.get("text", "")) or "?"
         if len(text) > 400:
             text = text[:400] + " ……"
         runs = self._rich.parse(text, base_size=20)
         self._rich.draw(buf, runs, self.error_panel.x + pad,
                         self.error_panel.y + 62, pw - pad * 2,
                         max_lines=8)
-        file_hint = (f"完整报错已写入: {self.error_info.get('file')}"
-                     if self.error_info.get("file") else "")
+        file_hint = (self.engine.i18n.t(
+            "error.file_hint",
+            file=self.error_info.get("file"))
+            if self.error_info.get("file") else "")
         runs_h = self._rich.parse(file_hint, base_size=16,
                                   base_color=(200, 180, 160))
         self._rich.draw(buf, runs_h, self.error_panel.x + pad,
                         self.error_panel.y + self.error_panel.h - 78,
                         pw - pad * 2, max_lines=2)
         mouse = self.mouse_pos()
-        labels = ("继续游戏", "复制错误", "退出游戏")
+        labels = (self.engine.i18n.t("error.continue"),
+                  self.engine.i18n.t("error.copy"),
+                  self.engine.i18n.t("error.quit"))
         for idx, label in enumerate(labels):
             rect = self.error_rects[idx]
             hovered = rect.collidepoint(mouse)
@@ -2161,10 +2230,12 @@ class Display:
         if self.ending:
             buf.fill((0, 0, 0))
             if self.ending_name:
-                main = f"— 结局：{self.ending_name} —"
-                sub = "— 谢谢游玩 —"
+                main = self.engine.i18n.t(
+                    "ending.name",
+                    name=self.engine.i18n.resolve(str(self.ending_name)))
+                sub = self.engine.i18n.t("ending.thanks")
             else:
-                main = "— 谢谢游玩 —"
+                main = self.engine.i18n.t("ending.thanks")
                 sub = None
             t1 = self._font_end.render(main, True, (255, 255, 255))
             cy = self.height / 2

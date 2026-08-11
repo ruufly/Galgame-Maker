@@ -43,7 +43,7 @@ def extract_window_config(script_path: str) -> dict:
         from framework.engine.loader import load_script_with_imports
         script = load_script_with_imports(script_path)
     except Exception as exc:
-        log.warning(f"预解析脚本失败, 使用默认窗口配置: {exc}")
+        log.w("log.launcher.preparse_failed", exc=exc)
         return {}
     for stmt in script.statements:
         if stmt.op in ("window", "config"):
@@ -55,10 +55,10 @@ def launch(gal_file: str) -> int:
     """启动一个 .gal 游戏, 返回进程退出码。"""
     gal_file = os.path.abspath(gal_file)
     if not os.path.isfile(gal_file):
-        log.error(f"脚本不存在: {gal_file}")
+        log.e("log.launcher.script_missing", path=gal_file)
         return 1
     if not gal_file.lower().endswith((".gal", ".txt")):
-        log.warning(f"文件后缀不是 .gal: {gal_file} (仍将尝试运行)")
+        log.w("log.launcher.ext_not_gal", path=gal_file)
 
     cfg = extract_window_config(gal_file)
     try:
@@ -66,7 +66,7 @@ def launch(gal_file: str) -> int:
         height = int(cfg.get("height", 720))
         fps = int(cfg.get("fps", 60))
     except (TypeError, ValueError) as exc:
-        log.warning(f"窗口配置数值无效, 使用默认值: {exc}")
+        log.w("log.launcher.window_invalid", exc=exc)
         width, height, fps = 1280, 720, 60
     title = str(cfg.get("title", "Galgame Maker Engine"))
     icon = cfg.get("icon")
@@ -75,17 +75,17 @@ def launch(gal_file: str) -> int:
     resizable = str(cfg.get("resizable", "true")).lower() in (
         "true", "1", "yes", "on")
 
-    log.info(f"启动游戏: {gal_file}")
-    log.info(f"窗口配置: {width}x{height} fps={fps} title={title!r}"
-             f" fullscreen={fullscreen} resizable={resizable}")
+    log.i("log.launcher.launching", path=gal_file)
+    log.i("log.launcher.window_cfg", w=width, h=height, fps=fps,
+          title=title, fullscreen=fullscreen, resizable=resizable)
     engine = GameEngine(width, height, title, fps, fullscreen=fullscreen,
                         resizable=resizable)
     # 全局未捕获异常 -> 弹窗 (不崩溃)
     from framework.engine.error import install_excepthook
     install_excepthook(engine)
-    engine.apply_config(cfg)   # 运行时选项 (退出确认等)
+    engine.script_dir = os.path.dirname(gal_file)   # 先就绪 (font/icon 路径)
+    engine.apply_config(cfg)   # 运行时选项 (含 font)
     if icon:
-        engine.script_dir = os.path.dirname(gal_file)
         engine.set_icon(icon)
     engine.run(gal_file)
     return 0
@@ -96,7 +96,7 @@ def main() -> None:
         target = sys.argv[1]
     else:
         target = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
-        log.info("未指定脚本, 运行内置演示")
+        log.i("log.launcher.no_script_demo")
     sys.exit(launch(target))
 
 

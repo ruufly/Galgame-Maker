@@ -132,4 +132,5 @@ class FxPlugin(Plugin):
 
     def on_unload(self):
         self._fx = None
-        print("[插件] fx 已卸载")
+        from framework.engine import log
+        log.i("log.plugin.unloaded", name=self.name)

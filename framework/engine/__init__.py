@@ -15,6 +15,29 @@ class _Log:
     VERBOSE = False
     _file = None
     _warn_cbs = []
+    _i18n = None
+
+    def set_i18n(self, i18n):
+        """接入多语言系统: log.i/w/e 按 key 翻译日志文案。"""
+        self._i18n = i18n
+
+    def _tr(self, key, **fmt):
+        if self._i18n is not None:
+            try:
+                return self._i18n.t(key, **fmt)
+            except Exception:
+                pass
+        return key
+
+    def i(self, key, **fmt):
+        """i18n 日志: key 为语言表键 (如 "log.script_loaded")。"""
+        self.info(self._tr(key, **fmt))
+
+    def w(self, key, **fmt):
+        self.warning(self._tr(key, **fmt))
+
+    def e(self, key, **fmt):
+        self.error(self._tr(key, **fmt))
 
     def _fmt(self, level, msg):
         return "[GM:%s] %s: %s" % (time.strftime("%H:%M:%S"), level, msg)
