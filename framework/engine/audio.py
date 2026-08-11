@@ -1,5 +1,6 @@
 """音频模块: BGM / 音效 (基于 pygame.mixer, 失败时自动降级为静音)。"""
 
+import io
 import os
 
 from framework.engine import log
@@ -51,7 +52,10 @@ class Audio:
         """
         import pygame
         real = self.resolve(path)
-        pygame.mixer.music.load(real)
+        with open(real, "rb") as f:
+            raw = f.read()
+        raw = self.engine._codec_decode("resource", raw)
+        pygame.mixer.music.load(io.BytesIO(raw))
         pygame.mixer.music.set_volume(0.0 if fade > 0 else self.bgm_volume)
         pygame.mixer.music.play(-1 if loop else 0)
         self.current_bgm = path
@@ -210,7 +214,10 @@ class Audio:
             if not os.path.isfile(real):
                 log.w("log.audio.sfx_missing", path=real)
                 return False
-            snd = pygame.mixer.Sound(real)
+            with open(real, "rb") as f:
+                raw = f.read()
+            raw = self.engine._codec_decode("resource", raw)
+            snd = pygame.mixer.Sound(io.BytesIO(raw))
             snd.set_volume(self.sfx_volume)
             snd.play()
             self.engine.emit("sound_play", path=path)
@@ -253,7 +260,10 @@ class Audio:
             if not os.path.isfile(real):
                 log.w("log.audio.voice_missing", path=real)
                 return False
-            snd = pygame.mixer.Sound(real)
+            with open(real, "rb") as f:
+                raw = f.read()
+            raw = self.engine._codec_decode("resource", raw)
+            snd = pygame.mixer.Sound(io.BytesIO(raw))
             extra = 1.0 if volume is None else max(0.0, min(1.0, float(volume)))
             snd.set_volume(self.sfx_volume * self.voice_volume * extra)
             ch = self.voice_channel or pygame.mixer.find_channel()

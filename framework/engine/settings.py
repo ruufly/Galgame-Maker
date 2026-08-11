@@ -37,6 +37,13 @@ class SettingsManager:
         self.title = "设置"
         self.columns = 2
         self.bg = None           # 面板背景图 (九宫格, 可选)
+        # UI 图片键 (settings 块可配; 有图优先于纯色, None 回退纯色):
+        self.item_image = None          # 条目背景图
+        self.item_image_hover = None    # 条目悬停图
+        self.tab_image = None           # 分栏 (tab) 图
+        self.tab_image_hover = None     # 分栏激活/悬停图
+        self.back_image = None          # 返回按钮图
+        self.slider_track_image = None  # 滑条轨道图
         self.active = False      # 设置界面是否打开
         self._current_section = None   # 当前分栏 (None=首个)
         self._back_rect = None   # 返回按钮 rect (点击判定)
@@ -403,6 +410,13 @@ class SettingsManager:
                 pass
         if "bg" in cfg:
             self.bg = str(cfg["bg"])
+        # UI 图片键: item_image/item_image_hover/tab_image/tab_image_hover/
+        # back_image/slider_track_image (有图优先于纯色)
+        for img_key in ("item_image", "item_image_hover", "tab_image",
+                        "tab_image_hover", "back_image",
+                        "slider_track_image"):
+            if img_key in cfg:
+                setattr(self, img_key, str(cfg[img_key]))
         for sub in stmt.block:      # setting <key> 子块
             if sub.op != "setting":
                 continue
@@ -720,10 +734,16 @@ class SettingsManager:
         self._back_rect = back
         mouse = self.engine.display.mouse_pos()
         hover_back = back.collidepoint(mouse)
-        ui.panel(surface, back,
-                 bg_color=(*(80, 50, 50), 235) if hover_back else (50, 40, 40),
-                 border_color=(220, 130, 130) if hover_back else (120, 80, 80),
-                 border_width=2, radius=8)
+        back_img = self._load_img(self.back_image)
+        if back_img is not None:
+            surface.blit(ui.nine_slice(back_img, back), back.topleft)
+        else:
+            ui.panel(surface, back,
+                     bg_color=(*(80, 50, 50), 235) if hover_back
+                     else (50, 40, 40),
+                     border_color=(220, 130, 130) if hover_back
+                     else (120, 80, 80),
+                     border_width=2, radius=8)
         ui.text(surface, self.engine.get_font(18),
                 self.engine.i18n.t("settings.back"),
                 color=(255, 255, 255), center=back.center)
@@ -741,11 +761,19 @@ class SettingsManager:
             self._tab_rects.append((sec, rect))
             active = (sec == cur)
             hovered = rect.collidepoint(mouse)
-            ui.panel(surface, rect,
-                     bg_color=(*(233, 69, 96), 240) if active
-                     else (*(70, 60, 80), 230) if hovered else (45, 45, 66),
-                     border_color=(255, 210, 130) if active else (90, 90, 120),
-                     border_width=2, radius=8)
+            tab_img = self._load_img(
+                self.tab_image_hover if (active or hovered)
+                else self.tab_image)
+            if tab_img is not None:
+                surface.blit(ui.nine_slice(tab_img, rect), rect.topleft)
+            else:
+                ui.panel(surface, rect,
+                         bg_color=(*(233, 69, 96), 240) if active
+                         else (*(70, 60, 80), 230) if hovered
+                         else (45, 45, 66),
+                         border_color=(255, 210, 130) if active
+                         else (90, 90, 120),
+                         border_width=2, radius=8)
             ui.text(surface, tab_font, sec_label,
                     color=(255, 255, 255), center=rect.center)
             tx += w_sec + 10
@@ -772,10 +800,17 @@ class SettingsManager:
 
     def _draw_item(self, surface, item, rect, hovered, mouse):
         ui = self.engine.ui
-        ui.panel(surface, rect,
-                 bg_color=(*(60, 60, 82), 230) if hovered else (38, 38, 56),
-                 border_color=(255, 210, 130) if hovered else (80, 80, 110),
-                 border_width=2, radius=8)
+        item_img = self._load_img(
+            self.item_image_hover if hovered else self.item_image)
+        if item_img is not None:
+            surface.blit(ui.nine_slice(item_img, rect), rect.topleft)
+        else:
+            ui.panel(surface, rect,
+                     bg_color=(*(60, 60, 82), 230) if hovered
+                     else (38, 38, 56),
+                     border_color=(255, 210, 130) if hovered
+                     else (80, 80, 110),
+                     border_width=2, radius=8)
         font = self.engine.get_font(20)
         label = self._item_label(item)
         ui.text(surface, font, label, color=(230, 230, 238),
@@ -787,8 +822,13 @@ class SettingsManager:
             value = None
         if kind == "slider":
             track = self._slider_track(rect)
-            ui.panel(surface, track, bg_color=(20, 20, 30),
-                     border_color=(100, 100, 130), border_width=1, radius=4)
+            track_img = self._load_img(self.slider_track_image)
+            if track_img is not None:
+                surface.blit(ui.nine_slice(track_img, track), track.topleft)
+            else:
+                ui.panel(surface, track, bg_color=(20, 20, 30),
+                         border_color=(100, 100, 130), border_width=1,
+                         radius=4)
             try:
                 ratio = ((float(value) - item["min"])
                          / max(0.0001, item["max"] - item["min"]))

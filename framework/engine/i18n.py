@@ -122,8 +122,10 @@ class I18n:
             return
         try:
             import json
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with open(path, "rb") as f:
+                raw = f.read()
+            raw = self.engine._codec_decode("lang", raw)
+            data = json.loads(raw.decode("utf-8"))
         except Exception as exc:
             log.w("log.i18n.load_failed", path=path, exc=exc)
             return

@@ -159,9 +159,26 @@ class PluginManager:
 
     # ------------------------------------------------------------------
     def load_module_from_path(self, mod_name: str, path: str) -> bool:
-        """从文件路径加载一个插件模块。"""
+        """从文件路径加载一个插件模块。
+
+        支持文件编解码钩子 "plugin" scope: 解密后的内容经临时文件交给
+        importlib 加载 (加载完成后清理), 无钩子时原样加载。
+        """
+        import tempfile
+        tmp_path = None
         try:
-            spec = importlib.util.spec_from_file_location(mod_name, path)
+            load_path = path
+            with open(path, "rb") as f:
+                raw = f.read()
+            decoded = self.engine._codec_decode("plugin", raw)
+            if decoded != raw:
+                tf = tempfile.NamedTemporaryFile(
+                    suffix=".py", mode="wb", delete=False)
+                tf.write(decoded)
+                tf.close()
+                tmp_path = tf.name
+                load_path = tmp_path
+            spec = importlib.util.spec_from_file_location(mod_name, load_path)
             module = importlib.util.module_from_spec(spec)
             sys.modules[mod_name] = module
             spec.loader.exec_module(module)
@@ -173,6 +190,12 @@ class PluginManager:
             from framework.engine import log
             log.w("log.plugin.load_failed", path=path, exc=exc)
             return False
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
 
     def load(self, module) -> Optional[Plugin]:
         """加载一个已导入的模块 (或其内的 Plugin 子类)。"""

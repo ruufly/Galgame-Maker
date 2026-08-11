@@ -1,0 +1,17 @@
+{
+  "bgm_volume": 0.8,
+  "sfx_volume": 1.0,
+  "voice_volume": 1.0,
+  "text_speed": 45.0,
+  "resolution": "1280x720",
+  "fullscreen": false,
+  "resizable": true,
+  "player_name": "未命名",
+  "language": "简体中文",
+  "key_up": "up, w",
+  "key_down": "down, s",
+  "key_left": "left, a",
+  "key_right": "right, d",
+  "key_confirm": "return, space",
+  "key_escape": "escape"
+}

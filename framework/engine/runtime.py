@@ -112,6 +112,7 @@ class Runtime:
             "volume": self._cmd_volume,
             "using": self._cmd_using,
             "plugin": self._cmd_plugin,
+            "python": self._cmd_python,
         }
 
     # ==================================================================
@@ -306,7 +307,9 @@ class Runtime:
                             "text_color", "text_color_hover"}
     _MENU_BAR_NUM_KEYS = {"gap", "padding", "height", "btn_h", "y_offset",
                           "text_size", "button_radius"}
-    _MENU_BAR_STR_KEYS = {"align"}
+    _MENU_BAR_STR_KEYS = {"align", "bg_image", "button_image",
+                          "button_image_hover", "button_image_active",
+                          "button_image_disabled"}
 
     def _apply_menu_bar_stmt(self, stmt) -> None:
         """解析并应用一条 menu_bar 样式语句 (属性块)。"""
@@ -1684,6 +1687,9 @@ class Runtime:
             t = self.engine.i18n.resolve(t)
             t = self._interp(t) if t else t
             rendered.append((t, lbl))
+        # choice_prepare: 显示前广播 (插件可原地修改 options 列表,
+        # 用于动态选项/直播互动/外部注入)
+        self.engine.emit("choice_prepare", options=rendered)
         self.engine.display.show_choices(rendered)
         self.blocked = "choice"
         return BLOCK
@@ -1985,6 +1991,44 @@ class Runtime:
         return None
 
     def _cmd_pass(self, stmt):
+        return None
+
+    def _cmd_python(self, stmt):
+        """python:: 原始代码块: 在脚本中直接执行嵌入的 Python 代码。
+
+        语法 (双冒号, 块内行原样保留, 不按 DSL 解析)::
+
+            python::
+                import random
+                engine.set_var("luck", random.randint(1, 100))
+                runtime.vars["note"] = "来自 python 块"
+
+        命名空间提供 engine / runtime / display / audio / save / i18n /
+        ui / pygame / os / math 等常用对象; 代码拥有完整解释器权限
+        (如同插件, 仅在可信脚本中使用); 异常记录日志不中断游戏。
+        """
+        code = str(stmt.kwargs.get("code") or "")
+        if not code.strip():
+            return None
+        # 块内行保留原缩进, 执行前去除公共前导空白
+        import textwrap
+        code = textwrap.dedent(code)
+        ns = {
+            "engine": self.engine,
+            "runtime": self,
+            "display": self.engine.display,
+            "audio": self.engine.audio,
+            "save": self.engine.save,
+            "i18n": self.engine.i18n,
+            "ui": self.engine.ui,
+            "pygame": __import__("pygame"),
+            "os": __import__("os"),
+            "math": __import__("math"),
+        }
+        try:
+            exec(code, ns)
+        except Exception as exc:
+            log.w("log.runtime.python_exec_failed", exc=exc)
         return None
 
     def _cmd_window(self, stmt):

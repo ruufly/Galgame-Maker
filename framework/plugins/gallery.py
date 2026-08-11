@@ -506,7 +506,9 @@ class GalleryPlugin(Plugin):
                     ui.text(surface, font_q, "？", color=(120, 120, 128),
                             center=rect.center)
                 label = (f"{self._name(scene, sid)} · "
-                         f"{self.engine.i18n.t('gallery.locked', ns='plugin', default='未解锁')}")
+                         + self.engine.i18n.t(
+                             "gallery.locked", ns="plugin",
+                             default="未解锁"))
                 color = (140, 140, 150)
             ui.text(surface, font_s, label, color=color,
                     center=(rect.centerx, rect.bottom + 13))

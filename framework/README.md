@@ -20,11 +20,12 @@ framework/
 │   ├── parser.py             .gal DSL 解析器
 │   ├── loader.py             import 递归展开合并 (循环导入检测)
 │   ├── runtime.py            脚本执行器 (变量/分支/跳转/调用栈/存档/角色/场景/
-│   │                         菜单/声音/命名空间/using/plugin 指令)
+│   │                         菜单/声音/命名空间/using/plugin/python:: 指令)
 │   ├── display.py            渲染层 (精灵/背景/文本框/确认框/选择列表/槽位界面/
-│   │                         过渡/立绘效果/文字模式/截图/缩略图钩子)
+│   │                         过渡/立绘效果/文字模式/截图/缩略图钩子/
+│   │                         背景与立绘动态渲染钩子 (视频/Live2D))
 │   ├── audio.py              BGM 淡入淡出状态机 / 音效 / 语音独立通道 / 全局静音
-│   ├── save.py               存档/读档 (JSON 槽位 + 元数据 API)
+│   ├── save.py               存档/读档 (JSON 槽位 + 元数据 API + 编解码钩子)
 │   ├── rich.py               富文本解析渲染 + LaTeX 公式 (MathRenderer)
 │   ├── ui.py                 UI 绘制原语 (面板/文字/换行/九宫格 nine_slice)
 │   ├── error.py              错误处理 (日志 + 弹窗 + 剪贴板复制)
@@ -382,6 +383,12 @@ menu_bar
     button_radius: 8
     text_color: "#eaeaea" / text_color_hover: "#ffffff"
     text_size: 22
+    # --- UI 图片键 (可配; 有图优先于纯色, 支持 {lang} 变体) ---
+    bg_image: "bar.png"                    # 条背景图 (九宫格铺满整条)
+    button_image: "btn.png"                # 按钮默认图
+    button_image_hover: "btn_focus.png"    # 按钮悬停图
+    button_image_active: "btn_active.png"  # 按钮激活图 (cfg.active 时)
+    button_image_disabled: "btn_off.png"   # 按钮禁用图 (cfg.enabled=False 时)
 ```
 
 bar 模式下对话框自动上移让位 (bottom); 打开槽位界面/确认框等覆盖层时
@@ -598,6 +605,13 @@ settings
     title: "设置"                # 界面标题
     columns: 2                   # 条目列数
     bg: "panel.png"              # 面板背景图 (九宫格, 可选)
+    # --- UI 图片键 (可配; 有图优先于纯色, 支持 {lang} 变体) ---
+    item_image: "item.png"              # 条目背景图
+    item_image_hover: "item_focus.png"  # 条目悬停图
+    tab_image: "tab.png"                # 分栏 (tab) 图
+    tab_image_hover: "tab_focus.png"    # 分栏激活/悬停图
+    back_image: "back.png"              # 返回按钮图
+    slider_track_image: "slider.png"    # 滑条轨道图
     setting bgm_volume           # setting <key> 子块 (引用/覆盖内置项)
         label: "音乐音量"
         section: "音量"          # 分栏 (tab); 可自定义归并
@@ -880,6 +894,29 @@ engine.keybinds.register("my_toggle", "调试模式", callback,
 `{"en": {...}, "zh-CN": {...}}` (多语言合并)。核心文案 key 见
 `framework/lang/zh-CN.json`。
 
+### 4.20 嵌入 Python 代码 (python::)
+
+`python::` 双冒号块把**块内行原样捕获** (含空行、`#` 注释与缩进),
+不按 DSL 解析, 交给引擎在受限命名空间中执行:
+
+```gal
+start:
+    python::
+        import random
+        engine.set_var("luck", random.randint(1, 100))   # 写引擎变量
+        runtime.vars["note"] = "来自 python 块"
+    text "你的幸运值: $luck ($note)"
+```
+
+* 命名空间提供 `engine` / `runtime` / `display` / `audio` / `save` /
+  `i18n` / `ui` / `pygame` / `os` / `math` 等常用对象; 代码拥有
+  **完整解释器权限** (如同插件, 仅在可信脚本中使用)
+* 异常记录日志 (`log.runtime.python_exec_failed`) 不中断游戏
+* 语法约定: `python::` 用**双冒号**以免与普通标签 (`python:`) 冲突;
+  块内缩进需大于块自身缩进, 缩进回退即块结束
+* 插件也可注册自己的指令处理 raw 块 (parser 生成
+  `Statement(op="python", kwargs={"code": 原文})`)
+
 ---
 
 ## 5. 命名空间系统
@@ -1090,6 +1127,7 @@ class MyPlugin(Plugin):
 | statement | stmt, label |
 | text_show / text_advance / text_complete | text, speaker |
 | choice_show / choice_made | choices / index, label, text |
+| choice_prepare (显示前) | options (可变列表, 插件可原地改写/注入选项) |
 | bg_change | path, effect |
 | scene_change | id, name, background, pose |
 | sprite_show / sprite_hide | id, path |
@@ -1144,12 +1182,38 @@ engine.copy_to_clipboard(text)
 | `engine.register_action(name, fn)` | 选择列表按钮动作 |
 | `display.register_transition(name, cls)` | 背景过渡效果 |
 | `display.register_sprite_effect(name, fn, dur)` | 立绘登场/退场动画 |
+| `display.register_bg_renderer(fn)` | 动态背景渲染器 (视频帧/程序背景; fn(display)->Surface\|None) |
+| `display.register_sprite_renderer(sid, fn)` | 立绘动态渲染器 (Live2D; fn(display, sprite)->Surface\|None, sid=None 全局兜底) |
 | `display.register_text_mode(name, spec)` | 文字显示模式 |
 | `display.register_slot_thumbnail_provider(fn)` | 槽位缩略图 |
+| `engine.register_file_codec(scope, decode, encode)` | 文件编解码钩子 (加密存档/资源/语言/脚本/插件文件; scope=save/resource/lang/script/plugin, fn(bytes)->bytes, None=原样) |
+| `engine.register_frame_hook(fn)` | 每帧钩子 (主循环无条件调用 fn(dt), 暂停时也执行; Steam 回调/网络轮询/心跳用, 异常隔离) |
+| `engine.register_text_char_hook(fn)` | 文本输出钩子 (打字音效/字幕高亮; fn(display, start_idx, count) 按逻辑字符增量触发) |
+| `engine.snapshot_state()` / `engine.restore_state(data)` | 状态快照/恢复 (内存, 与存档同构; 撤销/回滚/分支探索用, 静默不落盘) |
 | `engine.register_action` + `do_action` 指令 | 脚本触发动作 |
 | `engine.register_menu_button(mid, text, action, cfg)` | 插件向命名菜单添加按钮 (cfg 支持 enabled/image_disabled/image_active 等) |
 | `engine.set_menu_button_state(mid, key, enabled)` | 按钮启用/禁用 (禁用态暗色/禁用图) |
 | `engine.set_menu_button_cfg(mid, key, cfg)` | 更新按钮 cfg (动态切换图/文本, 显示中同步刷新) |
+
+**文件编解码钩子** (插件加密存档/资源/语言/脚本/插件文件):
+
+```python
+engine.register_file_codec(
+    "save",                          # scope: save / resource / lang / script / plugin
+    decode=my_decrypt,               # fn(bytes)->bytes 读取时解码 (None=原样)
+    encode=my_encrypt,               # fn(bytes)->bytes 写入时编码 (None=原样)
+)
+```
+
+* **scope 覆盖**: `save` (存档/settings/global JSON) · `resource` (图片/
+  音频/字体, pygame 以 file-like 加载解密结果) · `lang` (语言文件) ·
+  `script` (.gal 脚本, 引擎构造时绑定到解析器) · `plugin` (插件源码,
+  解密后经 importlib 加载, 临时文件自动清理)
+* 未注册的 scope 读写**完全原样**; 解码/编码异常记录日志并回退原数据
+* 加密强度说明: 客户端密钥必然随包分发, 用于防明文/轻度防篡改;
+  防逆向建议把核心算法/密钥逻辑编译为 `pyd` 再配合本钩子
+* 密钥可运行时从服务器获取: 插件在 `on_load` (早于一切资源加载)
+  拉取并缓存, 注册的闭包直接使用 —— 无需再动内核
 
 ### 9.6 动作系统
 
@@ -1336,6 +1400,10 @@ py -3.10 framework/tests/smoke.py
 | 43. 多语言全面化 | 语言变量 $lang/$language + 切换后所有界面即时刷新 (菜单/bar/图片) + menu 按钮文本 {@key} (demo ui.gal 全量迁移) + UI 图片 {lang} 变体 + 字体系统 (window font: 文件/sys:系统字体 + apply_font) + log.i/w/e 日志翻译 API + auto_skip 惰性按钮样式 + 测试增至 772 项 |
 | 44. language 块收尾 | 主文件 language 块 (默认语言 + 语言码->显示名, 只加载列出语言) + 设置"语言"项显示名字 + 剩余文案 t 化 (错误弹窗/存档界面/复制与保存提示) + ESC 菜单语言切换不再误贴标题图 + 测试增至 779 项 |
 | 45. 多语言全面化 II | i18n.resolve 三级回退 (游戏→核心→原文, 脚本可引用 {@dialog.*} 等框架文案) + 对话框/菜单文案"显示时解析" (修复启动器先于 language 块应用配置的时序, 语言切换即时刷新) + 确认框/结束画面/title 默认按钮 t 化 + 角色与场景显示名 {@key} (注册存原文, 显示时解析) + 结局名约定 (原文记录+显示翻译, 解锁跨语言一致) + 设置界面 title/label/section/options 支持 {@key} + 分栏显示名 settings.section.<值> + 快捷键 label_key API + **全框架日志键化 (~115 处 log.i/w/e, 含插件生命周期与启动器)** + 插件全量迁移 (notice/gallery/auto_skip/debug_mode/fx/custom_actions/slot_thumbnails/transitions_plus) + demo 全量迁移 (story/demo/cast/gallery/setting 全部 {@key}, 语言文件 99 key 双语对齐) + 插件语言文件 zh-CN + 核心语言表增至 207 key + 测试同步 (断言不依赖存档语言) + 测试保持 779 项全绿 |
+| 46. 插件扩展点 | display.register_bg_renderer (动态背景渲染器, 视频帧/程序背景) + display.register_sprite_renderer (立绘动态渲染器, Live2D; sid=None 全局兜底) + parser `python::` raw 块 (块内原样捕获含注释/空行, runtime 受限命名空间 exec, 双冒号避免与标签冲突) + bar 菜单图片键 (bg_image/button_image[_hover/_active/_disabled]) + 设置界面图片键 (item_image[_hover]/tab_image[_hover]/back_image/slider_track_image, 全部图优先于纯色) + 测试保持 779 项全绿 |
+| 47. 文件编解码钩子 | engine.register_file_codec(scope, decode, encode) 统一文件加密扩展点: save (存档 JSON) / resource (图片/音频/字体, pygame file-like 加载解密结果) / lang (语言文件) / script (.gal, 引擎构造时绑定解析器模块级解码器) / plugin (插件源码, 解密后经 importlib 加载并清理临时文件) + 未注册 scope 完全原样 + 异常回退原数据 + 密钥可运行时从服务器获取 (插件 on_load 缓存, 无需动内核) + 测试保持 779 项全绿 |
+| 48. 每帧钩子 | engine.register_frame_hook(fn) 主循环每帧无条件调用 (暂停菜单时也执行, 异常隔离), 为 Steam 回调 (RunCallbacks)/网络轮询/心跳提供语义化挂载点 (替代 draw_overlay 兼职) + 测试保持 779 项全绿 |
+| 49. 叙事扩展点 | engine.register_text_char_hook (文本输出钩子: 按逻辑字符增量触发, 打字音效/字幕高亮; instant/跳过一次大增量) + choice_prepare 事件 (选择支显示前广播, 插件可原地改写选项, 直播互动/动态选项) + engine.snapshot_state/restore_state (内存状态快照, 与存档同构, 撤销/回滚/分支探索, 静默不落盘) + 测试保持 779 项全绿 |
 
 ---
 

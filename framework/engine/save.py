@@ -22,13 +22,31 @@ class SaveManager:
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, f"slot{int(slot)}.json")
 
+    def _read_json(self, path, default=None):
+        """读 JSON 文件 (走文件编解码钩子 "save" scope; 失败回退 default)。"""
+        if not os.path.isfile(path):
+            return default
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+            raw = self.engine._codec_decode("save", raw)
+            return json.loads(raw.decode("utf-8"))
+        except Exception:
+            return default
+
+    def _write_json(self, path, data) -> None:
+        """写 JSON 文件 (走文件编解码钩子 "save" scope)。"""
+        raw = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        raw = self.engine._codec_encode("save", raw)
+        with open(path, "wb") as f:
+            f.write(raw)
+
     def save(self, slot: int, data: dict) -> str:
         """写入存档, 返回存档文件路径。"""
         data = dict(data)
         data["_saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         path = self._path(slot)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        self._write_json(path, data)
         self.engine.emit("save", slot=slot, path=path)
         log.i("log.save_written", path=path)
         return path
@@ -36,16 +54,11 @@ class SaveManager:
     def load(self, slot: int) -> dict:
         """读取存档, 不存在或损坏时返回 None。"""
         path = self._path(slot)
-        if not os.path.isfile(path):
+        data = self._read_json(path)
+        if data is None:
             return None
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.engine.emit("load", slot=slot, path=path)
-            return data
-        except Exception as exc:
-            log.w("log.save.load_failed", path=path, exc=exc)
-            return None
+        self.engine.emit("load", slot=slot, path=path)
+        return data
 
     def _global_path(self) -> str:
         """全局进度文件 (结局/CG 收集等跨存档记录)。"""
@@ -55,25 +68,16 @@ class SaveManager:
 
     def get_global(self, key: str, default=None):
         """读取全局进度 (跨存档, 如已达成结局 / 已解锁 CG)。"""
-        try:
-            with open(self._global_path(), "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data.get(key, default)
-        except Exception:
+        data = self._read_json(self._global_path())
+        if data is None:
             return default
+        return data.get(key, default)
 
     def set_global(self, key: str, value) -> None:
         """写入全局进度。"""
-        data = {}
-        if os.path.isfile(self._global_path()):
-            try:
-                with open(self._global_path(), "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                data = {}
+        data = self._read_json(self._global_path(), default={}) or {}
         data[key] = value
-        with open(self._global_path(), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        self._write_json(self._global_path(), data)
 
     def _settings_path(self) -> str:
         d = os.path.join(self.engine.project_dir, "save")
@@ -82,17 +86,12 @@ class SaveManager:
 
     def get_settings(self, default=None):
         """读取全局设置 (跨存档, 音量/键位/主角名等)。"""
-        try:
-            with open(self._settings_path(), "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return default
+        return self._read_json(self._settings_path(), default)
 
     def set_settings(self, data: dict) -> None:
         """写入全局设置。"""
         try:
-            with open(self._settings_path(), "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            self._write_json(self._settings_path(), data)
         except Exception as exc:
             log.w("log.save.settings_write_failed", exc=exc)
 
@@ -103,8 +102,7 @@ class SaveManager:
             return
         data[key] = value
         data["_saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        with open(self._path(slot), "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        self._write_json(self._path(slot), data)
 
     def get_meta(self, slot: int, key: str, default=None):
         """读取存档元数据。"""
@@ -124,13 +122,7 @@ class SaveManager:
     def _read_raw(self, slot: int) -> dict:
         """直接读取槽位文件 (不发 load 事件, 供列表展示用)。"""
         path = self._path(slot)
-        if not os.path.isfile(path):
-            return None
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
+        return self._read_json(path)
 
     def list_slots(self, count: int = 6) -> list:
         """列出前 count 个槽位的信息, 供存档选择界面展示。

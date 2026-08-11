@@ -205,5 +205,9 @@
   "log.launcher.window_invalid": "窗口配置数值无效, 使用默认值: {exc}",
   "log.launcher.launching": "启动游戏: {path}",
   "log.launcher.window_cfg": "窗口配置: {w}x{h} fps={fps} title={title} fullscreen={fullscreen} resizable={resizable}",
-  "log.launcher.no_script_demo": "未指定脚本, 运行内置演示"
+  "log.launcher.no_script_demo": "未指定脚本, 运行内置演示",
+  "log.runtime.python_exec_failed": "python:: 代码块执行失败: {exc}",
+  "log.core.codec_failed": "文件编解码失败 ({scope}/{dir_}): {exc}",
+  "log.core.frame_hook_failed": "每帧钩子执行失败: {exc}",
+  "log.display.char_hook_failed": "文本输出钩子执行失败: {exc}"
 }

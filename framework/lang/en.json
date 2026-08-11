@@ -205,5 +205,9 @@
   "log.launcher.window_invalid": "Invalid window config value, using defaults: {exc}",
   "log.launcher.launching": "Launching game: {path}",
   "log.launcher.window_cfg": "Window config: {w}x{h} fps={fps} title={title} fullscreen={fullscreen} resizable={resizable}",
-  "log.launcher.no_script_demo": "No script given, running built-in demo"
+  "log.launcher.no_script_demo": "No script given, running built-in demo",
+  "log.runtime.python_exec_failed": "python:: code block failed: {exc}",
+  "log.core.codec_failed": "File codec failed ({scope}/{dir_}): {exc}",
+  "log.core.frame_hook_failed": "Frame hook failed: {exc}",
+  "log.display.char_hook_failed": "Text char hook failed: {exc}"
 }

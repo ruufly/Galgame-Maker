@@ -11,6 +11,7 @@
     engine.plugins    插件管理器
 """
 
+import io
 import os
 
 import pygame
@@ -43,6 +44,8 @@ class GameEngine:
         self._icon_path = None      # 记住图标路径, 重建窗口后重新应用
         self.project_dir = os.getcwd()
         self.script_dir = None
+        self._file_codecs = {}      # 文件编解码钩子 (须先于 i18n 初始化)
+        self._frame_hooks = []      # 每帧钩子 (主循环无条件调用, 插件用)
 
         pygame.init()
         try:
@@ -181,6 +184,11 @@ class GameEngine:
         from framework.engine.keybind import KeyBindManager
         self.keybinds = KeyBindManager(self)
 
+        # script scope 绑定到 parser 模块级 (loader 在引擎外也可能解析,
+        # 引擎构造后统一生效; 无插件注册时始终原样)
+        from framework.engine.parser import set_script_decoder
+        set_script_decoder(lambda b: self._codec_decode("script", b))
+
         # WARN 日志 -> 游戏界面小提示 (提醒玩家检查日志)
         from framework.engine import log as _log
         self._last_warn_notice = 0.0
@@ -221,7 +229,11 @@ class GameEngine:
                 font = None
         if font is None and self._font_path:
             try:
-                font = pygame.font.Font(self._font_path, size)
+                # 字体文件走文件编解码钩子 "resource" (pygame 支持 file-like)
+                with open(self._font_path, "rb") as f:
+                    raw = f.read()
+                raw = self._codec_decode("resource", raw)
+                font = pygame.font.Font(io.BytesIO(raw), size)
             except Exception:
                 font = None
         if font is None:
@@ -438,6 +450,12 @@ class GameEngine:
         while self.running:
             try:
                 dt = self.clock.tick(self.fps) / 1000.0
+                # 每帧钩子 (无条件, 暂停菜单时也执行; 如 Steam 回调/心跳)
+                for hook in self._frame_hooks:
+                    try:
+                        hook(dt)
+                    except Exception as exc:
+                        log.w("log.core.frame_hook_failed", exc=exc)
                 for event in pygame.event.get():
                     self.handle_event(event)
                 self.update(dt)
@@ -1283,6 +1301,52 @@ class GameEngine:
 
     def _play_ui_sound(self, kind: str = "click") -> None:
         """播放 UI 交互音效 (click=按下 / hover=活动项变化)。"""
+
+    # ==================================================================
+    # 文件编解码钩子 (插件加密存档/资源/语言/脚本/插件文件用)
+    # ==================================================================
+    def register_file_codec(self, scope: str, decode=None, encode=None) -> dict:
+        """插件 API: 注册文件编解码钩子。
+
+        scope: "save" (存档) / "resource" (图片/音频/字体) /
+               "lang" (语言文件) / "script" (.gal 脚本) / "plugin" (插件源码)
+        decode: fn(bytes) -> bytes   读取时解码 (解密/解压; None=原样)
+        encode: fn(bytes) -> bytes   写入时编码 (加密/压缩; None=原样)
+        返回旧的 codec dict (便于替换/恢复)。未注册时读写均为原样。
+        """
+        old = dict(self._file_codecs.get(scope, {}))
+        self._file_codecs[scope] = {"decode": decode, "encode": encode}
+        return old
+
+    def register_frame_hook(self, fn) -> None:
+        """插件 API: 注册每帧钩子 fn(dt)。
+
+        主循环**每帧无条件调用** (暂停菜单时也执行), dt 为秒。
+        适合 Steam 回调 (SteamAPI.RunCallbacks)、网络轮询、心跳等;
+        钩子内异常记录日志, 不影响主循环。
+        """
+        if fn not in self._frame_hooks:
+            self._frame_hooks.append(fn)
+
+    def _codec_decode(self, scope: str, data: bytes) -> bytes:
+        c = getattr(self, "_file_codecs", {}).get(scope)
+        if c and c.get("decode") is not None:
+            try:
+                return c["decode"](data)
+            except Exception as exc:
+                log.w("log.core.codec_failed", scope=scope, dir_="decode",
+                      exc=exc)
+        return data
+
+    def _codec_encode(self, scope: str, data: bytes) -> bytes:
+        c = getattr(self, "_file_codecs", {}).get(scope)
+        if c and c.get("encode") is not None:
+            try:
+                return c["encode"](data)
+            except Exception as exc:
+                log.w("log.core.codec_failed", scope=scope, dir_="encode",
+                      exc=exc)
+        return data
         name = self.ui_hover_sound if kind == "hover" else self.ui_click_sound
         if not name:
             return
@@ -1339,4 +1403,29 @@ class GameEngine:
         else:
             self.audio.stop_music()
         self.display.show_notice(self.i18n.t("notice.loaded", slot=slot))
+        self.runtime.advance()
+
+    def snapshot_state(self) -> dict:
+        """插件 API: 返回当前完整状态快照 (内存, 不落盘)。
+
+        与存档数据同构 (变量/剧情位置/调用栈/阻塞/文本/选择支/背景/
+        立绘/音乐/样式), 供撤销/回滚/临时分支探索等使用。
+        """
+        return self.runtime.snapshot()
+
+    def restore_state(self, data: dict) -> None:
+        """插件 API: 恢复到快照时刻 (静默, 不读文件/不发读档通知)。
+
+        语义与读档一致: 恢复运行时/视觉/音乐后停在快照点 (含阻塞中的
+        文本/选择支)。data 非法时忽略。
+        """
+        if not isinstance(data, dict) or "label" not in data:
+            return
+        self.runtime.restore(data)
+        self.display.restore_state(data)
+        music = data.get("music")
+        if music:
+            self.play_music(music)
+        else:
+            self.audio.stop_music()
         self.runtime.advance()

@@ -180,6 +180,15 @@ class Parser:
                     raise ParserError(
                         f"{path}:{lineno} 顶层语句不允许缩进: {content!r}"
                     )
+                # raw 代码块: xxx:: (双冒号) —— 块内行原样捕获
+                m_raw = re.match(
+                    r"^([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*):{2,}$",
+                    content)
+                if m_raw:
+                    stmt, i = self._parse_raw_block(
+                        i, indent, m_raw.group(1), content)
+                    script.labels[current_label].append(stmt)
+                    continue
                 stmt, i = self._parse_statement(i, indent)
                 if stmt is not None:
                     script.labels[current_label].append(stmt)
@@ -202,6 +211,18 @@ class Parser:
                 if m.group(1) == "name":
                     script.name = _unquote(m.group(2))
                 i += 1
+                continue
+            # raw 代码块: xxx:: (双冒号) —— 块内行原样捕获 (不解析)
+            m_raw = re.match(
+                r"^([A-Za-z_\u4e00-\u9fff][\w\u4e00-\u9fff]*):{2,}$",
+                content)
+            if m_raw:
+                stmt, i = self._parse_raw_block(
+                    i, indent, m_raw.group(1), content)
+                if current_label is not None:
+                    script.labels[current_label].append(stmt)
+                else:
+                    script.statements.append(stmt)
                 continue
             # 标签: 行尾冒号且无内容
             if content.endswith(":") and not content.startswith("->"):
@@ -227,6 +248,7 @@ class Parser:
     # -- 预处理 ---------------------------------------------------------
     def _preprocess(self, text: str) -> None:
         text = text.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+        self._source_lines = text.split("\n")   # raw 代码块取原样行用
         self.lines = []
         for lineno, raw in enumerate(text.split("\n"), start=1):
             content = raw.strip()
@@ -241,6 +263,41 @@ class Parser:
                 else:
                     break
             self.lines.append((indent, lineno, content))
+
+    # -- raw 代码块 -----------------------------------------------------
+    def _parse_raw_block(self, i: int, indent: int, op: str,
+                         content: str):
+        """捕获 raw 代码块 (如 ``python::``): 块内行**原样保留**
+        (含空行与 # 注释), 不按 DSL 解析; 生成 Statement(op=op,
+        kwargs={"code": 原样文本}) 交给运行时/插件处理。"""
+        _, lineno, _ = self.lines[i]
+        src = self._source_lines
+        code_lines = []
+        for k in range(lineno, len(src)):     # src[lineno] 即下一行
+            raw_line = src[k]
+            if not raw_line.strip():
+                code_lines.append("")          # 空行保留 (缩进块需要)
+                continue
+            ind2 = 0
+            for ch in raw_line:
+                if ch == " ":
+                    ind2 += 1
+                elif ch == "\t":
+                    ind2 += 4
+                else:
+                    break
+            if ind2 > indent:
+                code_lines.append(raw_line)
+            else:
+                break
+        stmt = Statement(op=op, args=[],
+                         kwargs={"code": "\n".join(code_lines)},
+                         line=lineno, raw=content)
+        # 跳过 self.lines 中属于块内的行
+        j = i + 1
+        while j < len(self.lines) and self.lines[j][0] > indent:
+            j += 1
+        return stmt, j
 
     # -- 语句 -----------------------------------------------------------
     def _parse_statement(self, i: int, indent: int):
@@ -525,7 +582,21 @@ def parse(text: str, path: str = "") -> Script:
     return Parser().parse(text, path)
 
 
+# 脚本文件解码器 (文件编解码钩子 "script" scope; 引擎构造时绑定,
+# 无插件注册时为 None 原样读取)
+_SCRIPT_DECODER = None
+
+
+def set_script_decoder(fn) -> None:
+    """插件/引擎 API: 设置 .gal 脚本文件解码器 fn(bytes)->bytes。"""
+    global _SCRIPT_DECODER
+    _SCRIPT_DECODER = fn
+
+
 def parse_file(path: str) -> Script:
-    with open(path, "r", encoding="utf-8-sig") as f:
-        text = f.read()
+    with open(path, "rb") as f:
+        raw = f.read()
+    if _SCRIPT_DECODER is not None:
+        raw = _SCRIPT_DECODER(raw)
+    text = raw.decode("utf-8-sig")
     return parse(text, path)

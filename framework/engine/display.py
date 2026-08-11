@@ -5,6 +5,7 @@
 随后由引擎把 buffer 贴到窗口 (支持全屏震动偏移)。
 """
 
+import io
 import math
 import os
 import random
@@ -512,6 +513,12 @@ DEFAULT_MENU_BAR_STYLE = {
     "button_border_hover": (255, 210, 130, 255),
     "button_radius": 8,
     "text_color": (234, 234, 234),
+    # UI 图片 (可配, 有图优先于纯色):
+    "bg_image": None,                # 条背景图 (九宫格铺满整条)
+    "button_image": None,            # 按钮默认图
+    "button_image_hover": None,      # 按钮悬停图
+    "button_image_active": None,     # 按钮激活图 (cfg.active 时)
+    "button_image_disabled": None,   # 按钮禁用图 (cfg.enabled=False 时)
     "text_color_hover": (255, 255, 255),
     "text_size": 22,
 }
@@ -570,18 +577,22 @@ class Display:
         self.bg_alpha = 255
         self.bg_fading = False
         self.bg_fade_speed = 0.0
+        self.bg_renderer = None    # 插件注册: 动态背景渲染器 fn(display) -> Surface|None
         self._transition = None       # 当前背景过渡 (Transition 实例)
         self.transitions = dict(BUILTIN_TRANSITIONS)  # 过渡注册表
 
         # 立绘
         self.sprites = {}
         self.sprite_order = []
+        self.sprite_renderers = {}  # sid -> fn(display, sprite) -> Surface|None
 
         # 文本
         self.text_active = False
         self.speaker = None
         self.speaker_raw = None   # 名字框原始串 (含 {@key}, 语言切换重解析)
         self.full_text = ""
+        self._text_char_hooks = []   # 文本输出钩子 fn(display, start_idx, count)
+        self._last_char_count = 0    # 已输出的逻辑字符数 (钩子增量检测)
         self._logic_len = 0   # 逻辑字符数 (公式计 1)
         self._runs = []
         self.reveal = 0.0
@@ -829,13 +840,16 @@ class Display:
     # 图片与坐标
     # ==================================================================
     def load_image(self, path: str):
-        """加载图片并按 mode/scale 缩放。"""
+        """加载图片并按 mode/scale 缩放 (支持文件编解码钩子 "resource")。"""
         real = self.engine.resolve_path(path)
         if not os.path.isfile(real):
             log.w("log.display.image_missing", path=real)
             return None
         try:
-            img = pygame.image.load(real).convert_alpha()
+            with open(real, "rb") as f:
+                raw = f.read()
+            raw = self.engine._codec_decode("resource", raw)
+            img = pygame.image.load(io.BytesIO(raw)).convert_alpha()
         except Exception as exc:
             log.w("log.display.image_failed", path=real, exc=exc)
             return None
@@ -962,6 +976,40 @@ class Display:
         """
         if fn not in self._effect_overlays:
             self._effect_overlays.append(fn)
+
+    def register_bg_renderer(self, fn) -> None:
+        """插件 API: 注册动态背景渲染器 (如视频帧/程序生成背景)。
+
+        fn(display) -> pygame.Surface | None
+        返回 Surface 时作为当前背景绘制 (替代 scene/bg 的图片背景);
+        返回 None 时回退默认背景。传 None 取消注册。
+        注意: 背景仍是引擎的一层, 立绘/文本/过渡等不受影响。
+        """
+        self.bg_renderer = fn
+
+    def register_sprite_renderer(self, sid, fn) -> None:
+        """插件 API: 为立绘注册动态渲染器 (如 Live2D 每帧画面)。
+
+        fn(display, sprite) -> pygame.Surface | None
+        返回 Surface 时替代立绘原图渲染 (按立绘中心点绘制, 不套用
+        引擎的旋转/翻转/缩放, 变换由渲染器自行处理); 返回 None 回退
+        原图。sid 为 None 时注册为全局兜底 (对没有专属渲染器的立绘
+        生效)。传 None fn 取消注册。
+        """
+        if fn is None:
+            self.sprite_renderers.pop(sid, None)
+        else:
+            self.sprite_renderers[sid] = fn
+
+    def register_text_char_hook(self, fn) -> None:
+        """插件 API: 注册文本输出钩子 (打字音效/字幕高亮用)。
+
+        fn(display, start_idx, count) —— 每次**新输出逻辑字符**时调用:
+        start_idx 为本次输出起始逻辑位置, count 为新增字符数 (公式计 1;
+        instant/点击跳过等一次性输出会得到一次大 count)。异常记录日志。
+        """
+        if fn not in self._text_char_hooks:
+            self._text_char_hooks.append(fn)
 
     def set_bg(self, path: str, effect: str = None, mode: str = None) -> None:
         """设置背景。
@@ -1262,6 +1310,7 @@ class Display:
         # 游戏文本多语言: 替换 {@key} 占位符
         text = self.engine.i18n.resolve(text)
         self.full_text = text
+        self._last_char_count = 0
         st = self.style
         self._runs = self._rich.parse(text, base_size=st["text_size"],
                                       base_color=st["text_color"])
@@ -1280,6 +1329,7 @@ class Display:
         self.speaker = None
         self.speaker_raw = None
         self.full_text = ""
+        self._last_char_count = 0
 
     def text_done(self) -> bool:
         return not self.text_active or self.reveal >= self._logic_len
@@ -1786,14 +1836,30 @@ class Display:
         ui.panel(buf, pygame.Rect(0, bar_y, w, bar_h),
                  bg_color=st["bg"], border_color=st["border"],
                  border_width=1)
+        # 条背景图 (样式级 bg_image, 有图覆盖纯色条)
+        bar_img = self._ui_image(st.get("bg_image"))
+        if bar_img is not None:
+            buf.blit(ui.nine_slice(bar_img,
+                                   pygame.Rect(0, bar_y, w, bar_h)),
+                     (0, bar_y))
         font = self.engine.get_font(int(st["text_size"]))
         for idx, (text, _a, cfg) in enumerate(self.menu_bar_items):
             rect = self.menu_bar_rects[idx]
             hovered = idx == self.menu_bar_hover
-            # 按钮图 (menu system 配置 image/image_focus/image_active 等):
-            # 有图时九宫格绘制, 无图回退纯色
+            # 按钮图优先级: 按钮级 cfg (image/image_focus) > 样式级
+            # (button_image[_hover/_active/_disabled]); 无图回退纯色
             img = self._ui_image(
                 cfg.get("image_focus") if hovered else cfg.get("image"))
+            if img is None and st.get("button_image"):
+                if cfg.get("enabled") is False \
+                        and st.get("button_image_disabled"):
+                    img = self._ui_image(st["button_image_disabled"])
+                elif hovered and st.get("button_image_hover"):
+                    img = self._ui_image(st["button_image_hover"])
+                elif cfg.get("active") and st.get("button_image_active"):
+                    img = self._ui_image(st["button_image_active"])
+                else:
+                    img = self._ui_image(st["button_image"])
             if img is not None:
                 buf.blit(ui.nine_slice(img, rect), rect.topleft)
             else:
@@ -2142,6 +2208,17 @@ class Display:
                 mode["update"](self, dt)
             if self.reveal >= self._logic_len:
                 self.engine.emit("text_complete")
+        # 文本输出钩子: 按逻辑字符增量触发 (instant/跳过会一次大增量)
+        if self.text_active:
+            cur = int(self.reveal)
+            if cur > self._last_char_count and self._text_char_hooks:
+                for hook in self._text_char_hooks:
+                    try:
+                        hook(self, self._last_char_count,
+                             cur - self._last_char_count)
+                    except Exception as exc:
+                        log.w("log.display.char_hook_failed", exc=exc)
+            self._last_char_count = cur
         # 黑幕
         if abs(self.fade_alpha - self.fade_target) > 0.5:
             step = self.fade_speed * dt
@@ -2180,19 +2257,32 @@ class Display:
         # 背景
         if self._transition is not None:
             self._transition.draw_bg(buf)
-        elif self.bg_surface is not None:
-            if self.bg_alpha < 255:
-                tmp = self.bg_surface.copy()
-                tmp.set_alpha(int(self.bg_alpha))
-                buf.blit(tmp, (0, 0))
-            else:
-                buf.blit(self.bg_surface, (0, 0))
+        else:
+            # 动态背景渲染器优先 (如视频帧), 返回 None 回退图片背景
+            dyn = (self.bg_renderer(self) if self.bg_renderer
+                   else None)
+            surf = dyn if dyn is not None else self.bg_surface
+            if surf is not None:
+                if self.bg_alpha < 255:
+                    tmp = surf.copy()
+                    tmp.set_alpha(int(self.bg_alpha))
+                    buf.blit(tmp, (0, 0))
+                else:
+                    buf.blit(surf, (0, 0))
 
         # 立绘
         for sid in self.sprite_order:
             spr = self.sprites.get(sid)
             if spr is None or not spr.visible:
                 continue
+            # 动态立绘渲染器优先 (如 Live2D), 返回 None 回退原图
+            renderer = (self.sprite_renderers.get(sid)
+                        or self.sprite_renderers.get(None))
+            if renderer is not None:
+                dyn = renderer(self, spr)
+                if dyn is not None:
+                    buf.blit(dyn, dyn.get_rect(center=spr.center))
+                    continue
             buf.blit(spr.surface, spr.rect)
 
         # 全局黑幕
