@@ -270,6 +270,10 @@ class Parser:
         if op == "menu":
             return self._parse_menu(i, indent, lineno, content, rest)
 
+        # ---- settings 嵌套块: 布局属性 + setting <key> 子块 ----
+        if op == "settings":
+            return self._parse_settings(i, indent, lineno, content)
+
         # ---- 对象创建: ... / plugins / ui + 属性块
         # gallery 等插件自定义块也在语法层识别为属性块 (引擎通过
         # script_block 事件广播给插件处理, 未装载对应插件时安全忽略)
@@ -375,6 +379,68 @@ class Parser:
         return Statement(op="menu", args=[ident] if ident else [],
                          kwargs=kwargs, block=items, line=lineno,
                          raw=content), i
+
+    def _parse_settings(self, i, indent, lineno, content):
+        """settings 块: 布局属性 + 嵌套 ``setting <key>`` 子块。
+
+        settings
+            title: "设置"
+            columns: 2
+            bg: "panel.png"            # 面板背景 (九宫格)
+            setting bgm_volume
+                label: "音乐音量"
+                type: slider
+            setting player_name
+                label: "主角名字"
+                type: cycle
+                options: "小明, 小红"
+        """
+        i += 1
+        n = len(self.lines)
+        kwargs = {}
+        items = []
+        while i < n:
+            ind, ln, cnt = self.lines[i]
+            if ind <= indent:
+                break
+            name = cnt.strip()
+            # 子块: "setting <key>" 前缀优先 (键名可能含冒号, 如 voice:xx)
+            if name.startswith("setting "):
+                key = name[len("setting "):].strip()
+            elif ":" in cnt and not name.endswith(":"):
+                # settings 级属性行 (含冒号)
+                kv = cnt.split(":", 1)
+                val = kv[1]
+                comment = val.find(" #")
+                if comment != -1:
+                    val = val[:comment]
+                kwargs[kv[0].strip()] = _unquote(val)
+                i += 1
+                continue
+            elif name.endswith(":"):
+                key = name[:-1].strip()
+            else:
+                key = name
+            i += 1
+            props = {}
+            while i < n:
+                ind2, ln2, cnt2 = self.lines[i]
+                if ind2 <= ind:
+                    break
+                kv = cnt2.split(":", 1)
+                if len(kv) == 2:
+                    val = kv[1]
+                    comment = val.find(" #")
+                    if comment != -1:
+                        val = val[:comment]
+                    props[kv[0].strip()] = _unquote(val)
+                else:
+                    log.warning(f"第{ln2}行: 属性需为 key: value, 已跳过")
+                i += 1
+            items.append(Statement(op="setting", args=[key],
+                                   kwargs=props, line=ln, raw=cnt))
+        return Statement(op="settings", args=[], kwargs=kwargs,
+                         block=items, line=lineno, raw=content), i
     def _parse_if(self, i, indent, lineno, content):
         # 条件表达式: "if X:" 中的 X
         cond_tokens = _tokenize(content)[1:-1]

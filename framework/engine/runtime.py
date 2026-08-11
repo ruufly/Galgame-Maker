@@ -153,6 +153,9 @@ class Runtime:
             elif stmt.op == "menu_bar":
                 # 常驻菜单栏样式 (bar 模式系统菜单)
                 self._apply_menu_bar_stmt(stmt)
+            elif stmt.op == "settings":
+                # 设置界面配置 (setting.gal: 布局 + 条目)
+                self.engine.settings.apply_config(stmt)
             elif stmt.kwargs or stmt.block:
                 # 其他属性块: 广播给插件处理 (如 gallery 块由 gallery
                 # 插件解析; 未装载对应插件时安全忽略)

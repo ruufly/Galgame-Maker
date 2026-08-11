@@ -71,15 +71,8 @@ class AutoSkipPlugin(Plugin):
         """
         rt = self.engine.runtime
         if rt._menu_items("system") is None:
-            mt = self.engine.menu_texts
-            defaults = [
-                (mt["continue"], {"type": "continue"}),
-                (mt["save"], {"type": "slot_menu", "mode": "save"}),
-                (mt["load"], {"type": "slot_menu", "mode": "load"}),
-                (mt["title"], {"type": "title"}),
-                (mt["quit"], {"type": "quit"}),
-            ]
-            for text, action in defaults:
+            # 无 menu system 定义: 先补引擎默认菜单 (含设置), 再追加
+            for text, action, _cfg in self.engine.default_system_items():
                 rt.add_menu_button("system", text, action)
         items = rt._menu_items("system") or []
         types = {a.get("type") for _t, a, _c in items

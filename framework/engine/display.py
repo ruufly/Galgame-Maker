@@ -127,8 +127,8 @@ def _eff_spin(spr, t, direction, display):
 # 对话框文字显示模式 (Text Reveal Modes)
 # ======================================================================
 def _tm_typewriter(d, dt):
-    """默认: 打字机逐字符。"""
-    d.reveal += d.TYPE_SPEED * dt
+    """默认: 打字机逐字符 (速度可经设置界面调整: text_speed)。"""
+    d.reveal += d.type_speed * dt
 
 
 def _tm_instant_reset(d):
@@ -537,7 +537,7 @@ class Display:
     """负责一切画面绘制与交互命中的判定。"""
 
     FADE_DURATION = 1.0          # 淡入淡出默认时长(秒)
-    TYPE_SPEED = 45.0            # 打字机字符/秒
+    TYPE_SPEED = 45.0            # 打字机字符/秒 (设置界面可调, 见 type_speed)
 
     def __init__(self, engine, width: int, height: int) -> None:
         self.engine = engine
@@ -603,6 +603,7 @@ class Display:
         self.text_modes = dict(TEXT_MODES)
         self.text_mode = "typewriter"    # 当前模式
         self.text_mode_state = {}        # 模式私有状态
+        self.type_speed = self.TYPE_SPEED  # 打字速度 (字符/秒, 设置可调)
         self.active_index = -1           # 键盘导航: 当前活动选项 (-1=无)
         self._slot_thumb_provider = None  # 插件注册: 槽位缩略图提供者
 

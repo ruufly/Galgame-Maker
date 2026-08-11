@@ -44,12 +44,12 @@ framework/
 │   └── auto_skip.py          自动模式 (自动推进, 非正式界面自动暂停)
 │                               + 跳过剧情 (直达下一个选择支/结局)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 611 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 655 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 611 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 655 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -584,6 +584,68 @@ scene cg_school                     # CG 场景定义 (type: cg)
 * **标题 BGM**: `start:` 块可用 `music` 配置标题背景音乐, 回标题/
   退出鉴赏时自动恢复播放 (engine 记录 `runtime.title_bgm`)
 
+### 4.16 设置系统
+
+设置界面可在**标题菜单 / ESC 菜单 / bar 常驻栏**中打开
+(action: `settings_open`), 配置在独立 `setting.gal` (被主脚本 import):
+
+```gal
+settings
+    title: "设置"                # 界面标题
+    columns: 2                   # 条目列数
+    bg: "panel.png"              # 面板背景图 (九宫格, 可选)
+    setting bgm_volume           # setting <key> 子块 (引用/覆盖内置项)
+        label: "音乐音量"
+        section: "音量"          # 分栏 (tab); 可自定义归并
+    setting voice:producer       # 角色语音音量 (动态项: voice:<角色id>,
+        label: "制作人语音"       #  默认自动归并到"语音"栏)
+        section: "语音"
+    setting player_name
+        label: "主角名字"
+        type: cycle              # 类型覆盖
+        options: "阿明, 小明"
+    setting key_up
+        label: "上移键"          # keybind 类型: 点击后按任意键绑定
+        section: "按键"
+```
+
+**分栏**: 设置界面顶部为分栏 (tab) 行, 点击切换显示对应条目;
+`section` 属性自定义归类 (未指定时按内置默认: 音量/语音/显示/游戏/按键,
+`voice:<角色id>` 自动归入"语音"栏); 插件注册项可指定任意分栏。
+
+**内置设置项** (key / 类型):
+
+| key | 类型 | 说明 |
+| --- | --- | --- |
+| `bgm_volume` / `sfx_volume` / `voice_volume` | slider | 音乐/音效/全局语音音量 |
+| `voice:<角色id>` | slider | 指定角色的语音音量 (动态) |
+| `text_speed` | slider | 文字速度 (字符/秒) |
+| `fullscreen` / `resizable` | checkbox | 全屏 / 窗口可缩放 |
+| `player_name` | cycle | 主角名字 ($player_name 变量) |
+| `key_up` / `key_down` / `key_confirm` | keybind | 键盘导航键位 |
+
+**插件 API** (自定义设置项):
+
+```python
+engine.settings.register(
+    "my_setting",            # 唯一 key
+    label="插件开关",
+    kind="checkbox",         # slider / checkbox / cycle / keybind / button
+    getter=lambda: 取值,      # 读取
+    setter=lambda v: 应用,    # 写入 (自动保存到 save/settings.json)
+    min=0, max=1, step=0.05, # slider 用
+    options=["a", "b"],      # cycle 用
+    on_click=lambda engine: ...,  # button 用
+)
+engine.settings.set("my_setting", True)   # 程序化读写 (持久化)
+engine.settings.get("my_setting", False)
+```
+
+* 设置值保存在 `save/settings.json` (跨存档, 重启恢复)
+* 插件注册的项自动出现在界面末尾; `setting.gal` 可引用调整 label/顺序
+* 点击滑条轨道/用左右方向键调节; checkbox 点击切换; keybind 点击后
+  按任意键绑定 (ESC 取消); 界面内 ESC 关闭并保存
+
 ---
 
 ## 5. 命名空间系统
@@ -916,7 +978,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (611 项断言)
+## 12. 测试 (655 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -1013,6 +1075,9 @@ py -3.10 framework/tests/smoke.py
 | 26. 自动/跳过 | auto_skip 插件 (ESC/bar 菜单按钮): 自动模式自动推进 + 跳过剧情直达下一个选择支/结局 (runtime.skip_mode 快进, 背景同步) + 鉴赏中退出确认框修复 + 测试增至 591 项 |
 | 27. 交互完善 | 自动/跳过按钮样式可在 menu system 配置 (image_active 激活图) + 点击退出 ESC 菜单 + 非正式界面自动模式自动暂停/恢复 + CG 大图确认框修复 + 鉴赏界面样式扩展 (bg/cat_image/cg_frame/cg_placeholder) + 测试增至 604 项 |
 | 28. 交互修复 | 自动模式二次点击关闭修复 (按用户意图翻转) + bar 按钮支持 image 图 (激活样式区分) + 测试增至 611 项 |
+| 29. 设置系统 | engine/settings.py 设置注册表 + 设置界面 (slider/checkbox/cycle/keybind/button) + setting.gal 配置 + 保存 save/settings.json + 插件 register API + 入口 (标题/ESC/bar) + 测试增至 637 项 |
+| 30. 设置完善 | 设置分栏 (section tab, 可自定义) + 各角色语音归并"语音"栏 + 返回按钮/确认框修复 + resizable 即时重建窗口 + 测试增至 647 项 |
+| 31. 设置返回修复 | 从标题/ESC 菜单进设置返回后恢复菜单 (打开设置不再关闭底层菜单) + 测试增至 655 项 |
 
 ---
 
@@ -1027,6 +1092,7 @@ py -3.10 framework/tests/smoke.py
 | `cast.gal` | 角色与场景定义: char producer (多立绘 + voice_volume 分角色语音音量) + scene school |
 | `audio.gal` | 声音注册: sfx_click/sfx_hover/sfx_boom/voice_demo/bgm_piano41/bgm_piano39 |
 | `gallery.gal` | 鉴赏配置 (gallery 块: 真结局解锁) + CG 场景定义 (scene type: cg) |
+| `setting.gal` | 设置界面配置 (settings 块: 布局 + 条目) |
 | `branches.gal` | 分支流程: 选择支 (like_it/neutral/dislike) + 立绘登场退场 + 场景过渡 + 文字模式演示 + **BGM 控制全流程** (淡入/暂停/恢复/音量/切歌/淡出) + **window config 运行时窗口配置** (改标题/改尺寸/全屏切换, 等比缩放) + **menu_mode 双模式切换** (bar 常驻菜单栏 ↔ popup ESC 弹窗) + **CG 展示与真结局** (解锁鉴赏) + ending |
 
 素材目录:
@@ -1073,6 +1139,7 @@ py -3.10 framework/tests/smoke.py
 | 转场 | `fade` / `fadeout` | 黑幕淡入/淡出 |
 | 结束 | `ending [结局名]` | 结束画面 + 结局记录 (全局进度) |
 | 鉴赏 | `gallery` 块 / `scene type: cg` | 鉴赏配置 / CG 场景 (展示即收集) |
+| 设置 | `settings` 块 + `setting <key>` 子块 | 设置界面配置 (布局 + 条目) |
 | 结束 | `ending [结局名]` | 结束画面 + 结局记录 (全局进度) 回标题 |
 
 ## 18. 已知限制 (补充)
@@ -1080,4 +1147,36 @@ py -3.10 framework/tests/smoke.py
 * 语音为占位音效 (demo), 接入真实语音只需替换 audio.gal 中的文件路径
 * BGM 切换为单通道 (pygame.mixer.music), 无交叉淡化 (旧曲淡出→新曲淡入
   顺序执行)
+
+---
+
+## 19. 打包发行 (PyInstaller)
+
+```powershell
+# 1. 安装 PyInstaller (Python 3.10)
+py -3.10 -m pip install pyinstaller
+
+# 2. 打包 (onedir 模式, 全部产物输出到 test/release, 不污染项目根)
+py -3.10 -m PyInstaller --noconfirm --onedir --name GalgameMaker ^
+  --distpath test/release --workpath test/release/build ^
+  --specpath test/release ^
+  --add-data "C:\<项目绝对路径>\framework\plugins;framework\plugins" ^
+  gamelauncher.py
+
+# 3. 复制 demo 数据与字体到发行目录 (exe 同目录):
+#    test/engine_demo -> test/release/GalgameMaker/test/engine_demo
+#    (排除 save/__pycache__; 素材/脚本随发行版分发)
+#    fonts            -> test/release/GalgameMaker/test/engine_demo/fonts
+
+# 4. 双击 test/release/GalgameMaker/GalgameMaker.exe 运行
+```
+
+说明:
+
+* `gamelauncher.py` 已支持 frozen 环境: 打包后项目根基于 **exe 所在目录**
+  (`sys.executable`), demo/字体等外部数据与 exe 同放即可
+* 插件目录打包进 exe (`--add-data`), 运行时自动装载; demo 数据与字体为
+  外部文件, 便于直接替换素材/脚本/存档
+* 也可拖拽任意 `.gal` 文件到 exe 上运行 (启动器传参)
+
 

@@ -153,6 +153,10 @@ class GameEngine:
             "close": self._act_close,        # 关闭当前选择列表
         }
 
+        # 设置系统 (注册表 + 设置界面; 需在 actions 之后, 注册 settings_open)
+        from framework.engine.settings import SettingsManager
+        self.settings = SettingsManager(self)
+
     # ==================================================================
     # 字体
     # ==================================================================
@@ -372,6 +376,10 @@ class GameEngine:
             self.on_click(self.to_logical(event.pos))
 
     def _handle_key(self, key) -> None:
+        # 设置界面: 键位绑定捕获 / 左右调节
+        if self.settings.active:
+            self.settings.handle_key(key)
+            return
         if key in self.key_up:
             self.display.move_active(-1)
         elif key in self.key_down:
@@ -449,6 +457,17 @@ class GameEngine:
                          and it[1].get("type") == "continue")]
         d.set_menu_bar(items)
 
+    def default_system_items(self) -> list:
+        """默认系统菜单项 (含"设置"; 供 open_system_menu 与插件补全用)。"""
+        return [
+            (self.menu_texts["continue"], {"type": "continue"}, {}),
+            (self.menu_texts["save"], {"type": "slot_menu", "mode": "save"}, {}),
+            (self.menu_texts["load"], {"type": "slot_menu", "mode": "load"}, {}),
+            (self.menu_texts["title"], {"type": "title"}, {}),
+            (self.menu_texts["quit"], {"type": "quit"}, {}),
+            ("设置", {"type": "settings_open"}, {}),
+        ]
+
     def open_system_menu(self) -> None:
         """打开游戏内菜单 (暂停游戏), 文案由 menu_texts 配置;
         脚本定义 menu system 可整体覆盖。
@@ -460,13 +479,7 @@ class GameEngine:
         self.paused = True
         items = self.runtime._menu_items("system")
         if items is None:
-            items = [
-                (self.menu_texts["continue"], {"type": "continue"}, {}),
-                (self.menu_texts["save"], {"type": "slot_menu", "mode": "save"}, {}),
-                (self.menu_texts["load"], {"type": "slot_menu", "mode": "load"}, {}),
-                (self.menu_texts["title"], {"type": "title"}, {}),
-                (self.menu_texts["quit"], {"type": "quit"}, {}),
-            ]
+            items = self.default_system_items()
         else:
             self._set_ui_sounds(self.runtime._menu_ui("system"))
         self.display.show_system_menu(items)

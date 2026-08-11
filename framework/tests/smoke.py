@@ -1012,7 +1012,7 @@ def test_title_screen():
         check("标题无副标题(已注释)", d.title_caption == "",
               str(d.title_caption))
         check("标题图片加载", d.title_image is not None)
-        check("标题菜单 4 项", len(d.title_items) == 4, str(d.title_items))
+        check("标题菜单 5 项", len(d.title_items) == 5, str(d.title_items))
         check("开始按钮自定义文本", d.title_items[0][0] == "开始游戏",
               str(d.title_items[0]))
         check("标题位置自定义", d.title_anchor[1] == 210.0,
@@ -1058,7 +1058,9 @@ def test_title_screen():
         d = engine.display
         engine.running = True
         engine.apply_config({"confirm_quit": "true"})
-        engine.on_click(d.title_rects[2].center)   # "退出游戏"
+        quit_idx = next(i for i, it in enumerate(d.title_items)
+                        if it[1].get("type") == "quit")
+        engine.on_click(d.title_rects[quit_idx].center)   # "退出游戏"
         check("标题退出弹确认框", d.confirm_active and engine.running is True)
         engine.on_click(d.confirm_rects[0].center)  # 确认退出
         check("确认后引擎关闭", engine.running is False)
@@ -1129,7 +1131,7 @@ def test_system_menu():
         # 游戏中按 ESC -> 系统菜单
         engine.on_escape()
         check("ESC 打开系统菜单", d.system_menu_active and engine.paused)
-        check("菜单 7 项", len(d.system_menu_items) == 7,
+        check("菜单 8 项", len(d.system_menu_items) == 8,
               str([t for t, _, _ in d.system_menu_items]))
         engine.draw()
         check("菜单绘制无异常", True)
@@ -1168,7 +1170,7 @@ def test_system_menu():
         engine.on_escape()
         engine.on_click(d.system_menu_rects[3].center)   # 返回标题
         check("返回标题画面", d.title_active and not engine.paused)
-        check("标题菜单", len(d.title_items) == 4)
+        check("标题菜单", len(d.title_items) == 5)
 
         # 结束后回到标题: fadeout 黑幕后 ending, 黑幕应被清除
         rt.call_stack = []
@@ -1504,7 +1506,7 @@ def test_dialogs():
         texts = [t for t, _, _ in d.selection_items]
         check("ESC 菜单用命名菜单文案",
               texts == ["继续游戏", "存档", "读取存档", "返回标题",
-                        "退出游戏", "自动模式", "跳过剧情"],
+                        "退出游戏", "自动模式", "跳过剧情", "设置"],
               str(texts))
         engine.on_click(d.selection_rects[0].center)   # 继续
     finally:
@@ -1970,15 +1972,23 @@ def test_menu_block():
         rt.load_script(demo)
         check("菜单静态注册", "title" in rt.menus, str(list(rt.menus)))
         items = rt.menus["title"]
-        check("菜单 4 按键", len(items) == 4,
+        check("菜单 5 按键", len(items) == 5,
               str([i["name"] for i in items]))
-        check("鉴赏按钮在菜单中", items[3]["name"] == "gallery_button"
-              and items[3]["action"] == {"type": "gallery_open"},
-              str(items[3]))
+        by_name = {i["name"]: i for i in items}
+        check("鉴赏按钮在菜单中", "gallery_button" in by_name
+              and by_name["gallery_button"]["action"]
+              == {"type": "gallery_open"},
+              str([i["name"] for i in items]))
+        check("设置按钮在菜单中", "settings_button" in by_name
+              and by_name["settings_button"]["action"]
+              == {"type": "settings_open"},
+              str([i["name"] for i in items]))
         check("按键动作解析",
               items[0]["action"] == {"type": "start", "label": "game_start"}
               and items[1]["action"] == {"type": "slot_menu", "mode": "load"}
-              and items[2]["action"] == {"type": "quit"},
+              and items[2]["action"] == {"type": "gallery_open"}
+              and items[3]["action"] == {"type": "settings_open"}
+              and items[4]["action"] == {"type": "quit"},
               str([i["action"] for i in items]))
         check("按键精细配置",
               items[0]["cfg"]["width"] == 262
@@ -1991,7 +2001,7 @@ def test_menu_block():
 
         # title 使用命名菜单
         rt.start()
-        check("标题用菜单项", len(d.selection_items) == 4
+        check("标题用菜单项", len(d.selection_items) == 5
               and d.selection_items[0][0] == "开始游戏")
         check("标题按钮两列布局",
               d.selection_rects[0].y == d.selection_rects[1].y
@@ -2021,7 +2031,7 @@ def test_menu_block():
         # ESC 系统菜单由 menu system 块覆盖
         engine.open_system_menu()
         check("ESC 菜单用命名菜单",
-              d.system_menu_active and len(d.selection_items) == 7
+              d.system_menu_active and len(d.selection_items) == 8
               and d.selection_items[0][0] == "继续游戏"
               and d.selection_items[0][2].get("width") == 240,
               str([t for t, _, _ in d.selection_items]))
@@ -2231,14 +2241,16 @@ def test_key_nav():
         engine._handle_key(pygame.K_DOWN)
         engine._handle_key(pygame.K_DOWN)
         engine._handle_key(pygame.K_DOWN)
+        engine._handle_key(pygame.K_DOWN)
         check("循环到首项", d.active_index == 0)
         engine._handle_key(pygame.K_UP)
-        check("上移循环", d.active_index == 3)
+        check("上移循环", d.active_index == 4)
         # W/S 键移动 (自定义)
         engine._handle_key(pygame.K_s)
         check("S 键下移", d.active_index == 0)
         engine._handle_key(pygame.K_w)
-        check("W 键上移", d.active_index == 3)
+        check("W 键上移", d.active_index == 4)
+        engine._handle_key(pygame.K_w)
         engine._handle_key(pygame.K_w)
         engine._handle_key(pygame.K_w)
         engine._handle_key(pygame.K_w)
@@ -2856,13 +2868,14 @@ def test_menu_bar():
         check("menu_mode 配置", engine.menu_mode == "bar")
         rt.load_script(demo)
         check("bar 已构建", d.menu_bar_active
-              and len(d.menu_bar_items) == 6,
+              and len(d.menu_bar_items) == 7,
               f"{len(d.menu_bar_items)} 项")
         types = [it[1].get("type") for it in d.menu_bar_items]
         check("bar 过滤 continue", "continue" not in types, str(types))
         check("bar 项目顺序", types == ["slot_menu", "slot_menu",
                                         "title", "quit",
-                                        "auto_toggle", "skip_once"],
+                                        "auto_toggle", "skip_once",
+                                        "settings_open"],
               str(types))
         # bottom 位置: 贴窗口底部
         st = d.menu_bar_style
@@ -3371,6 +3384,205 @@ lab_b:
             shutil.rmtree(sd, ignore_errors=True)
 
 
+def test_settings():
+    print("== 设置系统 ==")
+    import shutil
+    import pygame
+    base = os.path.dirname(os.path.abspath(__file__))
+    sd = os.path.join(base, "save")
+    if os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    engine = GameEngine(640, 360, "test60")
+    d = engine.display
+    rt = engine.runtime
+    engine.project_dir = base
+    path = os.path.join(base, "_settings_test.gal")
+    src = '''settings
+    title: "我的设置"
+    columns: 3
+    setting bgm_volume
+        label: "音乐"
+    setting voice:producer
+        label: "制作人语音"
+    setting player_name
+        label: "主角"
+        options: "阿明, 小红"
+char producer
+    name: "制作人"
+    normal: "x.png"
+menu title
+    start_button
+        text: "开始游戏"
+        action: start game_start
+    settings_button
+        text: "设置"
+        action: settings_open
+start:
+    title
+        menu: title
+        start: game_start
+game_start:
+    text "ok"
+'''
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        rt.load_script(path)
+        s = engine.settings
+        check("设置标题", s.title == "我的设置")
+        check("设置列数", s.columns == 3)
+        check("内置项注册", "bgm_volume" in s.items
+              and "sfx_volume" in s.items and "fullscreen" in s.items)
+        check("label 覆盖", s.items["bgm_volume"]["label"] == "音乐")
+        # 角色语音动态项
+        item = s._resolve_item("voice:producer")
+        check("角色语音项", item is not None and item["kind"] == "slider")
+        # 读写与应用
+        s.set("bgm_volume", 0.3)
+        check("bgm 音量应用",
+              abs(engine.audio.bgm_volume - 0.3) < 0.01,
+              str(engine.audio.bgm_volume))
+        s.set("voice:producer", 0.7)
+        check("角色语音应用", abs(float(
+            rt.characters["producer"]["voice_volume"]) - 0.7) < 0.01)
+        check("设置已保存", os.path.isfile(
+            os.path.join(base, "save", "settings.json")))
+        # cycle: player_name
+        check("主角名默认", s.get("player_name") == "未命名")
+        s.set("player_name", "阿明")
+        check("主角名设置", rt.vars.get("player_name") == "阿明")
+        # 重载恢复 (新引擎读 settings.json)
+        s.set("bgm_volume", 0.5)
+        # 分栏 (默认内置分类)
+        check("分栏列表", s._sections() == ["音量", "语音", "显示",
+                                           "按键", "游戏"],
+              str(s._sections()))
+        voice_secs = [s._get_item(k)["section"] for k in s.order
+                      if k.startswith("voice:") or k == "voice_volume"]
+        check("语音项归并", all(x == "语音" for x in voice_secs),
+              str(voice_secs))
+        # 设置界面打开/绘制
+        s.open()
+        check("设置打开", s.active and engine.paused)
+        engine.draw()
+        check("设置绘制无异常", True)
+        # 当前栏 = 音量
+        keys = s.visible_keys()
+        check("当前栏音量", set(keys) == {"bgm_volume", "sfx_volume"},
+              str(keys))
+        # slider 点击设值
+        rects = s._item_rects()
+        bgm_idx = keys.index("bgm_volume")
+        track = s._slider_track(rects[bgm_idx])
+        s._handle_click((track.right - 2, track.centery))
+        check("slider 点击设值", engine.audio.bgm_volume > 0.8,
+              str(engine.audio.bgm_volume))
+        # 方向键微调
+        s._hover = bgm_idx
+        s.handle_key(pygame.K_LEFT)
+        check("方向键微调",
+              abs(engine.audio.bgm_volume - 0.90) < 0.01,
+              str(engine.audio.bgm_volume))
+        # 分栏切换 -> 显示 (checkbox)
+        s._handle_click(s._tab_rects[2][1].center)
+        check("分栏切换", s._current_section == "显示")
+        keys = s.visible_keys()
+        check("显示栏条目", "fullscreen" in keys and "resizable" in keys,
+              str(keys))
+        rects = s._item_rects()
+        fs_idx = keys.index("fullscreen")
+        s._handle_click(rects[fs_idx].center)
+        check("checkbox 切换", engine.fullscreen is True)
+        s._handle_click(rects[fs_idx].center)
+        check("checkbox 再切", engine.fullscreen is False)
+        # 切 -> 按键 (keybind)
+        s._handle_click(s._tab_rects[3][1].center)
+        check("按键栏切换", s._current_section == "按键")
+        keys = s.visible_keys()
+        rects = s._item_rects()
+        key_idx = keys.index("key_up")
+        s._handle_click(rects[key_idx].center)
+        check("keybind 捕获态", s._binding == "key_up")
+        s.handle_key(pygame.K_a)
+        check("keybind 绑定", s._binding is None
+              and pygame.K_a in engine.key_up,
+              str([pygame.key.name(k) for k in engine.key_up]))
+        # 返回按钮关闭
+        engine.on_click(s._back_rect.center)
+        check("返回按钮关闭", not s.active and not engine.paused)
+        # 设置中退出确认框: 正常显示且可点击
+        s.open()
+        engine._q = False
+        engine.ask_confirm("确定退出游戏吗？", "退出", "继续",
+                           lambda: setattr(engine, "_q", True))
+        check("设置中确认框打开", d.confirm_active)
+        engine.draw()
+        check("设置中确认框绘制", d.confirm_active)
+        engine.on_click(d.confirm_rects[0].center)
+        check("设置中确认框可点击", engine._q and not d.confirm_active)
+        # ESC 关闭
+        engine.on_escape()
+        check("ESC 关闭设置", not s.active and not engine.paused)
+        # 入口 action + 默认菜单含设置
+        check("settings_open 动作", "settings_open" in engine.actions)
+        engine.open_system_menu()
+        texts = [t for t, _a, _c in d.selection_items]
+        check("默认菜单含设置", "设置" in texts, str(texts))
+        engine.on_click(d.selection_rects[texts.index("设置")].center)
+        check("菜单点设置打开", s.active and engine.paused)
+        engine.on_escape()
+        check("再次关闭", not s.active)
+        # 标题进设置 -> 返回恢复标题菜单
+        engine.goto_title()
+        check("回标题", d.title_active)
+        idx_t = next(i for i, it in enumerate(d.selection_items)
+                     if it[1].get("type") == "settings_open")
+        engine.on_click(d.selection_rects[idx_t].center)
+        check("标题进设置", s.active and engine.paused)
+        engine.on_escape()
+        check("返回标题菜单", d.title_active and d.selection_active
+              and not s.active and engine.paused)
+        engine.on_click(d.selection_rects[0].center)   # 开始游戏
+        check("标题开始正常", not d.title_active and not engine.paused
+              and not s.active)
+        # ESC 菜单进设置 -> 返回恢复 ESC 菜单
+        engine.open_system_menu()
+        check("ESC 菜单开", engine.paused and d.selection_active)
+        idx_s = next(i for i, it in enumerate(d.selection_items)
+                     if it[1].get("type") == "settings_open")
+        engine.on_click(d.selection_rects[idx_s].center)
+        check("ESC 进设置", s.active)
+        engine.on_escape()
+        check("返回 ESC 菜单", d.system_menu_active and engine.paused
+              and not s.active)
+        engine.close_system_menu()
+        check("继续游戏", not engine.paused)
+        # 重启引擎: settings.json 恢复
+        engine2 = GameEngine(640, 360, "t61")
+        try:
+            engine2.project_dir = base
+            engine2.runtime.load_script(path)   # 注册角色 (voice:producer)
+            engine2.settings.load()             # 再加载设置
+            check("重启后设置恢复",
+                  abs(engine2.audio.bgm_volume - 0.9) < 0.1,
+                  str(engine2.audio.bgm_volume))
+            check("重启后角色语音恢复", abs(float(
+                engine2.runtime.characters["producer"].get(
+                    "voice_volume", 1.0)) - 0.7) < 0.01)
+        finally:
+            engine2.quit()
+            import pygame as pg10
+            pg10.quit()
+    finally:
+        engine.quit()
+        import pygame as pg9
+        pg9.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
+
+
 def test_window_config_scaling():
     print("== 窗口配置与等比缩放 ==")
     import pygame
@@ -3767,6 +3979,12 @@ def main():
         test_auto_skip()
     except Exception as exc:
         print(f"  [ERROR] 自动/跳过测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_settings()
+    except Exception as exc:
+        print(f"  [ERROR] 设置系统测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

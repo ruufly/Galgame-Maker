@@ -75,6 +75,27 @@ class SaveManager:
         with open(self._global_path(), "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
+    def _settings_path(self) -> str:
+        d = os.path.join(self.engine.project_dir, "save")
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, "settings.json")
+
+    def get_settings(self, default=None):
+        """读取全局设置 (跨存档, 音量/键位/主角名等)。"""
+        try:
+            with open(self._settings_path(), "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default
+
+    def set_settings(self, data: dict) -> None:
+        """写入全局设置。"""
+        try:
+            with open(self._settings_path(), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            log.warning(f"设置写入失败: {exc}")
+
     def set_meta(self, slot: int, key: str, value) -> None:
         """写入存档元数据 (如快照路径), 不覆盖游戏状态。"""
         data = self.load(slot)

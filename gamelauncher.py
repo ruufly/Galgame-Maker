@@ -25,6 +25,10 @@ import os
 import sys
 
 _ROOT = os.path.dirname(os.path.abspath(__file__))
+if getattr(sys, "frozen", False):
+    # PyInstaller 打包: __file__ 指向临时解压目录,
+    # 以 exe 所在目录为项目根 (demo/字体等外部数据与 exe 同放)
+    _ROOT = os.path.dirname(sys.executable)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
