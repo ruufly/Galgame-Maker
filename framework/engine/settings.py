@@ -717,7 +717,7 @@ class SettingsManager:
         # 绑定提示
         if self._binding:
             ui.text(surface, self.engine.get_font(18),
-                    "按下新按键 (ESC 取消) …", color=(255, 210, 130),
+                    "按下新按键 (Backspace 取消) …", color=(255, 210, 130),
                     center=(w // 2, h - 28))
 
     def _draw_item(self, surface, item, rect, hovered, mouse):

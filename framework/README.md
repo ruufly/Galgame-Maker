@@ -31,25 +31,27 @@ framework/
 │   ├── styles.py             内置 5 套 UI 主题样式
 │   └── transitions.py        背景过渡效果 (7 种 + 插件可注册)
 ├── plugins/                  插件目录 (自动装载)
-│   ├── shake.py              屏幕震动 + 白闪 (shake/flash 指令)
+│   ├── fx.py                 屏幕特效 (shake/flash/blackflash/tint/strobe/pulse)
+│   ├── notice.py             通知: BGM + 场景切换 (合并 bgm/scene 通知)
+│   ├── transitions_plus.py   扩展背景过渡 (wipe/iris/curtain/sweep/fade_white/
+│   │                         checker/stripes)
+│   ├── custom_actions.py     动作 (explode/quake/freeze/blackout) + do_action
+│   │                         指令 + 立绘效果 (wobble/sway/zoom_bounce/
+│   │                         fade_rotate/float/squash) + 文字模式
+│   │                         (wave/bounce/speedup/rainbow/shiver)
 │   ├── debug_mode.py         调试模式 (快捷键切换, 开启显示 FPS 等)
-│   ├── scene_notice.py       场景切换通知
-│   ├── wipe_transition.py    擦除过渡
-│   ├── custom_actions.py     explode 动作 + do_action 指令 + wobble 立绘效果 +
-│   │                         wave 文字模式
-│   ├── bgm_notice.py         BGM 播放/暂停/恢复/停止通知
 │   ├── slot_thumbnails.py    存档画面快照 (槽位缩略图)
 │   ├── gallery.py            鉴赏: 标题菜单按钮 + CG/BGM/角色/场景鉴赏
 │   │                            (结局解锁, 配置在 gallery.gal)
 │   └── auto_skip.py          自动模式 (自动推进, 非正式界面自动暂停)
 │                               + 跳过剧情 (直达下一个选择支/结局)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 719 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 747 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 719 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 747 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -95,7 +97,7 @@ F5 快速存档, F9 读档, ESC 打开系统菜单。
 import "ui.gal"          # 界面样式定义
 import "cast.gal"        # 角色与场景定义
 import "audio.gal"       # 声音注册
-import "branches.gal"    # 分支流程标签
+import "story.gal"       # 剧情流程 (game_start 开场 + 分支标签)
 ```
 
 合并规则:
@@ -106,7 +108,7 @@ import "branches.gal"    # 分支流程标签
 * 相对路径 (相对 import 语句所在文件), 支持链式 import, 循环导入报错
 
 demo (`test/engine_demo/`) 拆分: `demo.gal` (主流程) + `ui.gal` (样式/菜单)
-+ `cast.gal` (角色/场景) + `audio.gal` (声音) + `branches.gal` (分支)。
++ `cast.gal` (角色/场景) + `audio.gal` (声音) + `story.gal` (剧情)。
 窗口配置 / 插件配置的预解析 (启动器) 同样递归展开 import。
 
 ---
@@ -507,7 +509,7 @@ engine.to_logical(pos)               # 窗口坐标 -> 逻辑坐标
 
 ```gal
 plugins
-    only: "shake, scene_notice"    # 只装载列出的
+    only: "fx, notice"    # 只装载列出的
     # 或
     except: "debug_mode"          # 排除列出的
 ```
@@ -892,12 +894,11 @@ engine.display.register_slot_thumbnail_provider(fn)   # 槽位缩略图绘制钩
 
 | 插件 | 提供 |
 | --- | --- |
-| shake | `shake`/`flash` 指令, 屏幕震动与白闪 |
+| fx | 屏幕特效: `shake`/`flash`/`blackflash`/`tint`/`strobe`/`pulse` |
+| notice | 通知: BGM 播放/暂停/恢复/停止 (右上) + 场景切换 (左上), 合并自 bgm/scene_notice |
+| transitions_plus | 扩展背景过渡: `wipe`/`iris`/`curtain`/`sweep`/`fade_white`/`checker`/`stripes` |
+| custom_actions | 动作 (`explode`/`quake`/`freeze`/`blackout`) + `do_action` 指令 + 立绘效果 (`wobble`/`sway`/`zoom_bounce`/`fade_rotate`/`float`/`squash`) + 文字模式 (`wave`/`bounce`/`speedup`/`rainbow`/`shiver`) |
 | debug_mode | 调试模式 (快捷键切换, 开启显示 FPS) |
-| scene_notice | 场景切换时左上角通知 |
-| wipe_transition | `bg ... with wipe` 擦除过渡 |
-| custom_actions | `explode` 动作 + `do_action` 指令 + wobble 立绘效果 + wave 文字模式 |
-| bgm_notice | BGM 播放/暂停/恢复/停止通知 (music_* 事件) |
 | slot_thumbnails | 存档画面快照 + 槽位缩略图 |
 | auto_skip | 系统菜单 (ESC/bar) 加「自动模式」「跳过剧情」按钮 |
 
@@ -1085,7 +1086,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (719 项断言)
+## 12. 测试 (747 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -1199,6 +1200,7 @@ py -3.10 framework/tests/smoke.py
 | 38. 键盘/确认完善 | 键位主/副双槽 (8 个移动槽位, 一行显示, 单键绑定/清空) + 设置/鉴赏界面确认框黑幕修复 + 已有确认框时关窗口叠加退出确认 (取消恢复) + 测试增至 715 项 |
 | 39. 键盘/调试收尾 | ESC 注册进快捷键系统 (key_escape 可配置) + fps_overlay 改名 debug_mode 插件 (快捷键切换调试模式, 开启才显示 FPS) + keybind UI 双槽美化 + 测试增至 714 项 |
 | 40. 设置/日志完善 | cycle 点击箭头切换 (中间不切换) + 退出全屏恢复设置分辨率 (VIDEORESIZE 全屏不污染) + 日志 console+文件双写 + WARN 游戏界面小提示 + 测试增至 719 项 |
+| 41. 插件整理扩展 | 通知合并为 notice (BGM+场景) + shake 改名 fx (加 strobe/pulse) + wipe 改名 transitions_plus (加 checker/stripes) + custom_actions 扩展 (float/squash 立绘 + rainbow/shiver 文字) + demo 架构: game_start 移入 story.gal (branches.gal 更名) + 测试增至 747 项 |
 
 ---
 
@@ -1214,7 +1216,7 @@ py -3.10 framework/tests/smoke.py
 | `audio.gal` | 声音注册: sfx_click/sfx_hover/sfx_boom/voice_demo/bgm_piano41/bgm_piano39 |
 | `gallery.gal` | 鉴赏配置 (gallery 块: 真结局解锁) + CG 场景定义 (scene type: cg) |
 | `setting.gal` | 设置界面配置 (settings 块: 布局 + 条目) |
-| `branches.gal` | 分支流程: 选择支 (like_it/neutral/dislike) + 立绘登场退场 + 场景过渡 + 文字模式演示 + **BGM 控制全流程** (淡入/暂停/恢复/音量/切歌/淡出) + **window config 运行时窗口配置** (改标题/改尺寸/全屏切换, 等比缩放) + **menu_mode 双模式切换** (bar 常驻菜单栏 ↔ popup ESC 弹窗) + **CG 展示与真结局** (解锁鉴赏) + ending |
+| `story.gal` | 剧情流程: game_start 开场 (语音旁白) + 分支 (like_it/neutral/dislike) + 立绘登场退场 + 场景过渡 + 文字模式演示 + **BGM 控制全流程** (淡入/暂停/恢复/音量/切歌/淡出) + **window config 运行时窗口配置** (改标题/改尺寸/全屏切换, 等比缩放) + **menu_mode 双模式切换** (bar 常驻菜单栏 ↔ popup ESC 弹窗) + **CG 展示与真结局** (解锁鉴赏) + ending |
 
 素材目录:
 * `materials/image/` — 背景/立绘/UI 九宫格切片素材包

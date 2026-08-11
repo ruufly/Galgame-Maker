@@ -1645,7 +1645,7 @@ def test_plugins_config():
     mods = engine.plugins.discover(plugins_dir, cfg)
     check("插件全部装载",
           "gm_plugin_debug_mode" in mods
-          and "gm_plugin_shake" in mods
+          and "gm_plugin_fx" in mods
           and "gm_plugin_custom_actions" in mods,
           str(mods))
     check("插件指令注册", engine.commands.has("shake")
@@ -1657,10 +1657,9 @@ def test_plugins_config():
 
     # only 白名单
     engine = GameEngine(640, 360, "test32")
-    mods = engine.plugins.discover(plugins_dir, {"only": ["shake",
-                                                          "scene_notice"]})
+    mods = engine.plugins.discover(plugins_dir, {"only": ["fx", "notice"]})
     check("only 白名单生效",
-          sorted(mods) == ["gm_plugin_scene_notice", "gm_plugin_shake"],
+          sorted(mods) == ["gm_plugin_fx", "gm_plugin_notice"],
           str(mods))
     check("白名单指令注册", engine.commands.has("shake")
           and not engine.commands.has("do_action"))
@@ -2489,8 +2488,8 @@ def test_audio_api():
             engine.audio.update(1 / 60)
         # 插件: BGM 通知
         engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
-        check("bgm_notice 插件加载",
-              any("bgm_notice" in m for m in engine.plugins._modules),
+        check("notice 插件加载",
+              any("notice" in m for m in engine.plugins._modules),
               str(list(engine.plugins._modules)))
         engine.emit("music_play", name="demo_bgm", path="x.mp3", loop=True,
                     fade=0.0)
@@ -2591,13 +2590,13 @@ def test_namespaces():
         rt.load_script(demo)
         # 顶层 using 静态生效 (加载即导入, 不依赖执行流程)
         check("顶层 using 加载生效",
-              "shake" in rt.using_ns and "custom_actions" in rt.using_ns,
+              "fx" in rt.using_ns and "custom_actions" in rt.using_ns,
               str(sorted(rt.using_ns)))
         engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"),
                                 {"except": ["debug_mode"]})
         # 插件指令注册在插件命名空间 (插件文件名)
         check("插件指令带命名空间",
-              engine.commands.has("shake", "shake")
+              engine.commands.has("shake", "fx")
               and engine.commands.has("do_action", "custom_actions"),
               f"shake_ns={engine.commands.find('shake')} "
               f"do_action_ns={engine.commands.find('do_action')}")
@@ -2607,8 +2606,8 @@ def test_namespaces():
         # 显式命名空间调用
         rt._dispatch(Statement(op="shake::shake", args=["0.3"], line=0))
         # using 后裸名可用
-        rt._cmd_using(Statement(op="using", args=["shake"], line=0))
-        check("using 导入", "shake" in rt.using_ns)
+        rt._cmd_using(Statement(op="using", args=["fx"], line=0))
+        check("using 导入", "fx" in rt.using_ns)
         rt._dispatch(Statement(op="shake", args=["0.3"], line=0))
         check("using 后指令可用", True)
         # builtin:: 显式命名空间
@@ -2712,14 +2711,14 @@ def test_plugin_cmd():
         engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"),
                                 {"except": ["debug_mode"]})
         # 卸载
-        rt._cmd_plugin(Statement(op="plugin", args=["unload", "shake"],
+        rt._cmd_plugin(Statement(op="plugin", args=["unload", "fx"],
                                  line=0))
-        check("卸载后指令消失", not engine.commands.has("shake", "shake")
-              and "shake" not in rt.using_ns)
+        check("卸载后指令消失", not engine.commands.has("shake", "fx")
+              and "fx" not in rt.using_ns)
         # 装载 (自动加入 using)
-        rt._cmd_plugin(Statement(op="plugin", args=["load", "shake"], line=0))
-        check("装载后指令恢复", engine.commands.has("shake", "shake")
-              and "shake" in rt.using_ns)
+        rt._cmd_plugin(Statement(op="plugin", args=["load", "fx"], line=0))
+        check("装载后指令恢复", engine.commands.has("shake", "fx")
+              and "fx" in rt.using_ns)
         # 裸名调用可用
         rt._dispatch(Statement(op="shake", args=["0.2"], line=0))
         check("装载后可裸名调用", True)
@@ -4083,6 +4082,56 @@ def test_logging():
             shutil.rmtree(sd, ignore_errors=True)
 
 
+def test_plugin_extras():
+    print("== 插件扩展 (fx/transitions_plus/custom_actions) ==")
+    engine = GameEngine(640, 360, "test68")
+    d = engine.display
+    try:
+        engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"))
+        # fx 扩展指令
+        for name in ("shake", "flash", "blackflash", "tint",
+                     "strobe", "pulse"):
+            check(f"fx 指令 {name}", engine.commands.has(name, "fx"),
+                  f"{name} in fx?")
+        # transitions_plus 扩展过渡
+        for name in ("wipe", "iris", "curtain", "sweep", "fade_white",
+                     "checker", "stripes"):
+            check(f"过渡 {name}", name in d.transitions,
+                  str(list(d.transitions)))
+        # custom_actions 扩展立绘效果 / 文字模式
+        for name in ("wobble", "sway", "zoom_bounce", "fade_rotate",
+                     "float", "squash"):
+            check(f"立绘效果 {name}", name in d.sprite_effects,
+                  str(list(d.sprite_effects)))
+        for name in ("wave", "bounce", "speedup", "rainbow", "shiver"):
+            check(f"文字模式 {name}", name in d.text_modes,
+                  str(list(d.text_modes)))
+        # 触发 fx 指令
+        from framework.engine.parser import Statement
+        rt = engine.runtime
+        rt.using_ns.add("fx")
+        plug = engine.plugins._classes["fx"]
+        rt._dispatch(Statement(op="strobe", args=["0.3"], line=0))
+        check("strobe 触发", plug._fx is not None
+              and plug._fx["kind"] == "strobe")
+        rt._dispatch(Statement(op="pulse", args=["0,255,128", "0.5"],
+                               line=0))
+        check("pulse 触发", plug._fx["kind"] == "pulse")
+        # 新过渡可用 (checker 启动/完成)
+        img = os.path.join(_ROOT, "test", "engine_demo", "materials",
+                           "image", "bg.jpg")
+        d.set_bg(img, "checker")
+        check("checker 过渡启动", d._transition is not None
+              and d._transition.name == "checker")
+        for _ in range(200):
+            d.update(1 / 60)
+        check("checker 过渡完成", d._transition is None)
+    finally:
+        engine.quit()
+        import pygame as pg16
+        pg16.quit()
+
+
 def test_window_config_scaling():
     print("== 窗口配置与等比缩放 ==")
     import pygame
@@ -4186,7 +4235,7 @@ def test_plugins_and_save():
     with open(path, "w", encoding="utf-8") as f:
         f.write("start:\n    shake 0.2 5\n    set ok = 1\n")
     rt.load_script(path)
-    rt.using_ns.add("shake")   # 脚本等效 using shake (插件指令命名空间)
+    rt.using_ns.add("fx")   # 脚本等效 using shake (插件指令命名空间)
     rt.start()
     check("shake 后继续执行", rt.vars.get("ok") == 1)
     check("shake 状态被设置", engine.display.shake_time > 0)
@@ -4515,6 +4564,12 @@ def main():
         test_logging()
     except Exception as exc:
         print(f"  [ERROR] 日志测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_plugin_extras()
+    except Exception as exc:
+        print(f"  [ERROR] 插件扩展测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

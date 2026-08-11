@@ -558,6 +558,9 @@ class Display:
         self.buffer = pygame.Surface((width, height))
         self._rich = engine.rich
 
+        # 全屏特效覆盖层 (插件注册: fx 白闪/黑闪/染色等, 最上层)
+        self._effect_overlays = []
+
         # 背景
         self.bg_surface = None
         self.bg_path = None
@@ -937,6 +940,14 @@ class Display:
         """
         self.transitions[name] = transition_cls
         log.info(f"过渡效果已注册: {name}")
+
+    def register_effect_overlay(self, fn) -> None:
+        """插件 API: 注册全屏特效覆盖层 (每帧调用 fn(surface)->surface|None)。
+
+        如 fx 插件的白闪/黑闪/染色; 在插件 draw_overlay 之后绘制 (最上层)。
+        """
+        if fn not in self._effect_overlays:
+            self._effect_overlays.append(fn)
 
     def set_bg(self, path: str, effect: str = None, mode: str = None) -> None:
         """设置背景。
@@ -2164,6 +2175,13 @@ class Display:
 
         # 插件渲染钩子 (逻辑坐标 buffer, 随窗口缩放, 覆盖层之上)
         self.engine.emit("draw_overlay", surface=buf, dt=0)
+
+        # 全屏特效覆盖层 (fx 插件: 白闪/黑闪/染色等, 最上层)
+        for fn in self._effect_overlays:
+            try:
+                fn(buf)
+            except Exception:
+                pass
 
         # 贴到窗口: 等比缩放保持比例 (letterbox 留黑边, 窗口可自由调整大小)
         self._present(surface)
