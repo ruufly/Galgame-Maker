@@ -44,12 +44,12 @@ framework/
 │   └── auto_skip.py          自动模式 (自动推进, 非正式界面自动暂停)
 │                               + 跳过剧情 (直达下一个选择支/结局)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 672 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 695 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 672 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 695 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -622,9 +622,33 @@ settings
 | `bgm_volume` / `sfx_volume` / `voice_volume` | slider | 音乐/音效/全局语音音量 |
 | `voice:<角色id>` | slider | 指定角色的语音音量 (动态) |
 | `text_speed` | slider | 文字速度 (字符/秒) |
+| `resolution` | cycle | 分辨率 (全屏时按当前分辨率全屏, 关全屏后窗口按此尺寸) |
 | `fullscreen` / `resizable` | checkbox | 全屏 / 窗口可缩放 |
 | `player_name` | cycle | 主角名字 ($player_name 变量) |
 | `key_up` / `key_down` / `key_confirm` | keybind | 键盘导航键位 |
+
+**自定义设置项** (`setting <key>` 子块, `var` 绑定引擎变量自动生成存取):
+
+```gal
+    setting my_slider           # 开发者自定义项: 名称/标签/绑定变量/类型
+        label: "自定滑条"
+        type: slider            # slider / checkbox / cycle / input / keybind / button
+        var: my_val             # 绑定引擎变量 ($my_val), 自动读写
+        min: 0 / max: 100 / step: 5   # slider 范围与步长 (可配)
+    setting my_input
+        label: "自定输入"
+        type: input             # 文本输入 (pygame 文本输入, Enter 确认)
+        var: my_name
+        default: "未设置"
+    setting my_choice
+        label: "自定选择"
+        type: cycle
+        var: my_color
+        options: "红, 绿, 蓝"    # cycle 选项
+```
+
+主角名字提供两种方式 (开发者二选一): `type: cycle` (给定名字循环选择)
+或 `type: input` (文本框输入, 两者都可绑定 `var: player_name`)。
 
 **插件 API** (自定义设置项):
 
@@ -632,21 +656,34 @@ settings
 engine.settings.register(
     "my_setting",            # 唯一 key
     label="插件开关",
-    kind="checkbox",         # slider / checkbox / cycle / keybind / button
-    getter=lambda: 取值,      # 读取
+    kind="checkbox",         # slider / checkbox / cycle / input / keybind / button
+    getter=lambda: 取值,      # 读取 (与 setter 二选一; 或直接用 var)
     setter=lambda v: 应用,    # 写入 (自动保存到 save/settings.json)
-    min=0, max=1, step=0.05, # slider 用
+    var="my_var",            # 绑定引擎变量, 自动生成存取 (忽略 getter/setter)
+    default="默认值",         # var 绑定时未设置过的默认值
+    min=0, max=1, step=0.05, # slider 用 (可配范围与步长)
     options=["a", "b"],      # cycle 用
+    section="分栏",           # 自定义分栏
     on_click=lambda engine: ...,  # button 用
 )
 engine.settings.set("my_setting", True)   # 程序化读写 (持久化)
 engine.settings.get("my_setting", False)
 ```
 
-* 设置值保存在 `save/settings.json` (跨存档, 重启恢复)
-* 插件注册的项自动出现在界面末尾; `setting.gal` 可引用调整 label/顺序
-* 点击滑条轨道/用左右方向键调节; checkbox 点击切换; keybind 点击后
-  按任意键绑定 (ESC 取消); 界面内 ESC 关闭并保存
+* 设置值保存在 `save/settings.json` (跨存档, 重启恢复, **可手动编辑**)
+* **read_settings**: 脚本开头 (start 标签首行) 调用, 从 `save/settings.json`
+  读取设置并赋值到对应引擎变量 (setting.gal 中 `default` 为缺省值,
+  文件里读不到的项用默认值补齐); 随后按变量重新应用 window 配置
+  (window 块声明支持 `$变量`, 如 `width: "$res_w"` —— 由设置项
+  `resolution` 写入 `res_w`/`res_h` 变量, 全屏/窗口尺寸随之联动)
+* 内置音量项 (`bgm_volume`/`sfx_volume`/`voice_volume` 等) 值存引擎变量,
+  **语音等运行时行为全局读这些变量**; 插件可用
+  `engine.get_var("bgm_volume")` / `engine.settings.get("bgm_volume")` 读取
+* 插件注册的项自动出现在界面末尾; `setting.gal` 可引用调整 label/顺序,
+  或直接在此定义自定义项 (var 绑定)
+* 点击滑条轨道/用左右方向键调节; checkbox 点击切换; cycle 左右点击切换;
+  input 点击后直接键入文本 (Enter 确认, ESC 取消); keybind 点击后
+  按任意键绑定; 界面内 ESC 关闭并保存
 
 ### 4.17 询问对话框 (confirm)
 
@@ -1009,7 +1046,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (672 项断言)
+## 12. 测试 (695 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -1116,6 +1153,9 @@ py -3.10 framework/tests/smoke.py
 | 31. 设置返回修复 | 从标题/ESC 菜单进设置返回后恢复菜单 (打开设置不再关闭底层菜单) + 测试增至 655 项 |
 | 32. LaTeX 打字修复 | 公式行高自动增高 (不重叠) + lines 逐行按逻辑长度推进 (公式完整) + 测试增至 660 项 |
 | 33. 询问对话框 | confirm DSL 语句 (阻塞 + 返回值 -> 变量) + 确认框键盘控制 (左右键/鼠标优先/初始无活动) + key_left/key_right 配置 + on_no 回调 + 测试增至 672 项 |
+| 34. 设置增强 | 分辨率设置 (全屏联动) + 文本输入类型 input (TEXTINPUT) + settings 块自定义项 (var 绑定变量/类型/范围/步长/选项) + 插件 register var 参数 + 测试增至 689 项 |
+| 35. 设置细节 | input 文本与标签布局错开 (不再重叠) + 主角名字两种方式统一写入 $player_name |
+| 36. 设置文件化 | read_settings 指令 (读 save/settings.json -> 变量, 缺省用默认值) + window 声明支持 $变量 (如 $res_w/$res_h) + 内置音量/分辨率等值存引擎变量, 语音全局读变量 + 测试增至 695 项 |
 
 ---
 

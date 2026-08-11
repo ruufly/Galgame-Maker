@@ -2175,7 +2175,7 @@ class Display:
         窗口尺寸变化 (用户拖拽 / window config) 后内容整体拉伸,
         比例不变; 宽高比不一致时上下/左右留黑边。
         """
-        win_w, win_h = surface.get_size()
+        win_w, win_h = self.engine._window_size()
         scale = min(win_w / self.width, win_h / self.height)
         tw = max(1, int(self.width * scale))
         th = max(1, int(self.height * scale))

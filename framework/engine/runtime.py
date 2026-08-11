@@ -82,6 +82,7 @@ class Runtime:
             "call": self._cmd_call,
             "return": self._cmd_return,
             "sleep": self._cmd_sleep,
+            "read_settings": self._cmd_read_settings,
             "music": self._cmd_music,
             "sound": self._cmd_sound,
             "stop": self._cmd_stop,
@@ -1977,6 +1978,36 @@ class Runtime:
             self._push_block(body)
         else:
             log.info(f"widget {name} 无 when run 块, 实例化空操作")
+
+    def _cmd_read_settings(self, stmt):
+        """从设置文件读取设置并赋值到对应变量 (read_settings)。
+
+        读取 save/settings.json, 值写入 setting.gal 绑定的变量
+        (文件里读不到的项用默认值); 随后按变量重新应用 window 配置
+        (window 块声明支持 $变量, 如 width: "$res_w")。
+        应在脚本开头 (start 标签首行) 调用。
+        """
+        self.engine.settings.load(apply_defaults=True)
+        self._reapply_window_config()
+        return None
+
+    def _reapply_window_config(self) -> None:
+        """插值 window/config 块的 $变量后重新应用 (声明支持变量)。
+
+        只应用窗口类配置 (标题/尺寸/图标/全屏等); 确认框/键位/音效等
+        交互配置由启动器 apply_config 负责, 这里不重复 (避免测试/直接
+        使用引擎时意外开启确认框)。
+        """
+        try:
+            from framework.engine.loader import load_script_with_imports
+            script = load_script_with_imports(self.script_path)
+            for stmt in script.statements:
+                if stmt.op in ("window", "config") and not stmt.args:
+                    cfg = {k: self._interp(str(v))
+                           for k, v in stmt.kwargs.items()}
+                    self.engine.apply_window_config(cfg)
+        except Exception as exc:
+            log.warning(f"重新应用 window 配置失败: {exc}")
 
     # ==================================================================
     # 文本插值

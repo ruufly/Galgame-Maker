@@ -42,11 +42,15 @@ class SettingsManager:
         self._back_rect = None   # 返回按钮 rect (点击判定)
         self._tab_rects = []     # [(分栏名, rect)]
         self._binding = None     # keybind 等待捕获的 key
+        self._input_key = None   # input 文本输入中的 key (None=未输入)
+        self._input_text = ""
         self._hover = -1         # 当前悬停条目索引
         self._img_cache = {}
 
         self._register_builtins()
-        self.load()
+        # 初始化时不应用默认值 (窗口保持构造尺寸; 脚本开头 read_settings
+        # 会按文件/默认值统一应用)
+        self.load(apply_defaults=False)
 
         # 交互钩子
         engine.events.on("draw_overlay", self._draw)
@@ -60,13 +64,30 @@ class SettingsManager:
     def register(self, key, label=None, kind="slider", getter=None,
                  setter=None, min=0.0, max=1.0, step=0.05,
                  options=None, visible=True, on_click=None,
-                 section="通用") -> None:
+                 section="通用", var=None, default=None,
+                 apply=None) -> None:
         """插件 API: 注册一个设置项。
 
         kind: slider (数值滑条) / checkbox (开关) / cycle (枚举循环) /
-              keybind (按键绑定) / button (点击按钮, 需 on_click)。
-        section: 所属分栏 (设置界面按栏显示, 可自定义)。
+              keybind (按键绑定) / input (文本输入) / button (点击按钮)。
+        section: 所属分栏 (可自定义)。
+        var: 绑定引擎变量 (值存 runtime.vars[var], 插件/声明可直接读取);
+            传了 var 时忽略 getter/setter。
+        default: 默认值 (设置文件读不到时使用)。
+        apply: var 绑定项写入变量后同步应用到实际的回调
+               (如 audio 音量/窗口尺寸), 语音等运行时行为全局读变量。
         """
+        if var is not None:
+            getter, setter = self._make_var_accessors(kind, str(var),
+                                                      default)
+            if apply is not None:
+                base_setter = setter
+
+                def _setter(v, _base=base_setter, _apply=apply):
+                    if _base:
+                        _base(v)
+                    _apply(v)
+                setter = _setter
         self.items[key] = {
             "key": key, "label": label or key, "kind": kind,
             "getter": getter, "setter": setter,
@@ -74,44 +95,81 @@ class SettingsManager:
             "options": list(options) if options else None,
             "visible": visible, "on_click": on_click,
             "section": str(section),
+            "var": str(var) if var is not None else None,
+            "_default": default,
         }
         if key not in self.order:
             self.order.append(key)
 
+    def _make_var_accessors(self, kind, var, default=None):
+        """按类型生成绑定引擎变量的 getter/setter (值自动转换)。"""
+        rt = self.engine.runtime
+
+        def getter():
+            v = rt.vars.get(var, default)
+            if kind == "slider":
+                try:
+                    return float(v) if v is not None else 0.0
+                except (TypeError, ValueError):
+                    return 0.0
+            if kind == "checkbox":
+                return bool(v)
+            return v if v is not None else ("" if default is None
+                                            else default)
+
+        def setter(v):
+            if kind == "slider":
+                v = float(v)
+            elif kind == "checkbox":
+                v = bool(v)
+            else:
+                v = str(v)
+            self.engine.set_var(var, v)
+
+        return getter, setter
+
     def _register_builtins(self) -> None:
         a = self.engine.audio
         d = self.engine.display
+        # 音量类: 值存引擎变量 (bgm_volume/sfx_volume/voice_volume),
+        # apply 同步到音频系统 —— 语音等运行时行为全局读变量
         self.register("bgm_volume", "音乐音量", "slider",
-                      getter=lambda: a.bgm_volume,
-                      setter=lambda v: a.set_bgm_volume(v),
+                      var="bgm_volume", default=0.8,
+                      apply=lambda v: a.set_bgm_volume(v),
                       min=0, max=1, step=0.05, section="音量")
         self.register("sfx_volume", "音效音量", "slider",
-                      getter=lambda: a.sfx_volume,
-                      setter=lambda v: a.set_sfx_volume(v),
+                      var="sfx_volume", default=1.0,
+                      apply=lambda v: a.set_sfx_volume(v),
                       min=0, max=1, step=0.05, section="音量")
         self.register("voice_volume", "语音音量", "slider",
-                      getter=lambda: a.voice_volume,
-                      setter=lambda v: a.set_voice_volume(v),
+                      var="voice_volume", default=1.0,
+                      apply=lambda v: a.set_voice_volume(v),
                       min=0, max=1, step=0.05, section="语音")
         self.register("text_speed", "文字速度", "slider",
-                      getter=lambda: d.type_speed,
-                      setter=lambda v: setattr(d, "type_speed", v),
+                      var="text_speed", default=45.0,
+                      apply=lambda v: setattr(d, "type_speed", v),
                       min=10, max=120, step=5, section="显示")
+        # 分辨率: 值存变量 resolution ("WxH"), 同步窗口尺寸并写入
+        # res_w/res_h 变量 (window 块声明可用 $res_w/$res_h)
+        self.register("resolution", "分辨率", "cycle",
+                      options=["960x540", "1280x720", "1600x900",
+                               "1920x1080"],
+                      var="resolution", default="1280x720",
+                      apply=self._apply_resolution_item,
+                      section="显示")
         self.register("fullscreen", "全屏", "checkbox",
-                      getter=lambda: self.engine.fullscreen,
-                      setter=lambda v: self.engine.set_fullscreen(bool(v)),
+                      var="fullscreen", default=False,
+                      apply=lambda v: self.engine.set_fullscreen(bool(v)),
                       section="显示")
         self.register("resizable", "窗口可缩放", "checkbox",
-                      getter=lambda: self.engine.resizable,
-                      setter=lambda v: (setattr(self.engine, "resizable",
-                                                bool(v)),
-                                        self.engine._rebuild_window()),
+                      var="resizable", default=True,
+                      apply=lambda v: (setattr(self.engine, "resizable",
+                                               bool(v)),
+                                       self.engine._rebuild_window()),
                       section="显示")
         self.register("player_name", "主角名字", "cycle",
                       options=["阿明", "小明", "未命名"],
-                      getter=lambda: self.engine.runtime.vars.get(
-                          "player_name", "未命名"),
-                      setter=lambda v: self.engine.set_var("player_name", v),
+                      var="player_name", default="未命名",
                       section="游戏")
         for key, label in (("key_up", "上移键"),
                            ("key_down", "下移键"),
@@ -123,6 +181,19 @@ class SettingsManager:
                               self.engine, k,
                               self.engine._parse_keys(v)),
                           section="按键")
+
+    def _apply_resolution_item(self, v):
+        """resolution 变量写入后: 更新窗口尺寸 + 写入 res_w/res_h 变量。"""
+        try:
+            w, h = (int(x) for x in str(v).split("x"))
+        except (TypeError, ValueError):
+            return
+        self.engine.set_var("res_w", w)
+        self.engine.set_var("res_h", h)
+        self.engine.window_w = max(64, w)
+        self.engine.window_h = max(64, h)
+        if not self.engine.fullscreen:
+            self.engine._rebuild_window()
 
     def _resolve_item(self, key):
         """动态项: voice:<角色id> 的角色语音音量。"""
@@ -192,13 +263,25 @@ class SettingsManager:
                 pass
         self.engine.save.set_settings(data)
 
-    def load(self) -> None:
+    def load(self, apply_defaults=True) -> None:
+        """从 save/settings.json 读取设置并应用。
+
+        apply_defaults=True: 文件里读不到的变量化项用默认值补齐
+        (写入对应变量并应用), 保证所有设置变量有值。
+        """
         data = self.engine.save.get_settings() or {}
-        for key, value in data.items():
+        for key in self.order:
             item = self._get_item(key)
-            if item and item.get("setter") is not None:
+            if not item or item.get("setter") is None:
+                continue
+            if key in data:
                 try:
-                    item["setter"](value)
+                    item["setter"](data[key])
+                except Exception:
+                    pass
+            elif apply_defaults and item.get("_default") is not None:
+                try:
+                    item["setter"](item["_default"])
                 except Exception:
                     pass
 
@@ -226,6 +309,53 @@ class SettingsManager:
             log.warning(f"设置 {key} 写入失败: {exc}")
             return False
 
+    def _apply_resolution(self, v):
+        """分辨率设置: 更新窗口尺寸; 非全屏立即重建, 全屏时记录 (关全屏后生效)。"""
+        try:
+            w, h = (int(x) for x in str(v).split("x"))
+        except (TypeError, ValueError):
+            return
+        self.engine.window_w = max(64, w)
+        self.engine.window_h = max(64, h)
+        if not self.engine.fullscreen:
+            self.engine._rebuild_window()
+
+    def _register_var_item(self, key, props) -> None:
+        """setting 块自定义项 (绑定 var): 按类型自动注册。"""
+        kind = str(props.get("type", "slider"))
+        default = props.get("default")
+        self.register(
+            key,
+            label=props.get("label", key),
+            kind=kind,
+            var=str(props.get("var")),
+            default=default,
+            min=self._num(props.get("min"), 0.0),
+            max=self._num(props.get("max"), 1.0),
+            step=self._num(props.get("step"), 0.05),
+            options=props.get("options"),
+            section=props.get("section", "通用"),
+        )
+
+    @staticmethod
+    def _num(v, default):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _coerce_default(kind, v):
+        """按设置类型转换默认值 (来自 setting.gal 的字符串)。"""
+        if kind == "slider":
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return 0.0
+        if kind == "checkbox":
+            return str(v).lower() in ("true", "1", "yes", "on")
+        return str(v)
+
     # ==================================================================
     # 配置 (setting.gal: settings 块 + setting 子块)
     # ==================================================================
@@ -247,11 +377,14 @@ class SettingsManager:
             key = sub.args[0] if sub.args else ""
             props = dict(sub.kwargs)
             if key not in self.items and not self._resolve_item(key):
-                # 未注册项: 尝试按 props 动态注册 (插件项应在插件 on_load 注册,
-                # 这里兜底注册一个通用项)
-                self.register(key, kind=props.get("type", "slider"),
-                              label=props.get("label", key),
-                              options=props.get("options"))
+                # 未注册项: setting 块自定义 (var 绑定变量 -> 自动存取;
+                # 无 var 时兜底注册通用项)
+                if props.get("var"):
+                    self._register_var_item(key, props)
+                else:
+                    self.register(key, kind=props.get("type", "slider"),
+                                  label=props.get("label", key),
+                                  options=props.get("options"))
             item = self._get_item(key)
             if not item:
                 continue
@@ -268,6 +401,15 @@ class SettingsManager:
             if "visible" in props:
                 item["visible"] = str(props["visible"]).lower() in (
                     "true", "1", "yes", "on")
+            # 数值范围/步长覆盖 (slider 用)
+            for num_key in ("min", "max", "step"):
+                if num_key in props:
+                    item[num_key] = self._num(props[num_key],
+                                              item.get(num_key, 0.0))
+            # 默认值覆盖 (文件读不到时使用)
+            if "default" in props:
+                item["_default"] = self._coerce_default(item["kind"],
+                                                        props["default"])
             # 重新排列: 按子块出现顺序 (动态项也进入 order 以参与保存)
             if key in self.order:
                 self.order.remove(key)
@@ -323,13 +465,32 @@ class SettingsManager:
         return False              # 消费点击
 
     def _on_escape(self, **kw):
-        if self.active:
-            self.close()
+        if not self.active:
+            return None
+        if self._input_key is not None:
+            self._input_key = None       # 输入模式: 先取消输入, 不关闭界面
             return False
-        return None
+        self.close()
+        return False
+
+    def handle_text(self, text: str) -> None:
+        """文本输入事件 (pygame TEXTINPUT, 由引擎转发)。"""
+        if self.active and self._input_key is not None:
+            self._input_text += text
 
     def handle_key(self, key) -> None:
-        """设置界面键盘: keybind 捕获 / 左右调节。"""
+        """设置界面键盘: 文本输入 / keybind 捕获 / 左右调节。"""
+        if self._input_key is not None:
+            # 文本输入模式
+            if key == pygame.K_BACKSPACE:
+                self._input_text = self._input_text[:-1]
+            elif key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                item = self._get_item(self._input_key)
+                if item and item.get("setter"):
+                    item["setter"](self._input_text)
+                    self.save()
+                self._input_key = None
+            return
         if self._binding is not None:
             if key in (pygame.K_ESCAPE,):
                 self._binding = None     # ESC 取消绑定 (由 on_escape 关闭界面)
@@ -400,6 +561,10 @@ class SettingsManager:
                     self._step(key, -1)
                 else:
                     self._step(key, 1)
+            elif kind == "input":
+                # 文本输入模式 (TEXTINPUT 事件追加, Enter 确认, ESC 取消)
+                self._input_key = key
+                self._input_text = ""    # 从空白开始输入
             elif kind == "keybind":
                 self._binding = key
                 self.engine.display.show_notice(
@@ -580,6 +745,30 @@ class SettingsManager:
             ui.text(surface, self.engine.get_font(17), txt,
                     color=(255, 210, 130), pos=(rect.right - 150,
                                                 rect.centery - 8))
+        elif kind == "input":
+            editing = (self._input_key == item["key"])
+            txt = self._input_text if editing else str(
+                value if value is not None else "")
+            font_i = self.engine.get_font(18)
+            # 值文本放在条目中部 (label 在顶部, 避免重叠)
+            if editing:
+                ui.text(surface, font_i, txt,
+                        color=(255, 230, 170),
+                        pos=(rect.x + 12, rect.y + 30))
+                tw = font_i.size(txt)[0]
+                cx = rect.x + 12 + tw + 2
+                if int(pygame.time.get_ticks() / 400) % 2 == 0:
+                    pygame.draw.rect(surface, (255, 210, 130),
+                                     (cx, rect.y + 30, 2, 18))
+                ui.text(surface, self.engine.get_font(14),
+                        "Enter 确认 · ESC 取消",
+                        color=(150, 150, 170),
+                        pos=(rect.right - 150, rect.y + 32))
+            else:
+                ui.text(surface, font_i,
+                        txt if txt else "点击输入…",
+                        color=(220, 220, 230) if txt else (140, 140, 155),
+                        pos=(rect.x + 12, rect.y + 30))
         elif kind == "button":
             pass
 

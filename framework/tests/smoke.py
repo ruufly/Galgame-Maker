@@ -964,7 +964,8 @@ def test_window_config():
     check("解析窗口标题", cfg.get("title") == "Galgame Maker 引擎演示",
           str(cfg))
     check("解析窗口尺寸",
-          int(cfg.get("width")) == 1280 and int(cfg.get("height")) == 720)
+          cfg.get("width") == "$res_w" and cfg.get("height") == "$res_h",
+          f"{cfg.get('width')}x{cfg.get('height')}")
     check("解析窗口图标", cfg.get("icon") == "materials/image/icon.png")
     check("解析 fps", int(cfg.get("fps")) == 60)
     check("解析退出确认配置", str(cfg.get("confirm_quit")) == "true"
@@ -2222,9 +2223,14 @@ def test_key_nav():
         # 无活动项时 Enter 忽略 (不确认)
         engine._handle_key(pygame.K_RETURN)
         check("无活动项 Enter 忽略", d.title_active and d.active_index == -1)
-        # 鼠标悬停同步活动项 (monkeypatch get_pos)
+        # 鼠标悬停同步活动项 (monkeypatch get_pos 返回窗口坐标)
+        def _win(p):
+            _w, _h = engine._window_size()
+            _s = min(_w / engine.width, _h / engine.height)
+            return (int(p[0] * _s), int(p[1] * _s))
+
         _orig_pos = pygame.mouse.get_pos
-        pygame.mouse.get_pos = lambda: d.selection_rects[1].center
+        pygame.mouse.get_pos = lambda: _win(d.selection_rects[1].center)
         try:
             d.update(0.016)
         finally:
@@ -2287,7 +2293,7 @@ def test_key_nav():
         check("ESC 菜单打开", engine.paused and d.selection_active)
         check("ESC 菜单初始无活动", d.active_index == -1)
         _orig = pygame.mouse.get_pos
-        pygame.mouse.get_pos = lambda: d.selection_rects[3].center
+        pygame.mouse.get_pos = lambda: _win(d.selection_rects[3].center)
         try:
             engine.update(0.016)   # paused 下仍同步
         finally:
@@ -3714,6 +3720,211 @@ def test_confirm():
             shutil.rmtree(sd, ignore_errors=True)
 
 
+def test_settings_custom():
+    print("== 设置自定义项 / 分辨率 / 文本输入 ==")
+    import shutil
+    import pygame
+    base = os.path.dirname(os.path.abspath(__file__))
+    sd = os.path.join(base, "save")
+    if os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    engine = GameEngine(640, 360, "test63")
+    d = engine.display
+    rt = engine.runtime
+    engine.project_dir = base
+    path = os.path.join(base, "_settings_custom_test.gal")
+    src = '''settings
+    title: "自定义设置"
+    setting my_slider
+        label: "自定滑条"
+        type: slider
+        var: my_val
+        min: 0
+        max: 100
+        step: 5
+        section: "自定义"
+    setting my_flag
+        label: "自定开关"
+        type: checkbox
+        var: my_flag
+        section: "自定义"
+    setting my_text
+        label: "自定输入"
+        type: input
+        var: my_name
+        default: "无名"
+        section: "自定义"
+    setting my_choice
+        label: "自定选择"
+        type: cycle
+        var: my_color
+        options: "红, 绿, 蓝"
+        section: "自定义"
+start:
+    text "ok"
+'''
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        rt.load_script(path)
+        s = engine.settings
+        # 自定义项注册 (var 绑定)
+        check("自定义 slider 注册", "my_slider" in s.items
+              and s.items["my_slider"]["kind"] == "slider"
+              and s.items["my_slider"]["min"] == 0
+              and s.items["my_slider"]["max"] == 100
+              and s.items["my_slider"]["step"] == 5,
+              str(s.items.get("my_slider")))
+        check("自定义 input 注册", s.items["my_text"]["kind"] == "input")
+        check("自定义 section", s.items["my_slider"]["section"] == "自定义")
+        # var 绑定读写
+        s.set("my_slider", 30)
+        check("var slider 写入", rt.vars.get("my_val") == 30.0,
+              str(rt.vars.get("my_val")))
+        check("var slider 读取", s.get("my_slider") == 30.0)
+        s.set("my_flag", True)
+        check("var checkbox 写入", rt.vars.get("my_flag") is True)
+        s.set("my_choice", "绿")
+        check("var cycle 写入", rt.vars.get("my_color") == "绿")
+        # 插件 register var 参数
+        engine.settings.register("plug_var", label="插件项", kind="slider",
+                                 var="plug_x", min=0, max=10, step=1,
+                                 section="自定义")
+        check("插件 var 注册", engine.settings.set("plug_var", 7)
+              and rt.vars.get("plug_x") == 7.0)
+        # 文本输入: 进入输入模式 -> 文本事件 -> Enter 确认
+        s.open()
+        engine.draw()
+        s._handle_click(s._tab_rects[5][1].center)   # 自定义栏
+        keys = s.visible_keys()
+        rects = s._item_rects()
+        in_idx = keys.index("my_text")
+        s._handle_click(rects[in_idx].center)
+        check("input 进入输入模式", s._input_key == "my_text")
+        s.handle_text("测试名")
+        s.handle_key(pygame.K_BACKSPACE)
+        s.handle_text("!")
+        s.handle_key(pygame.K_RETURN)
+        check("input 确认写入", s._input_key is None
+              and rt.vars.get("my_name") == "测试!",
+              str(rt.vars.get("my_name")))
+        # ESC 取消输入 (不关闭界面)
+        s._handle_click(rects[in_idx].center)
+        check("再次进入输入", s._input_key == "my_text")
+        engine.on_escape()
+        check("ESC 取消输入", s._input_key is None and s.active)
+        # 分辨率: 显示栏
+        s._handle_click(s._tab_rects[2][1].center)   # 显示栏
+        keys = s.visible_keys()
+        check("分辨率项存在", "resolution" in keys, str(keys))
+        s.set("resolution", "1600x900")
+        check("分辨率应用", engine.window_w == 1600
+              and engine.window_h == 900,
+              f"{engine.window_w}x{engine.window_h}")
+        # 全屏时设置分辨率: 记录尺寸, 关全屏后按分辨率显示
+        s.set("fullscreen", True)
+        check("全屏开启", engine.fullscreen)
+        s.set("resolution", "1280x720")
+        check("全屏时记录尺寸", engine.window_w == 1280
+              and engine.window_h == 720)
+        s.set("fullscreen", False)
+        check("关全屏按分辨率显示", not engine.fullscreen
+              and engine.window_w == 1280 and engine.window_h == 720)
+        engine.on_escape()   # 关闭设置
+    finally:
+        engine.quit()
+        import pygame as pg12
+        pg12.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
+
+
+def test_read_settings():
+    print("== 设置文件读取 (read_settings) ==")
+    import shutil
+    import json
+    base = os.path.dirname(os.path.abspath(__file__))
+    sd = os.path.join(base, "save")
+    if os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    engine = GameEngine(640, 360, "test64")
+    d = engine.display
+    rt = engine.runtime
+    engine.project_dir = base
+    path = os.path.join(base, "_read_settings_test.gal")
+    src = '''settings
+    setting bgm_volume
+        label: "音乐"
+        default: 0.8
+    setting my_val
+        label: "自定"
+        type: slider
+        var: my_val
+        min: 0
+        max: 10
+        step: 1
+        default: 3
+window
+    width: "$res_w"
+    height: "$res_h"
+start:
+    read_settings
+    text "ok"
+'''
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        rt.load_script(path)
+        # 手动写入设置文件 (文件可调节)
+        os.makedirs(os.path.join(base, "save"), exist_ok=True)
+        with open(os.path.join(base, "save", "settings.json"),
+                  "w", encoding="utf-8") as f:
+            json.dump({"bgm_volume": 0.4, "my_val": 7}, f,
+                      ensure_ascii=False)
+        rt.start()                    # 执行 read_settings
+        check("read_settings 读文件",
+              abs(rt.vars["bgm_volume"] - 0.4) < 0.01
+              and rt.vars["my_val"] == 7.0,
+              str(rt.vars))
+        check("音量同步", abs(engine.audio.bgm_volume - 0.4) < 0.01,
+              str(engine.audio.bgm_volume))
+        # 文件没有的项 -> 默认值
+        check("默认值应用", rt.vars["resolution"] == "1280x720"
+              and rt.vars["text_speed"] == 45.0,
+              str(rt.vars.get("resolution")))
+        # 窗口声明用变量 ($res_w/$res_h)
+        check("res 变量", rt.vars["res_w"] == 1280
+              and rt.vars["res_h"] == 720)
+        check("窗口按变量重建", engine.window_w == 1280
+              and engine.window_h == 720,
+              f"{engine.window_w}x{engine.window_h}")
+        # 无设置文件 -> 全部用默认值
+        os.remove(os.path.join(base, "save", "settings.json"))
+        engine2 = GameEngine(640, 360, "t65")
+        try:
+            engine2.project_dir = base
+            engine2.runtime.load_script(path)
+            engine2.runtime.start()
+            check("无文件用默认",
+                  abs(engine2.runtime.vars["bgm_volume"] - 0.8) < 0.01
+                  and engine2.runtime.vars["my_val"] == 3.0,
+                  str(engine2.runtime.vars))
+        finally:
+            engine2.quit()
+            import pygame as pg13
+            pg13.quit()
+    finally:
+        engine.quit()
+        import pygame as pg13b
+        pg13b.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
+
+
 def test_window_config_scaling():
     print("== 窗口配置与等比缩放 ==")
     import pygame
@@ -4122,6 +4333,18 @@ def main():
         test_confirm()
     except Exception as exc:
         print(f"  [ERROR] 询问对话框测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_settings_custom()
+    except Exception as exc:
+        print(f"  [ERROR] 设置自定义测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_read_settings()
+    except Exception as exc:
+        print(f"  [ERROR] 设置文件读取测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

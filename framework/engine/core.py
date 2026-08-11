@@ -267,13 +267,25 @@ class GameEngine:
         self.fullscreen = bool(fullscreen)
         self._rebuild_window()
 
+    def _window_size(self) -> tuple:
+        """当前窗口实际尺寸: 全屏用屏幕分辨率, 窗口模式用请求尺寸。
+
+        (dummy 等驱动 set_mode 返回尺寸可能不可靠, 窗口模式以请求为准)
+        """
+        if self.fullscreen:
+            try:
+                return self.screen.get_size()
+            except Exception:
+                pass
+        return (self.window_w, self.window_h)
+
     def to_logical(self, pos) -> tuple:
         """窗口坐标 -> 逻辑坐标 (内容等比缩放 letterbox 的逆映射)。
 
         命中检测/鼠标悬停全部基于逻辑坐标, 窗口缩放后依然准确。
         """
         try:
-            w, h = self.screen.get_size()
+            w, h = self._window_size()
             scale = min(w / self.width, h / self.height)
             tw, th = self.width * scale, self.height * scale
             ox, oy = (w - tw) / 2.0, (h - th) / 2.0
@@ -373,6 +385,10 @@ class GameEngine:
         elif event.type == pygame.VIDEORESIZE:
             # 用户拖拽窗口边缘: 记录新尺寸, 内容等比缩放 (letterbox)
             self.window_w, self.window_h = event.size
+        elif event.type == pygame.TEXTINPUT:
+            # 设置界面文本输入 (input 类型设置项)
+            if self.settings.active:
+                self.settings.handle_text(event.text)
         elif event.type == pygame.KEYDOWN:
             self._handle_key(event.key)
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
