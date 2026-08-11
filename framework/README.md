@@ -32,7 +32,7 @@ framework/
 │   └── transitions.py        背景过渡效果 (7 种 + 插件可注册)
 ├── plugins/                  插件目录 (自动装载)
 │   ├── shake.py              屏幕震动 + 白闪 (shake/flash 指令)
-│   ├── fps_overlay.py        FPS 浮层
+│   ├── debug_mode.py         调试模式 (快捷键切换, 开启显示 FPS 等)
 │   ├── scene_notice.py       场景切换通知
 │   ├── wipe_transition.py    擦除过渡
 │   ├── custom_actions.py     explode 动作 + do_action 指令 + wobble 立绘效果 +
@@ -44,12 +44,12 @@ framework/
 │   └── auto_skip.py          自动模式 (自动推进, 非正式界面自动暂停)
 │                               + 跳过剧情 (直达下一个选择支/结局)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 695 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 719 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 695 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 719 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -509,7 +509,7 @@ engine.to_logical(pos)               # 窗口坐标 -> 逻辑坐标
 plugins
     only: "shake, scene_notice"    # 只装载列出的
     # 或
-    except: "fps_overlay"          # 排除列出的
+    except: "debug_mode"          # 排除列出的
 ```
 
 ### 4.14 存档/结束/转场
@@ -707,12 +707,49 @@ confirm "再来一次？" yes "好的" no "算了" -> again   # 自定义按钮�
 **鼠标悬停优先**激活; Enter/空格/点击确认活动项 (无活动项时忽略);
 ESC 不干预确认框。
 
+**叠加退出确认**: 若当前已有其他确认框 (如设置/鉴赏中), 点关闭窗口
+会**再叠加一层退出确认** —— 确认才退出, 取消则恢复原来的确认框。
+
 相关 API:
 
 ```python
 engine.ask_confirm(text, yes_text, no_text, on_yes, on_no=None)
 # on_no: 点"否"时回调 (confirm DSL 用; 退出/读档确认不传则"否"无动作)
 ```
+
+### 4.18 快捷键系统 (keybinds)
+
+所有键盘事件统一由 `engine.keybinds` (`KeyBindManager`) 管理。
+每个命令含 **主键 (primary) + 副键 (alt) 两个槽位** (各绑一个键,
+可留空); 设置界面中同一命令的主/副键显示在同一行, 不同命令不同行。
+
+* 核心键位 (上下左右共 **8 个移动槽位** + 确认 + ESC):
+  `key_up`(上移, 主 up 副 w) / `key_down`(下移, down/s) /
+  `key_left`(左移, left/a) / `key_right`(右移, right/d) /
+  `key_confirm`(确认, return/space) / `key_escape`(菜单键, esc)
+* 自动生成设置项 ("按键"分栏), `setting.gal` 可直接引用调整
+  (如 `setting key_up` 调 label/section; 主副在同一项内, 一行显示)
+
+**插件注册** (自动生成设置项, 如 debug_mode 插件):
+
+```python
+engine.keybinds.register(
+    "debug_toggle",           # 唯一名 (同时是设置项 key)
+    "调试模式",                # 设置界面显示名
+    callback=lambda key: ...,  # 触发回调 (返回 False = 不消费该按键)
+    primary="f3",              # 主/副键 (键名串或 pygame 键常量, 可留空)
+)
+```
+
+* **录入**: 设置界面点击条目左半=主键槽, 右半=副键槽; 按任意键直接
+  绑定, Backspace 清空, ESC 取消; 空槽显示槽位名 ("主"/"副")
+* **冲突**: 绑定被其他命令占用时自动让位 (移除冲突键) 并弹出提示
+* 值持久化在 `save/settings.json`; 查询/设置:
+  `keybinds.get_key(name, "primary")` / `set_key(name, "primary", K)`
+
+**调试模式插件** (`debug_mode`): 注册 `debug_toggle` 快捷键
+(默认 F3, 设置界面可调整/留空), 切换调试模式; **开启时才显示**
+右上角 FPS / 窗口分辨率 / 当前标签等调试信息。
 
 ---
 
@@ -856,7 +893,7 @@ engine.display.register_slot_thumbnail_provider(fn)   # 槽位缩略图绘制钩
 | 插件 | 提供 |
 | --- | --- |
 | shake | `shake`/`flash` 指令, 屏幕震动与白闪 |
-| fps_overlay | 右上角 FPS 浮层 |
+| debug_mode | 调试模式 (快捷键切换, 开启显示 FPS) |
 | scene_notice | 场景切换时左上角通知 |
 | wipe_transition | `bg ... with wipe` 擦除过渡 |
 | custom_actions | `explode` 动作 + `do_action` 指令 + wobble 立绘效果 + wave 文字模式 |
@@ -1039,14 +1076,16 @@ engine.ui.dim_overlay(surface, alpha=150)
 * **主循环隔离**: 每帧 update/draw/事件处理包在 try/except 中
 * **全局兜底**: `sys.excepthook` 捕获主线程未捕获异常
 * **温和弹窗**: 错误面板 (摘要 + 日志路径), 三按钮: 继续/复制/退出
-* **日志文件**: `<项目目录>/logs/errors.log` (时间戳 + 错误编号)
+* **日志文件**: 所有日志 (INFO/WARN/ERROR) 同时输出 console 与
+  `<项目目录>/logs/engine.log`; 错误详情另写 `logs/errors.log`
 
-**错误分级**: `warn` 仅记录 (未知指令/资源缺失); `error` 记录+弹窗
-(跳转到不存在标签/表达式求值失败/脚本插件异常)。
+**错误分级**: `warn` 仅记录 + **游戏界面顶部小提示** (提醒检查日志,
+节流 2 秒, 不阻塞); `error` 记录 + 弹窗 (跳转到不存在标签/表达式
+求值失败/脚本插件异常)。
 
 ---
 
-## 12. 测试 (695 项断言)
+## 12. 测试 (719 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -1156,6 +1195,10 @@ py -3.10 framework/tests/smoke.py
 | 34. 设置增强 | 分辨率设置 (全屏联动) + 文本输入类型 input (TEXTINPUT) + settings 块自定义项 (var 绑定变量/类型/范围/步长/选项) + 插件 register var 参数 + 测试增至 689 项 |
 | 35. 设置细节 | input 文本与标签布局错开 (不再重叠) + 主角名字两种方式统一写入 $player_name |
 | 36. 设置文件化 | read_settings 指令 (读 save/settings.json -> 变量, 缺省用默认值) + window 声明支持 $变量 (如 $res_w/$res_h) + 内置音量/分辨率等值存引擎变量, 语音全局读变量 + 测试增至 695 项 |
+| 37. 键盘系统 | engine/keybind.py 快捷键注册表 (插件 API 自动生成设置项) + 键位多键录入 (主/副)/留空/冲突自动让位提示 + 滑条可拖动 + cycle 箭头多边形绘制 + 跳过剧情不播动画 (瞬间到位+清理残留) + 测试增至 706 项 |
+| 38. 键盘/确认完善 | 键位主/副双槽 (8 个移动槽位, 一行显示, 单键绑定/清空) + 设置/鉴赏界面确认框黑幕修复 + 已有确认框时关窗口叠加退出确认 (取消恢复) + 测试增至 715 项 |
+| 39. 键盘/调试收尾 | ESC 注册进快捷键系统 (key_escape 可配置) + fps_overlay 改名 debug_mode 插件 (快捷键切换调试模式, 开启才显示 FPS) + keybind UI 双槽美化 + 测试增至 714 项 |
+| 40. 设置/日志完善 | cycle 点击箭头切换 (中间不切换) + 退出全屏恢复设置分辨率 (VIDEORESIZE 全屏不污染) + 日志 console+文件双写 + WARN 游戏界面小提示 + 测试增至 719 项 |
 
 ---
 

@@ -355,10 +355,9 @@ class GalleryPlugin(Plugin):
     def _draw_gallery(self, surface):
         ui = self.engine.ui
         w, h = surface.get_size()
-        # 确认框/错误弹窗打开时: 只画暗化底, 让引擎覆盖层正常显示
+        # 确认框/错误弹窗打开时: 完全让出绘制 (确认框自带遮罩)
         if (self.engine.display.confirm_active
                 or self.engine.display.error_active):
-            ui.dim_overlay(surface, 120)
             return
         # 界面背景图 (cover 铺满) / 纯色底
         bg_img = self._load_img(self._cfg.get("bg"))
@@ -619,10 +618,9 @@ class GalleryPlugin(Plugin):
         """CG 大图查看: 全屏黑底 + 等比放大图; 点击轮播形态, 播完退出。"""
         ui = self.engine.ui
         w, h = surface.get_size()
-        # 确认框/错误弹窗打开时: 只画暗化底, 让引擎覆盖层正常显示
+        # 确认框/错误弹窗打开时: 完全让出绘制 (确认框自带遮罩)
         if (self.engine.display.confirm_active
                 or self.engine.display.error_active):
-            ui.dim_overlay(surface, 120)
             return
         v = self._view
         scene = self.engine.runtime.scenes.get(v["scene"], {})

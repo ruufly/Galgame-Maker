@@ -696,6 +696,9 @@ class Runtime:
             if idx + 1 < len(args):
                 mode = args[idx + 1]
             del args[idx:idx + 2]
+        if self.skip_mode:
+            # 跳过模式: 背景瞬间切换 (不播放过渡动画)
+            effect = None
         if not args:
             return None
         target = self._interp(args[0])
@@ -789,6 +792,9 @@ class Runtime:
             idx = args.index("with")
             if idx + 1 < len(args):
                 props["effect"] = args[idx + 1]
+        if self.skip_mode:
+            # 跳过模式: 立绘瞬间显示 (不播放登场动画)
+            props.pop("effect", None)
         # 角色立绘: show <角色id> [立绘名] [at pos] [with effect]
         if sid in self.characters:
             char = self.characters[sid]
@@ -845,6 +851,8 @@ class Runtime:
             idx = stmt.args.index("with")
             if idx + 1 < len(stmt.args):
                 effect = stmt.args[idx + 1]
+        if self.skip_mode:
+            effect = None        # 跳过模式: 瞬间隐藏 (不播放退场动画)
         if sid in self.engine.display.sprites:
             self.engine.display.hide_sprite(sid, effect)
         else:
@@ -911,6 +919,8 @@ class Runtime:
                 duration = float(rest[0])
             except ValueError:
                 pass
+        if self.skip_mode:
+            duration = 0.0        # 跳过模式: 瞬间移动 (无动画)
         if "ease" in rest:
             idx = rest.index("ease")
             if idx + 1 < len(rest):
@@ -941,6 +951,8 @@ class Runtime:
                 duration = float(rest[0])
             except ValueError:
                 pass
+        if self.skip_mode:
+            duration = 0.0        # 跳过模式: 瞬间旋转 (无动画)
         if "ease" in rest:
             idx = rest.index("ease")
             if idx + 1 < len(rest):

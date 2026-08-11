@@ -98,6 +98,7 @@ class GameEngine:
         self.confirm_load_no = "取消"
         self._confirm_callback = None
         self._confirm_no_callback = None
+        self._stacked_confirm = None   # 多层确认: 叠加退出确认时保存原框
         self.paused = False          # 系统菜单打开时暂停游戏
 
         # 键盘导航键位 (window 配置可自定义: key_up/key_down/key_confirm)
@@ -160,6 +161,15 @@ class GameEngine:
         # 设置系统 (注册表 + 设置界面; 需在 actions 之后, 注册 settings_open)
         from framework.engine.settings import SettingsManager
         self.settings = SettingsManager(self)
+
+        # 快捷键注册表 (归并键盘事件; 需在 settings 之后, 自动生成设置项)
+        from framework.engine.keybind import KeyBindManager
+        self.keybinds = KeyBindManager(self)
+
+        # WARN 日志 -> 游戏界面小提示 (提醒玩家检查日志)
+        from framework.engine import log as _log
+        self._last_warn_notice = 0.0
+        _log.on_warning(self._on_log_warning)
 
     # ==================================================================
     # 字体
@@ -263,7 +273,11 @@ class GameEngine:
         self._rebuild_window()
 
     def set_fullscreen(self, fullscreen: bool) -> None:
-        """切换全屏模式 (内容等比缩放, 保持比例)。"""
+        """切换全屏模式 (内容等比缩放, 保持比例)。
+
+        window_w/h 始终为设置中的窗口分辨率 (全屏期间的 VIDEORESIZE
+        不会污染它), 退出全屏即按该分辨率显示。
+        """
         self.fullscreen = bool(fullscreen)
         self._rebuild_window()
 
@@ -341,6 +355,9 @@ class GameEngine:
         script_path = os.path.abspath(script_path)
         self.script_dir = os.path.dirname(script_path)
         self.project_dir = self.script_dir
+        # 所有日志同时写入 <项目目录>/logs/engine.log
+        log.set_log_file(os.path.join(self.project_dir, "logs",
+                                      "engine.log"))
 
         if self.autoload_plugins:
             # 脚本顶层的 plugins 块可指定装载哪些插件
@@ -383,52 +400,53 @@ class GameEngine:
         if event.type == pygame.QUIT:
             self.request_quit()   # 右上角关闭按钮 -> 退出确认
         elif event.type == pygame.VIDEORESIZE:
-            # 用户拖拽窗口边缘: 记录新尺寸, 内容等比缩放 (letterbox)
-            self.window_w, self.window_h = event.size
+            # 用户拖拽窗口边缘: 记录新尺寸 (全屏模式不受拖拽影响)
+            if not self.fullscreen:
+                self.window_w, self.window_h = event.size
         elif event.type == pygame.TEXTINPUT:
             # 设置界面文本输入 (input 类型设置项)
             if self.settings.active:
                 self.settings.handle_text(event.text)
+        elif event.type == pygame.MOUSEMOTION:
+            # 设置界面滑条拖动
+            if self.settings.active:
+                self.settings.handle_motion(self.to_logical(event.pos))
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.settings.active:
+                self.settings.handle_motion_end()
         elif event.type == pygame.KEYDOWN:
             self._handle_key(event.key)
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 窗口坐标 -> 逻辑坐标 (缩放后命中检测依然准确)
             self.on_click(self.to_logical(event.pos))
 
+    def _key_confirm_action(self, key) -> bool:
+        """确认键回调: 确认框/菜单/选择支确认活动项, 否则推进文本。"""
+        d = self.display
+        if d.confirm_active:
+            if d.active_index >= 0 and d.confirm_rects:
+                self.on_click(d.confirm_rects[d.active_index].center)
+            return True
+        if d.selection_active:
+            if d.active_index >= 0 and d.selection_rects:
+                self.on_click(d.selection_rects[d.active_index].center)
+            return True
+        if d.choice_active:
+            if d.active_index >= 0 and d.choice_rects:
+                self.on_click(d.choice_rects[d.active_index].center)
+            return True
+        # 无活动界面: 推进文本
+        self.on_click((self.width // 2, self.height // 2))
+        return True
+
     def _handle_key(self, key) -> None:
-        # 设置界面: 键位绑定捕获 / 左右调节
+        # 设置界面: 键位绑定捕获 / 左右调节 / 文本输入
         if self.settings.active:
             self.settings.handle_key(key)
             return
-        if key in self.key_left:
-            self.display.move_active(-1)
-        elif key in self.key_right:
-            self.display.move_active(1)
-        elif key in self.key_up:
-            self.display.move_active(-1)
-        elif key in self.key_down:
-            self.display.move_active(1)
-        elif key in self.key_confirm:
-            d = self.display
-            if d.confirm_active:
-                # 确认活动项 (无活动项时忽略)
-                if d.active_index >= 0 and d.confirm_rects:
-                    self.on_click(d.confirm_rects[d.active_index].center)
-                return
-            if d.selection_active:
-                # 确认活动选项 (无活动项时忽略)
-                if d.active_index >= 0 and d.selection_rects:
-                    self.on_click(d.selection_rects[d.active_index].center)
-                return
-            elif d.choice_active:
-                if d.active_index >= 0 and d.choice_rects:
-                    self.on_click(d.choice_rects[d.active_index].center)
-                return
-            else:
-                # 无活动界面: 推进文本
-                self.on_click((self.width // 2, self.height // 2))
-        elif key == pygame.K_ESCAPE:
-            self.on_escape()
+        # 其余按键统一走快捷键注册表
+        # (key_up/down/confirm/left/right/escape + 插件注册的快捷键)
+        self.keybinds.press(key)
 
     def on_escape(self) -> None:
         """ESC: 逐层关闭/打开菜单。
@@ -770,9 +788,9 @@ class GameEngine:
         """预解析脚本顶层的 plugins 块 (插件装载配置)。
 
         plugins
-            only: "shake, fps_overlay"    # 只装载列出的插件 (文件名)
+            only: "shake, debug_mode"    # 只装载列出的插件 (文件名)
             # 或
-            except: "fps_overlay"         # 排除列出的插件
+            except: "debug_mode"         # 排除列出的插件
         """
         try:
             from framework.engine.loader import load_script_with_imports
@@ -845,15 +863,14 @@ class GameEngine:
         self.confirm_load_text = self.dialogs["load"]["text"]
         self.confirm_load_yes = self.dialogs["load"]["yes"]
         self.confirm_load_no = self.dialogs["load"]["no"]
-        # 键盘导航键位 (key_up/key_down/key_confirm/key_left/key_right)
-        for attr, cfg_key in (("key_up", "key_up"), ("key_down", "key_down"),
-                              ("key_confirm", "key_confirm"),
-                              ("key_left", "key_left"),
-                              ("key_right", "key_right")):
+        # 键盘导航键位 (key_up/key_down/key_confirm/key_left/key_right,
+        # 由快捷键注册表统一管理)
+        for cfg_key in ("key_up", "key_down", "key_confirm",
+                        "key_left", "key_right"):
             if cfg_key in cfg:
                 parsed = self._parse_keys(cfg[cfg_key])
                 if parsed:
-                    setattr(self, attr, parsed)
+                    self.keybinds.set_keys(cfg_key, parsed)
         if "ui_click_sound" in cfg:
             self._default_ui_click = str(cfg["ui_click_sound"])
             self.ui_click_sound = self._default_ui_click
@@ -991,9 +1008,49 @@ class GameEngine:
         self.paused = False
         return True
 
+    def _on_log_warning(self, msg: str) -> None:
+        """WARN 日志: 游戏界面顶部小提示 (节流), 提醒检查日志文件。"""
+        import time
+        now = time.time()
+        if now - self._last_warn_notice < 2.0:
+            return
+        self._last_warn_notice = now
+        try:
+            self.display.show_notice(
+                f"警告：{str(msg)[:44]}（详见 logs/engine.log）", 2.5)
+        except Exception:
+            pass
+
     def request_quit(self) -> None:
-        """请求退出: 按 quit 对话框配置弹确认, 否则直接退出。"""
+        """请求退出: 若已有其他确认框, 叠加一层退出确认 (取消恢复原框);
+        否则按 quit 对话框配置。"""
+        d = self.display
+        if d.confirm_active:
+            # 多层确认: 记住当前框, 弹退出确认; 取消时恢复
+            self._stacked_confirm = {
+                "text": d.confirm_text,
+                "yes": d.confirm_yes,
+                "no": d.confirm_no,
+                "cb": self._confirm_callback,
+                "cb_no": self._confirm_no_callback,
+                "active": d.active_index,
+            }
+            dlg = self.dialogs["quit"]
+            self.ask_confirm(dlg["text"], dlg["yes"], dlg["no"],
+                             self.quit,
+                             on_no=self._restore_confirm)
+            return
         self.ask_dialog("quit", self.quit)
+
+    def _restore_confirm(self) -> None:
+        """取消叠加的退出确认: 恢复之前的确认框。"""
+        st = getattr(self, "_stacked_confirm", None)
+        self._stacked_confirm = None
+        if st:
+            self._confirm_callback = st["cb"]
+            self._confirm_no_callback = st["cb_no"]
+            self.display.show_confirm(st["text"], st["yes"], st["no"])
+            self.display.active_index = st["active"]
 
     # ==================================================================
     # 错误处理

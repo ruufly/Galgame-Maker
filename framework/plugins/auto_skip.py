@@ -185,6 +185,13 @@ class AutoSkipPlugin(Plugin):
         finally:
             rt.skip_mode = False
             self._skip_running = False
+            # 清理跳过期间可能残留的动画状态 (背景过渡/立绘效果),
+            # 避免画面鬼畜/卡死
+            dd = self.engine.display
+            dd._transition = None
+            dd.bg_fading = False
+            for spr in dd.sprites.values():
+                spr.effect = None
         d = engine.display
         if d.choice_active:
             engine.display.show_notice("已跳转到选择支", 1.2)

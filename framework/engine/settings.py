@@ -41,16 +41,19 @@ class SettingsManager:
         self._current_section = None   # 当前分栏 (None=首个)
         self._back_rect = None   # 返回按钮 rect (点击判定)
         self._tab_rects = []     # [(分栏名, rect)]
-        self._binding = None     # keybind 等待捕获的 key
+        self._binding = None     # keybind 等待捕获 (记录绑定的设置项 key)
+        self._binding_keys = []  # keybind 录入中的按键列表 (支持多键)
         self._input_key = None   # input 文本输入中的 key (None=未输入)
         self._input_text = ""
+        self._dragging = None    # 滑条拖动中的设置项 key
+        self._drag_rect = None   # 拖动中的滑条条目 rect
         self._hover = -1         # 当前悬停条目索引
         self._img_cache = {}
 
         self._register_builtins()
-        # 初始化时不应用默认值 (窗口保持构造尺寸; 脚本开头 read_settings
-        # 会按文件/默认值统一应用)
-        self.load(apply_defaults=False)
+        # 设置加载统一由 read_settings 指令 / 显式 load() 完成:
+        # __init__ 时 project_dir 尚未就绪, 自动读文件可能误读
+        # cwd 残留 (如根目录 save/settings.json) 并意外重建窗口。
 
         # 交互钩子
         engine.events.on("draw_overlay", self._draw)
@@ -171,16 +174,8 @@ class SettingsManager:
                       options=["阿明", "小明", "未命名"],
                       var="player_name", default="未命名",
                       section="游戏")
-        for key, label in (("key_up", "上移键"),
-                           ("key_down", "下移键"),
-                           ("key_confirm", "确认键")):
-            self.register(key, label, "keybind",
-                          getter=lambda k=key: self._keys_to_str(
-                              getattr(self.engine, k)),
-                          setter=lambda v, k=key: setattr(
-                              self.engine, k,
-                              self.engine._parse_keys(v)),
-                          section="按键")
+        # 键位 (key_up/key_down/key_confirm/key_left/key_right) 由
+        # KeyBindManager 注册 (自动生成设置项, 支持多键/冲突处理)
 
     def _apply_resolution_item(self, v):
         """resolution 变量写入后: 更新窗口尺寸 + 写入 res_w/res_h 变量。"""
@@ -478,8 +473,41 @@ class SettingsManager:
         if self.active and self._input_key is not None:
             self._input_text += text
 
-    def handle_key(self, key) -> None:
-        """设置界面键盘: 文本输入 / keybind 捕获 / 左右调节。"""
+    def handle_motion(self, pos) -> None:
+        """鼠标移动 (引擎转发): 滑条拖动中实时更新值。"""
+        if self.active and self._dragging is not None:
+            item = self._get_item(self._dragging)
+            if item and self._drag_rect:
+                self._click_slider(item, pos, self._drag_rect)
+
+    def handle_motion_end(self) -> None:
+        """鼠标释放: 结束滑条拖动。"""
+        self._dragging = None
+        self._drag_rect = None
+
+    def handle_key(self, key) -> bool:
+        """设置界面键盘: keybind 录入 (键盘完全阻滞) / 文本输入 /
+        左右调节 / ESC 关闭。返回 True=已消费。"""
+        if self._binding is not None:
+            # 键位录入: 键盘完全阻滞, 按任意键 (含 ESC) 作为绑定键;
+            # Backspace 清空, Enter 保持当前完成
+            name, slot = self._binding
+            if key == pygame.K_BACKSPACE:
+                self.engine.keybinds.set_key(name, slot, None)
+                self.save()
+            elif key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                pass
+            else:
+                self.engine.keybinds.set_key(name, slot, key)
+                self.save()
+            self._binding = None
+            return True
+        if key == pygame.K_ESCAPE:
+            if self._input_key is not None:
+                self._input_key = None         # 取消文本输入
+            else:
+                self.engine.on_escape()        # 关闭设置界面
+            return True
         if self._input_key is not None:
             # 文本输入模式
             if key == pygame.K_BACKSPACE:
@@ -490,28 +518,14 @@ class SettingsManager:
                     item["setter"](self._input_text)
                     self.save()
                 self._input_key = None
-            return
-        if self._binding is not None:
-            if key in (pygame.K_ESCAPE,):
-                self._binding = None     # ESC 取消绑定 (由 on_escape 关闭界面)
-                return
-            try:
-                name = pygame.key.name(key)
-            except Exception:
-                name = str(key)
-            item = self._get_item(self._binding)
-            if item and item.get("setter"):
-                item["setter"](name)
-                self.save()
-            self.engine.display.show_notice(
-                f"{item['label'] if item else ''} -> {name}", 1.2)
-            self._binding = None
-            return
+            return True
         if key in (pygame.K_LEFT, pygame.K_RIGHT) and self._hover >= 0:
             keys = self.visible_keys()
             if 0 <= self._hover < len(keys):
                 self._step(keys[self._hover],
                            -1 if key == pygame.K_LEFT else 1)
+            return True
+        return False
 
     def _step(self, key, delta: int) -> None:
         """方向键调节 slider/cycle。"""
@@ -553,22 +567,38 @@ class SettingsManager:
             kind = item["kind"]
             if kind == "slider":
                 self._click_slider(item, pos, rect)
+                self._dragging = key          # 按住可拖动
+                self._drag_rect = rect
             elif kind == "checkbox":
                 self.set(key, not bool(item["getter"]()))
             elif kind == "cycle":
-                # 左右半区切换
-                if pos[0] < rect.centerx:
+                # 点击左右箭头 (三角形区域) 切换; 中间文字不切换
+                cy = rect.centery + 4
+                if (abs(pos[0] - (rect.right - 64)) <= 16
+                        and abs(pos[1] - cy) <= 16):
                     self._step(key, -1)
-                else:
+                elif (abs(pos[0] - (rect.right - 20)) <= 16
+                      and abs(pos[1] - cy) <= 16):
                     self._step(key, 1)
             elif kind == "input":
                 # 文本输入模式 (TEXTINPUT 事件追加, Enter 确认, ESC 取消)
                 self._input_key = key
                 self._input_text = ""    # 从空白开始输入
             elif kind == "keybind":
-                self._binding = key
+                # 点击主/副槽位框 (键名文字处) 触发; 空白区域不进入录入
+                slot = None
+                sx = rect.x + 12
+                sy = rect.y + 30
+                for s in ("primary", "alt"):
+                    if pygame.Rect(sx, sy, 60, 24).collidepoint(pos):
+                        slot = s
+                        break
+                    sx += 66
+                if slot is None:
+                    return
+                self._binding = (key, slot)
                 self.engine.display.show_notice(
-                    f"按下新按键 (ESC 取消)", 2.0)
+                    "按下按键 (Backspace 清空 · Enter 保持)", 2.0)
             elif kind == "button" and item.get("on_click"):
                 try:
                     item["on_click"](self.engine)
@@ -626,10 +656,10 @@ class SettingsManager:
             return
         ui = self.engine.ui
         w, h = surface.get_size()
-        # 确认框/错误弹窗打开时: 只画暗化底, 让引擎覆盖层正常显示
+        # 确认框/错误弹窗打开时: 完全让出绘制 (确认框自带遮罩,
+        # 叠加暗化会显得过黑)
         if (self.engine.display.confirm_active
                 or self.engine.display.error_active):
-            ui.dim_overlay(surface, 120)
             return
         ui.dim_overlay(surface, 150)
         panel = self._panel()
@@ -734,17 +764,47 @@ class SettingsManager:
                         color=(255, 255, 255), center=box.center)
         elif kind == "cycle":
             txt = str(value if value is not None else "")
-            ui.text(surface, font, "◀", color=(200, 200, 210),
-                    center=(rect.right - 64, rect.centery + 4))
+            # 左右箭头用多边形绘制 (不依赖字体符号)
+            cy = rect.centery + 4
+            pygame.draw.polygon(
+                surface, (200, 200, 210),
+                [(rect.right - 64 - 6, cy), (rect.right - 64 + 4, cy - 6),
+                 (rect.right - 64 + 4, cy + 6)])
             ui.text(surface, font, txt, color=(255, 230, 170),
-                    center=(rect.centerx, rect.centery + 4))
-            ui.text(surface, font, "▶", color=(200, 200, 210),
-                    center=(rect.right - 20, rect.centery + 4))
+                    center=(rect.centerx, cy))
+            pygame.draw.polygon(
+                surface, (200, 200, 210),
+                [(rect.right - 20 + 6, cy), (rect.right - 20 - 4, cy - 6),
+                 (rect.right - 20 - 4, cy + 6)])
         elif kind == "keybind":
-            txt = str(value if value is not None else "未设置")
-            ui.text(surface, self.engine.get_font(17), txt,
-                    color=(255, 210, 130), pos=(rect.right - 150,
-                                                rect.centery - 8))
+            kb = self.engine.keybinds
+            name = item["key"]
+            editing = (self._binding is not None
+                       and self._binding[0] == name)
+            sx = rect.x + 12
+            sy = rect.y + 30          # label 下方 (条目下半部)
+            for slot, sname in (("primary", "主"), ("alt", "副")):
+                key = kb.get_key(name, slot)
+                active = editing and self._binding[1] == slot
+                box = pygame.Rect(sx, sy, 60, 24)
+                ui.panel(surface, box,
+                         bg_color=(*(90, 70, 60), 240) if active
+                         else (45, 45, 64),
+                         border_color=(255, 210, 130) if active
+                         else (110, 110, 140),
+                         border_width=2, radius=6)
+                # 框内文字: 键名 或 槽位名 (未绑定时)
+                shown = (pygame.key.name(key) if key is not None
+                         else sname)
+                ui.text(surface, self.engine.get_font(14), shown,
+                        color=(255, 230, 170) if key is not None
+                        else (150, 150, 165),
+                        center=box.center)
+                sx += 60 + 6
+            if editing:
+                ui.text(surface, self.engine.get_font(13),
+                        "按下按键…", color=(170, 170, 190),
+                        pos=(sx + 2, sy + 5))
         elif kind == "input":
             editing = (self._input_key == item["key"])
             txt = self._input_text if editing else str(

@@ -1638,17 +1638,17 @@ def test_plugins_config():
     plugins_dir = os.path.join(_ROOT, "framework", "plugins")
     demo = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
 
-    # 预解析: demo 用 except 排除 fps_overlay
+    # 预解析: demo 未写 plugins 块 -> 自动装载全部插件
     engine = GameEngine(640, 360, "test31")
     cfg = engine._extract_plugins_config(demo)
-    check("解析 except 配置", cfg == {"except": ["fps_overlay"]}, str(cfg))
+    check("解析插件配置", cfg == {}, str(cfg))
     mods = engine.plugins.discover(plugins_dir, cfg)
-    check("except 排除生效",
-          "gm_plugin_fps_overlay" not in mods
+    check("插件全部装载",
+          "gm_plugin_debug_mode" in mods
           and "gm_plugin_shake" in mods
           and "gm_plugin_custom_actions" in mods,
           str(mods))
-    check("except 后指令注册", engine.commands.has("shake")
+    check("插件指令注册", engine.commands.has("shake")
           and engine.commands.has("do_action"))
     engine.plugins.unload_all()
     engine.quit()
@@ -1691,8 +1691,7 @@ def test_imports():
     tops = [s.op for s in script.statements]
     check("顶层声明合并",
           "style" in tops and "char" in tops and "scene" in tops
-          and "selection_style" in tops and "plugins" in tops
-          and "window" in tops,
+          and "selection_style" in tops and "window" in tops,
           str(tops))
     # import 语句本身已展开 (不留在顶层)
     check("import 已展开", "import" not in tops, str(tops))
@@ -2595,7 +2594,7 @@ def test_namespaces():
               "shake" in rt.using_ns and "custom_actions" in rt.using_ns,
               str(sorted(rt.using_ns)))
         engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"),
-                                {"except": ["fps_overlay"]})
+                                {"except": ["debug_mode"]})
         # 插件指令注册在插件命名空间 (插件文件名)
         check("插件指令带命名空间",
               engine.commands.has("shake", "shake")
@@ -2711,7 +2710,7 @@ def test_plugin_cmd():
     try:
         rt.load_script(demo)
         engine.plugins.discover(os.path.join(_ROOT, "framework", "plugins"),
-                                {"except": ["fps_overlay"]})
+                                {"except": ["debug_mode"]})
         # 卸载
         rt._cmd_plugin(Statement(op="plugin", args=["unload", "shake"],
                                  line=0))
@@ -3542,10 +3541,22 @@ game_start:
         rects = s._item_rects()
         key_idx = keys.index("key_up")
         s._handle_click(rects[key_idx].center)
-        check("keybind 捕获态", s._binding == "key_up")
-        s.handle_key(pygame.K_a)
-        check("keybind 绑定", s._binding is None
-              and pygame.K_a in engine.key_up,
+        # 主键槽 (点击槽位框中心)
+        s._handle_click((rects[key_idx].x + 42, rects[key_idx].y + 42))
+        check("keybind 主槽捕获", s._binding == ("key_up", "primary"))
+        s.handle_key(pygame.K_a)          # 单键直接绑定主键
+        check("keybind 主键绑定", s._binding is None
+              and engine.keybinds.get_key("key_up", "primary")
+              == pygame.K_a)
+        # 副键槽 (点击槽位框中心)
+        s._handle_click((rects[key_idx].x + 108, rects[key_idx].y + 42))
+        check("keybind 副槽捕获", s._binding == ("key_up", "alt"))
+        s.handle_key(pygame.K_w)
+        check("keybind 副键绑定", s._binding is None
+              and engine.keybinds.get_key("key_up", "alt")
+              == pygame.K_w)
+        check("主副合并", pygame.K_a in engine.key_up
+              and pygame.K_w in engine.key_up,
               str([pygame.key.name(k) for k in engine.key_up]))
         # 返回按钮关闭
         engine.on_click(s._back_rect.center)
@@ -3710,6 +3721,25 @@ def test_confirm():
         engine.on_click(d.confirm_rects[1].center)   # 否
         check("退出确认否无动作", engine.quit_flag is False
               and not d.confirm_active)
+        # 已有其他确认框时关窗口 -> 叠加退出确认; 取消恢复原框
+        engine._orig_ok = False
+        engine.ask_confirm("原确认框", "好", "不要",
+                           lambda: setattr(engine, "_orig_ok", True))
+        engine.request_quit()                    # 模拟关闭窗口
+        check("叠加退出确认", d.confirm_active
+              and d.confirm_text == "确定要退出游戏吗？",
+              str(d.confirm_text))
+        engine.on_click(d.confirm_rects[1].center)   # 取消
+        check("取消恢复原框", d.confirm_active
+              and d.confirm_text == "原确认框"
+              and d.confirm_yes == "好",
+              f"{d.confirm_text}/{d.confirm_yes}")
+        # 再次关窗口 -> 确认退出
+        engine.request_quit()
+        engine.on_click(d.confirm_rects[0].center)   # 确认退出
+        check("确认退出关闭", not d.confirm_active
+              and engine._orig_ok is False
+              and engine.running is False)
     finally:
         engine.quit()
         import pygame as pg11
@@ -3830,6 +3860,18 @@ start:
         s.set("fullscreen", False)
         check("关全屏按分辨率显示", not engine.fullscreen
               and engine.window_w == 1280 and engine.window_h == 720)
+        # cycle: 点击箭头切换, 中间文字不切换
+        s._handle_click(s._tab_rects[5][1].center)    # 自定义栏
+        keys = s.visible_keys()
+        rects = s._item_rects()
+        cy_idx = keys.index("my_choice")
+        before = engine.runtime.vars.get("my_color")
+        s._handle_click((rects[cy_idx].centerx, rects[cy_idx].y + 31))
+        check("cycle 中间不切换",
+              engine.runtime.vars.get("my_color") == before)
+        s._handle_click((rects[cy_idx].right - 20, rects[cy_idx].y + 31))
+        check("cycle 右箭头切换",
+              engine.runtime.vars.get("my_color") != before)
         engine.on_escape()   # 关闭设置
     finally:
         engine.quit()
@@ -3921,6 +3963,122 @@ start:
         pg13b.quit()
         if os.path.isfile(path):
             os.remove(path)
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
+
+
+def test_keybinds():
+    print("== 快捷键系统 (keybinds) ==")
+    import shutil
+    import pygame
+    base = os.path.dirname(os.path.abspath(__file__))
+    sd = os.path.join(base, "save")
+    if os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    engine = GameEngine(640, 360, "test66")
+    d = engine.display
+    rt = engine.runtime
+    engine.project_dir = base
+    try:
+        kb = engine.keybinds
+        check("核心绑定", "key_up" in kb.bindings
+              and "key_confirm" in kb.bindings
+              and "key_escape" in kb.bindings)
+        check("ESC 注册", pygame.K_ESCAPE in kb.get_keys("key_escape"))
+        # 主/副槽位分离 (8 个移动键槽位)
+        check("主副槽位", kb.get_key("key_up", "primary") == pygame.K_UP
+              and kb.get_key("key_up", "alt") == pygame.K_w)
+        check("主副合并", set(kb.get_keys("key_up"))
+              == {pygame.K_UP, pygame.K_w})
+        # 插件注册 API (primary/alt) + press 分发
+        fired = []
+        kb.register("test_action", "测试动作",
+                    lambda key: fired.append(key),
+                    primary="f9", alt="f10")
+        check("插件注册", "test_action" in kb.bindings
+              and kb.press(pygame.K_F9) is True
+              and kb.press(pygame.K_F10) is True
+              and fired == [pygame.K_F9, pygame.K_F10])
+        check("设置项自动生成",
+              "test_action" in engine.settings.items
+              and engine.settings.items["test_action"]["kind"] == "keybind"
+              and engine.settings.items["test_action"]["section"] == "按键",
+              str(engine.settings.items.get("test_action")))
+        # 冲突: 绑定被占用 -> 自动让位 + 提示
+        kb.set_key("key_up", "primary", pygame.K_a)
+        kb.set_key("test_action", "primary", pygame.K_a)
+        check("冲突让位",
+              kb.get_key("key_up", "primary") is None
+              and kb.get_key("test_action", "primary") == pygame.K_a,
+              str(kb.get_key("key_up", "primary")))
+        # 留空
+        kb.set_key("test_action", "primary", None)
+        check("留空", kb.get_key("test_action", "primary") is None)
+        # 键名串解析 (兼容 set_keys)
+        kb.set_keys("key_up", "up, w")
+        check("键名串解析", pygame.K_UP in kb.get_keys("key_up")
+              and pygame.K_w in kb.get_keys("key_up"),
+              str([pygame.key.name(k) for k in kb.get_keys("key_up")]))
+        # 设置界面录入: 主/副槽位单键绑定 + Backspace 清空
+        s = engine.settings
+        s.open()
+        engine.draw()
+        s._handle_click(s._tab_rects[4][1].center)    # 按键栏
+        keys_now = s.visible_keys()
+        rects = s._item_rects()
+        k_idx = keys_now.index("key_up")
+        s._handle_click((rects[k_idx].x + 42, rects[k_idx].y + 42))
+        check("主槽录入", s._binding == ("key_up", "primary"))
+        s.handle_key(pygame.K_F5)                     # 单键直接绑定
+        check("主槽绑定", s._binding is None
+              and kb.get_key("key_up", "primary") == pygame.K_F5)
+        s._handle_click((rects[k_idx].x + 108, rects[k_idx].y + 42))
+        check("副槽录入", s._binding == ("key_up", "alt"))
+        s.handle_key(pygame.K_BACKSPACE)              # 清空副键
+        check("副槽清空", kb.get_key("key_up", "alt") is None)
+        engine.on_escape()
+    finally:
+        engine.quit()
+        import pygame as pg14
+        pg14.quit()
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
+
+
+def test_logging():
+    print("== 日志文件与警告提示 ==")
+    import shutil
+    base = os.path.dirname(os.path.abspath(__file__))
+    sd = os.path.join(base, "save")
+    if os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    import framework.engine as eng
+    log = eng.log
+    log.set_log_file(os.path.join(base, "logs", "engine.log"))
+    fired = []
+    log.on_warning(lambda m: fired.append(m))
+    log.info("测试信息")
+    log.warning("测试警告")
+    log.set_log_file(None)          # 恢复 (仅 console)
+    lp = os.path.join(base, "logs", "engine.log")
+    txt = open(lp, encoding="utf-8").read()
+    check("日志写文件", "测试信息" in txt and "测试警告" in txt)
+    check("warn 回调", any("测试警告" in m for m in fired))
+    # 引擎: warn -> 游戏界面提示
+    engine = GameEngine(640, 360, "test67")
+    try:
+        from framework.engine.parser import Statement
+        engine.runtime._cmd_sfx(
+            Statement(op="sfx", args=["nope"], line=0))   # 未注册 -> warn
+        check("warn 游戏提示", engine.display.notice is not None
+              and "警告" in str(engine.display.notice),
+              str(engine.display.notice))
+    finally:
+        engine.quit()
+        import pygame as pg15
+        pg15.quit()
+        shutil.rmtree(os.path.join(base, "logs"),
+                      ignore_errors=True)
         if os.path.isdir(sd):
             shutil.rmtree(sd, ignore_errors=True)
 
@@ -4347,6 +4505,18 @@ def main():
         print(f"  [ERROR] 设置文件读取测试异常: {exc}")
         import traceback
         traceback.print_exc()
+    try:
+        test_keybinds()
+    except Exception as exc:
+        print(f"  [ERROR] 快捷键系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_logging()
+    except Exception as exc:
+        print(f"  [ERROR] 日志测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
 
     print(f"\n结果: {PASS} 通过, {FAIL} 失败")
     sys.exit(1 if FAIL else 0)
@@ -4354,3 +4524,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -1519,10 +1519,9 @@ class Display:
                 self.active_index = (self.active_index + delta) % n
 
     def capture(self):
-        """截图当前游戏画面, 返回 Surface 副本 (插件快照用)。"""
-        screen = self.engine.screen
+        """截图当前游戏画面, 返回逻辑分辨率 buffer 副本 (窗口缩放稳定)。"""
         try:
-            return screen.copy()
+            return self.buffer.copy()
         except Exception:
             return pygame.Surface((self.width, self.height))
 
