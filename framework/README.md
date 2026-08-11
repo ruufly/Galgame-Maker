@@ -44,12 +44,12 @@ framework/
 │   └── auto_skip.py          自动模式 (自动推进, 非正式界面自动暂停)
 │                               + 跳过剧情 (直达下一个选择支/结局)
 └── tests/
-    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 655 项断言)
+    └── smoke.py              冒烟测试 (dummy 驱动, 无窗口可跑, 672 项断言)
 ```
 
 项目根: `gamelauncher.py` 独立启动器 (命令行传参 / 拖拽 `.gal` 文件)。
 
-**当前测试状态: 655 项断言全部通过** (parser/runtime/交互推进/样式表/
+**当前测试状态: 672 项断言全部通过** (parser/runtime/交互推进/样式表/
 selection/存档/过渡/角色/场景/对话框/菜单/动作/立绘效果/文字模式/插件/
 命名空间/音频/快照/LaTeX/分角色语音音量/窗口配置与等比缩放/常驻菜单栏/
 鉴赏系统/结局记录/CG 收集)。
@@ -461,6 +461,8 @@ window
     key_up: "up, w"                # 键盘导航 (见 4.9)
     key_down: "down, s"
     key_confirm: "return, space"
+    key_left: "left, a"            # 确认框: 左移活动项
+    key_right: "right, d"          # 确认框: 右移活动项
     ui_click_sound: "sfx_click"    # 全局 UI 点击音
     music_fade: 1.0                # BGM 淡入淡出默认时长 (秒)
     menu_continue: "继续游戏"      # ESC 菜单文案 (可自定义)
@@ -645,6 +647,35 @@ engine.settings.get("my_setting", False)
 * 插件注册的项自动出现在界面末尾; `setting.gal` 可引用调整 label/顺序
 * 点击滑条轨道/用左右方向键调节; checkbox 点击切换; keybind 点击后
   按任意键绑定 (ESC 取消); 界面内 ESC 关闭并保存
+
+### 4.17 询问对话框 (confirm)
+
+退出/读档/回标题等确认框统一由同一组件管理 (`display.show_confirm` +
+`engine.ask_confirm`)。开发者可在游戏中任意位置弹类似对话框,
+**阻塞等待玩家选择并把结果存入变量**:
+
+```gal
+confirm "继续吗？" -> choice          # 结果: "yes" / "no"
+if choice == "yes":
+    ...继续剧情...
+else:
+    ...取消...
+endif
+
+confirm "再来一次？" yes "好的" no "算了" -> again   # 自定义按钮文本
+```
+
+**键盘控制** (确认框通用): 初始**无活动项**; **左右键**在确认/取消间
+循环移动活动项 (可配 `key_left`/`key_right`, 默认方向键);
+**鼠标悬停优先**激活; Enter/空格/点击确认活动项 (无活动项时忽略);
+ESC 不干预确认框。
+
+相关 API:
+
+```python
+engine.ask_confirm(text, yes_text, no_text, on_yes, on_no=None)
+# on_no: 点"否"时回调 (confirm DSL 用; 退出/读档确认不传则"否"无动作)
+```
 
 ---
 
@@ -978,7 +1009,7 @@ engine.ui.dim_overlay(surface, alpha=150)
 
 ---
 
-## 12. 测试 (655 项断言)
+## 12. 测试 (672 项断言)
 
 `framework/tests/smoke.py`, dummy 视频/音频驱动, 无窗口可跑:
 
@@ -1027,6 +1058,11 @@ py -3.10 framework/tests/smoke.py
     不能截当前画面 (槽位面板会入镜); 缩略图路径存相对名
 14. **旧版方法残留**: 类中同名方法后者覆盖前者 —— 修改指令实现时
     务必 grep 确认无重复定义 (曾两次踩坑: _cmd_sound/_cmd_music)
+15. **公式行高**: rich.draw 传 line_height 时不能忽略公式实际高度
+    (公式可能显著高于普通文字, 需 `max(line_height, asc+desc+2)`),
+    否则公式与相邻行重叠
+16. **lines 逐行模式**: reveal 必须按**逻辑长度**推进 (公式计 1),
+    且基于富文本布局分行 (wrap_text 会切在 {m} 标记中间)
 
 ---
 
@@ -1078,6 +1114,8 @@ py -3.10 framework/tests/smoke.py
 | 29. 设置系统 | engine/settings.py 设置注册表 + 设置界面 (slider/checkbox/cycle/keybind/button) + setting.gal 配置 + 保存 save/settings.json + 插件 register API + 入口 (标题/ESC/bar) + 测试增至 637 项 |
 | 30. 设置完善 | 设置分栏 (section tab, 可自定义) + 各角色语音归并"语音"栏 + 返回按钮/确认框修复 + resizable 即时重建窗口 + 测试增至 647 项 |
 | 31. 设置返回修复 | 从标题/ESC 菜单进设置返回后恢复菜单 (打开设置不再关闭底层菜单) + 测试增至 655 项 |
+| 32. LaTeX 打字修复 | 公式行高自动增高 (不重叠) + lines 逐行按逻辑长度推进 (公式完整) + 测试增至 660 项 |
+| 33. 询问对话框 | confirm DSL 语句 (阻塞 + 返回值 -> 变量) + 确认框键盘控制 (左右键/鼠标优先/初始无活动) + key_left/key_right 配置 + on_no 回调 + 测试增至 672 项 |
 
 ---
 
@@ -1119,6 +1157,7 @@ py -3.10 framework/tests/smoke.py
 | 菜单栏 | `menu_bar` 块 | 常驻菜单栏样式 (bar 模式) |
 | 标题 | `title` 块 | 标题画面 (menu: 引用; button_columns 多列) |
 | 选择支 | `choice [ui_click X] [ui_hover Y]` 块 | 分支选择 |
+| 询问 | `confirm <文本> [yes X] [no Y] [-> 变量]` | 确认框, 结果 yes/no 存变量 |
 | 变量 | `set <名> = <表达式>` | 赋值 (main::/插件:: 前缀) |
 | 条件 | `if/elif/else/endif` | 分支 |
 | 跳转 | `jump <标签>` / `call <标签>` / `return` | 流程控制 |

@@ -75,6 +75,7 @@ class Runtime:
             "say": self._cmd_say,
             "title": self._cmd_title,
             "choice": self._cmd_choice,
+            "confirm": self._cmd_confirm,
             "set": self._cmd_set,
             "if": self._cmd_if,
             "jump": self._cmd_jump,
@@ -1645,6 +1646,48 @@ class Runtime:
             # 跳转失败抛 RuntimeError_, 由引擎按 error 处理 (弹窗)
             self._jump_to(label)
         self.advance()
+
+    # -- 询问对话框 -----------------------------------------------------
+    def _cmd_confirm(self, stmt):
+        """询问对话框: confirm <文本> [yes 文本] [no 文本] [-> 变量]
+
+        阻塞直到玩家选择; 结果 ("yes"/"no") 存入 -> 指定的变量
+        (也可用 if $var == "yes" 分支)。未指定变量时仅阻塞。
+        """
+        args = list(stmt.args)
+        var = None
+        if "->" in args:
+            vi = args.index("->")
+            if vi + 1 < len(args):
+                var = args[vi + 1]
+            del args[vi:vi + 2]
+        text = self._interp(args[0]) if args else ""
+        yes, no = "是", "否"
+        if "yes" in args:
+            yi = args.index("yes")
+            if yi + 1 < len(args):
+                yes = self._interp(args[yi + 1])
+            del args[yi:yi + 2]
+        if "no" in args:
+            ni = args.index("no")
+            if ni + 1 < len(args):
+                no = self._interp(args[ni + 1])
+            del args[ni:ni + 2]
+        if not text:
+            log.warning(f"第{stmt.line}行: confirm 内容为空")
+            return None
+
+        def _done(choice):
+            if var:
+                self.engine.set_var(var, choice)
+            self.release("confirm")
+            self.advance()
+
+        self.engine.ask_confirm(text, yes, no,
+                                lambda: _done("yes"),
+                                on_no=lambda: _done("no"))
+        self.blocked = "confirm"
+        return BLOCK
 
     # -- 变量与条件 -----------------------------------------------------
     # ==================================================================

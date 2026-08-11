@@ -137,17 +137,29 @@ def _tm_instant_reset(d):
 
 
 def _tm_lines_reset(d):
-    """逐行显示: 每行一次性出现 + 节奏停顿。"""
-    lines = ui.wrap_text(d._font_text, d.full_text, d.width - 96)
-    d.text_mode_state = {"lines": lines, "line": 0, "timer": 0.0}
+    """逐行显示: 每行一次性出现 + 节奏停顿。
+
+    行划分基于富文本布局 (公式整体在一行内), reveal 按**逻辑长度**
+    逐行累计推进 (公式计 1), 与截断/完成判定一致。
+    """
+    lines = d._rich.layout(d._runs, d.width - 96)
+    lengths = []
+    for line in lines:
+        n = 0
+        for text, run in line:
+            n += 1 if run.math else len(text)
+        lengths.append(n)
+    d.text_mode_state = {"lines": lines, "lengths": lengths,
+                         "line": 0, "timer": 0.0}
     d.reveal = 0.0
 
 
 def _tm_lines_update(d, dt):
     st = d.text_mode_state
     lines = st.get("lines") or []
+    lengths = st.get("lengths") or []
     if not lines:
-        d.reveal = len(d.full_text)
+        d.reveal = d._logic_len
         return
     st["timer"] += dt
     delay = 0.35 if st["line"] == 0 else 0.12
@@ -155,9 +167,9 @@ def _tm_lines_update(d, dt):
         st["timer"] = 0.0
         st["line"] += 1
         if st["line"] >= len(lines):
-            d.reveal = len(d.full_text)
+            d.reveal = float(d._logic_len)
         else:
-            d.reveal = sum(len(x) for x in lines[: st["line"] + 1])
+            d.reveal = float(sum(lengths[: st["line"]]))
 
 
 TEXT_MODES = {
@@ -1480,8 +1492,13 @@ class Display:
         return -1
 
     def move_active(self, delta: int) -> None:
-        """键盘导航: 上下移动活动选项 (循环; 无活动项时激活第一项)。"""
-        if self.selection_active and self.selection_rects:
+        """键盘导航: 上下/左右移动活动选项 (循环; 无活动项时激活第一项)。
+
+        确认框用左右键 (2 个按钮), 菜单/选择支用上下键。
+        """
+        if self.confirm_active and self.confirm_rects:
+            n = len(self.confirm_rects)
+        elif self.selection_active and self.selection_rects:
             n = len(self.selection_rects)
         elif self.choice_active and self.choice_rects:
             n = len(self.choice_rects)
@@ -1493,7 +1510,7 @@ class Display:
             self.active_index = 0
         else:
             self.active_index = (self.active_index + delta) % n
-        # 键盘导航跳过禁用项 (选择支无禁用概念)
+        # 键盘导航跳过禁用项 (选择支/确认框无禁用概念)
         if self.selection_active:
             for _ in range(n):
                 _t, _a, cfg = self.selection_items[self.active_index]
@@ -1518,10 +1535,16 @@ class Display:
         self._slot_thumb_provider = fn
 
     def sync_mouse_active(self) -> None:
-        """鼠标悬停同步活动选项 (键盘/鼠标状态一致)。
+        """鼠标悬停同步活动选项 (键盘/鼠标状态一致, 鼠标优先)。
 
         需在暂停状态下也调用 (ESC 菜单等), 故独立成方法。
         """
+        if self.confirm_active:
+            # 确认框: 鼠标悬停激活 (初始无活动; 鼠标移开后保留键盘活动)
+            idx = self.hit_confirm(self.mouse_pos())
+            if idx >= 0:
+                self.active_index = idx
+            return
         if self.selection_active or self.choice_active:
             mouse = self.mouse_pos()
             if self.selection_active:
@@ -1854,6 +1877,7 @@ class Display:
             pygame.Rect(x0, y, bw, bh),
             pygame.Rect(x0 + bw + gap, y, bw, bh),
         ]
+        self.active_index = -1        # 键盘/鼠标活动项 (初始无活动)
         self.engine.emit("confirm_show", text=text)
 
     def hit_confirm(self, pos) -> int:
@@ -1907,11 +1931,11 @@ class Display:
         self._rich.draw(buf, runs, self.confirm_panel.x + pad,
                         self.confirm_panel.y + 30,
                         self.confirm_panel.w - pad * 2, align="center")
-        # 是/否按钮
+        # 是/否按钮 (鼠标悬停或键盘活动项高亮; 初始无活动)
         mouse = self.mouse_pos()
         for idx, label in enumerate((self.confirm_yes, self.confirm_no)):
             rect = self.confirm_rects[idx]
-            hovered = rect.collidepoint(mouse)
+            hovered = rect.collidepoint(mouse) or idx == self.active_index
             accent = (0, 170, 90) if idx == 0 else (170, 60, 60)
             img = self._theme("confirm_button", "focus" if hovered
                               else "default")

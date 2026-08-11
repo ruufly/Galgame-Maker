@@ -2741,6 +2741,7 @@ def test_plugin_cmd():
 
 def test_latex_typing():
     print("== LaTeX 与逐字模式兼容 ==")
+    import pygame
     engine = GameEngine(640, 360, "test51")
     d = engine.display
     try:
@@ -2774,6 +2775,39 @@ def test_latex_typing():
         engine = d.engine
         engine.draw()
         check("terminal 含公式绘制", d.text_done())
+        # 行高: 含公式的行自动增高, 不与相邻行重叠
+        d.set_text_mode("typewriter")
+        d.show_text("大公式 {m}\\int_0^1 x^2 \\, dx = \\frac{1}{3}{/m} "
+                    "后面还有很长的一段文字用来换行，第二行文字。")
+        d.reveal = d._logic_len
+        lines_info = d._rich.layout(d._runs, 600)
+        need = [d._rich._line_metrics(ln) for ln in lines_info]
+        base_h = d._font_text.get_linesize()
+        check("公式行高自动增大",
+              any(asc + desc + 2 > base_h for asc, desc in need),
+              str(need))
+        buf2 = pygame.Surface((640, 360))
+        y_end, n_lines = d._rich.draw(
+            buf2, d._runs, 10, 10, 600, line_height=base_h)
+        total_h = sum(max(base_h, asc + desc + 2) for asc, desc in need)
+        check("公式行不重叠绘制",
+              n_lines == len(lines_info) and y_end >= 10 + total_h - 2,
+              f"y={y_end} n={n_lines} need={total_h}")
+        # lines 逐行模式: 按逻辑长度推进, 公式完整 (不提前全显)
+        d.set_text_mode("lines")
+        d.show_text("这是第一行的内容，比较长一些用于换行。"
+                    "{m}\\frac{1}{2}{/m} 这是第二行的内容。第三行结尾。")
+        check("lines 多行布局", len(d.text_mode_state["lines"]) >= 2,
+              str(d.text_mode_state.get("lengths")))
+        d.update(0.5)
+        shown1 = d._rich.truncate(d._runs, int(d.reveal))
+        check("lines 第一行显示", not d.text_done()
+              and len(d._rich.layout(shown1, 600)) == 1,
+              f"reveal={d.reveal}")
+        for _ in range(6):
+            d.update(0.5)
+        check("lines 逐行完成", d.text_done()
+              and d.reveal >= d._logic_len, str(d.reveal))
     finally:
         engine.quit()
         import pygame
@@ -3583,6 +3617,103 @@ game_start:
             shutil.rmtree(sd, ignore_errors=True)
 
 
+def test_confirm():
+    print("== 询问对话框 (confirm) ==")
+    import shutil
+    import pygame
+    base = os.path.dirname(os.path.abspath(__file__))
+    sd = os.path.join(base, "save")
+    if os.path.isdir(sd):
+        shutil.rmtree(sd, ignore_errors=True)
+    engine = GameEngine(640, 360, "test62")
+    d = engine.display
+    rt = engine.runtime
+    engine.project_dir = base
+    path = os.path.join(base, "_confirm_test.gal")
+    src = '''start:
+    confirm "继续吗？" -> choice
+    if choice == "yes":
+        set result = "yes_path"
+    else:
+        set result = "no_path"
+    endif
+    text "end"
+'''
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src)
+        rt.load_script(path)
+        rt.start()
+        check("confirm 阻塞", rt.blocked == "confirm"
+              and d.confirm_active)
+        check("初始无活动项", d.active_index == -1,
+              str(d.active_index))
+        # 键盘: 左右键移动活动项 (无活动时激活第一个)
+        engine._handle_key(pygame.K_RIGHT)
+        check("右键激活首项", d.active_index == 0)
+        engine._handle_key(pygame.K_RIGHT)
+        check("右键移到否", d.active_index == 1)
+        engine._handle_key(pygame.K_LEFT)
+        check("左键移回是", d.active_index == 0)
+        # 鼠标悬停激活 (鼠标优先)
+        _orig = pygame.mouse.get_pos
+        pygame.mouse.get_pos = lambda: d.confirm_rects[1].center
+        try:
+            d.sync_mouse_active()
+        finally:
+            pygame.mouse.get_pos = _orig
+        check("鼠标悬停激活", d.active_index == 1)
+        # Enter 确认活动项 (否) -> 结果 "no"
+        engine._handle_key(pygame.K_RETURN)
+        check("键盘确认否", rt.blocked == "text"
+              and rt.vars.get("choice") == "no"
+              and rt.vars.get("result") == "no_path",
+              f"choice={rt.vars.get('choice')} "
+              f"result={rt.vars.get('result')}")
+        # 重开: 自定义 yes/no 文本 + 鼠标点"是"
+        src2 = src.replace("继续吗？", "再来一次？").replace(
+            "-> choice", "yes 好的 no 算了 -> choice")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(src2)
+        rt.load_script(path)             # 重新加载新脚本
+        rt.start()
+        check("自定义文本", d.confirm_yes == "好的"
+              and d.confirm_no == "算了", f"{d.confirm_yes}/{d.confirm_no}")
+        engine.on_click(d.confirm_rects[0].center)   # 点是
+        check("鼠标点是", rt.blocked == "text"
+              and rt.vars.get("choice") == "yes"
+              and rt.vars.get("result") == "yes_path",
+              f"choice={rt.vars.get('choice')}")
+        # 无活动项时 Enter 忽略
+        rt.running = True
+        rt.ended = False
+        rt.call_stack = []
+        rt.blocked = None
+        rt._jump_to("start")
+        rt.advance()
+        check("confirm 再次阻塞", d.confirm_active
+              and d.active_index == -1)
+        engine._handle_key(pygame.K_RETURN)
+        check("无活动 Enter 忽略", d.confirm_active
+              and d.active_index == -1)
+        # 现有退出确认: on_no 为空时"否"无动作 (不回归)
+        engine.quit_flag = False
+        engine.apply_config({"confirm_quit": "true"})
+        engine.ask_confirm("退出？", "是", "否",
+                           lambda: setattr(engine, "quit_flag", True))
+        engine.on_click(d.confirm_rects[1].center)   # 否
+        check("退出确认否无动作", engine.quit_flag is False
+              and not d.confirm_active)
+    finally:
+        engine.quit()
+        import pygame as pg11
+        pg11.quit()
+        if os.path.isfile(path):
+            os.remove(path)
+        if os.path.isdir(sd):
+            shutil.rmtree(sd, ignore_errors=True)
+
+
 def test_window_config_scaling():
     print("== 窗口配置与等比缩放 ==")
     import pygame
@@ -3985,6 +4116,12 @@ def main():
         test_settings()
     except Exception as exc:
         print(f"  [ERROR] 设置系统测试异常: {exc}")
+        import traceback
+        traceback.print_exc()
+    try:
+        test_confirm()
+    except Exception as exc:
+        print(f"  [ERROR] 询问对话框测试异常: {exc}")
         import traceback
         traceback.print_exc()
 

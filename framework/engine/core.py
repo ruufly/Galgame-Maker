@@ -97,12 +97,16 @@ class GameEngine:
         self.confirm_load_yes = "读档"
         self.confirm_load_no = "取消"
         self._confirm_callback = None
+        self._confirm_no_callback = None
         self.paused = False          # 系统菜单打开时暂停游戏
 
         # 键盘导航键位 (window 配置可自定义: key_up/key_down/key_confirm)
         self.key_up = [pygame.K_UP]
         self.key_down = [pygame.K_DOWN]
         self.key_confirm = [pygame.K_RETURN, pygame.K_SPACE]
+        # 确认框左右键 (确认/取消间移动活动项)
+        self.key_left = [pygame.K_LEFT]
+        self.key_right = [pygame.K_RIGHT]
 
         # 系统菜单模式 (window 配置可自定义):
         #   popup = 现有弹窗菜单 (ESC 打开, 选择列表覆盖层)
@@ -380,12 +384,21 @@ class GameEngine:
         if self.settings.active:
             self.settings.handle_key(key)
             return
-        if key in self.key_up:
+        if key in self.key_left:
+            self.display.move_active(-1)
+        elif key in self.key_right:
+            self.display.move_active(1)
+        elif key in self.key_up:
             self.display.move_active(-1)
         elif key in self.key_down:
             self.display.move_active(1)
         elif key in self.key_confirm:
             d = self.display
+            if d.confirm_active:
+                # 确认活动项 (无活动项时忽略)
+                if d.active_index >= 0 and d.confirm_rects:
+                    self.on_click(d.confirm_rects[d.active_index].center)
+                return
             if d.selection_active:
                 # 确认活动选项 (无活动项时忽略)
                 if d.active_index >= 0 and d.selection_rects:
@@ -560,12 +573,16 @@ class GameEngine:
                 return
             d.confirm_active = False
             cb = self._confirm_callback
+            cb_no = self._confirm_no_callback
             self._confirm_callback = None
+            self._confirm_no_callback = None
             if idx == 0:
                 self._play_ui_sound()
             self.emit("confirm_choice", index=idx)
             if idx == 0 and cb is not None:
                 cb()      # 是 -> 执行确认后的动作
+            elif idx == 1 and cb_no is not None:
+                cb_no()   # 否 -> 执行取消回调 (confirm DSL 返回值用)
             return
         # 1) 存档槽位选择界面
         if d.slot_menu_active:
@@ -812,9 +829,11 @@ class GameEngine:
         self.confirm_load_text = self.dialogs["load"]["text"]
         self.confirm_load_yes = self.dialogs["load"]["yes"]
         self.confirm_load_no = self.dialogs["load"]["no"]
-        # 键盘导航键位 (key_up/key_down/key_confirm, 逗号分隔多键)
+        # 键盘导航键位 (key_up/key_down/key_confirm/key_left/key_right)
         for attr, cfg_key in (("key_up", "key_up"), ("key_down", "key_down"),
-                              ("key_confirm", "key_confirm")):
+                              ("key_confirm", "key_confirm"),
+                              ("key_left", "key_left"),
+                              ("key_right", "key_right")):
             if cfg_key in cfg:
                 parsed = self._parse_keys(cfg[cfg_key])
                 if parsed:
@@ -859,9 +878,14 @@ class GameEngine:
             callback()
 
     def ask_confirm(self, text: str, yes_text: str, no_text: str,
-                    callback) -> None:
-        """弹确认框, 玩家点"是"时执行 callback。"""
+                    callback, on_no: callable = None) -> None:
+        """弹确认框, 玩家点"是"时执行 callback, 点"否"时执行 on_no。
+
+        on_no 供 confirm DSL 等需要"否"返回值的使用方; 原有调用
+        (退出/读档确认) 不传则"否"无动作。
+        """
         self._confirm_callback = callback
+        self._confirm_no_callback = on_no
         self.display.show_confirm(text, yes_text, no_text)
 
     # ==================================================================

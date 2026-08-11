@@ -455,7 +455,9 @@ class RichTextRenderer:
         yy = y
         for line in lines:
             asc, desc = self._line_metrics(line)
-            line_h = line_height or (asc + desc + 2)
+            # 行高: 传入的 line_height 为基准, 但不能小于该行实际高度
+            # (公式行可能显著高于普通文字, 否则与相邻行重叠)
+            line_h = max(line_height or 0, asc + desc + 2)
             w = self.measure_line(line)
             if align == "center":
                 xx = x + (max_width - w) // 2
