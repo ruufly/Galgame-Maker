@@ -1,4 +1,4 @@
 __pycache__/
 *.pyc
 # 测试产物
-editor/tests/*.png
+tests/*.png
