@@ -92,8 +92,24 @@ class LangEditDialog(QDialog):
         self.lbl_preview.setStyleSheet(
             "background:#1c1c28; color:#eaeaea; padding:8px;"
             " border-radius:4px;")
+        # 右键: 框架核心富文本渲染预览
+        self.lbl_preview.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.lbl_preview.customContextMenuRequested.connect(
+            self._preview_menu)
         self._refresh_preview()
         layout.addWidget(self.lbl_preview)
+
+    def _preview_menu(self, _pos) -> None:
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu
+        from editor.rich_preview import RichPreviewDialog
+        menu = QMenu(self)
+        a = QAction(t("local.preview"), self)
+        a.triggered.connect(
+            lambda: RichPreviewDialog(
+                self.gl.resolve(self._text), self).exec())
+        menu.addAction(a)
+        menu.exec(self.lbl_preview.mapToGlobal(_pos))
 
         if self._keys:
             self._build_matrix(layout)

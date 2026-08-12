@@ -163,10 +163,20 @@ def main() -> int:
     )
     gi = FlowGraph.from_script(parse(if_src, "story.gal"))
     if_nodes = [n for n in gi.nodes.values() if n.kind == "if"]
-    check("if 节点解析", len(if_nodes) == 1)
+    # if 块展开: 主 if 边界 + else 边界 (分支体为独立节点)
+    check("if 节点解析", len(if_nodes) == 2
+          and sum(1 for n in if_nodes if n.data.get("role") == "if") == 1
+          and sum(1 for n in if_nodes if n.data.get("role") == "else") == 1)
     if if_nodes:
-        check("if 条件保留", if_nodes[0].data.get("cond") == "love > 0",
-              "got %r" % if_nodes[0].data.get("cond"))
+        main_if = next(n for n in if_nodes
+                       if n.data.get("role") == "if")
+        check("if 条件保留", main_if.data.get("cond") == "love > 0",
+              "got %r" % main_if.data.get("cond"))
+    # 分支体语句是独立节点 (带 branch 标记)
+    branched = [n for n in gi.nodes.values()
+                if n.data.get("branch") is not None]
+    check("分支体每行独立节点", len(branched) == 2,
+          "got %d" % len(branched))
     dlg_voice = [n for n in gi.nodes.values()
                  if n.kind == "dialogue" and n.data.get("voice")]
     check("台词 voice 参数保留", len(dlg_voice) == 1

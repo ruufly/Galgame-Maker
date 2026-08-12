@@ -8,9 +8,10 @@
 import os
 
 from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QLabel,
-                               QPushButton, QTableWidget, QTableWidgetItem,
-                               QVBoxLayout, QWidget)
+                               QMenu, QPushButton, QTableWidget,
+                               QTableWidgetItem, QVBoxLayout, QWidget)
 
 from editor.i18n import t
 from editor.lang_utils import PLACEHOLDER_RE
@@ -85,7 +86,32 @@ class LocalizationPanel(QWidget):
                                    | QTableWidget.EditKeyPressed
                                    | QTableWidget.SelectedClicked)
         self.table.itemChanged.connect(self._on_item_changed)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
         layout.addWidget(self.table, 1)
+
+    # ---- 右键: 富文本预览 --------------------------------------------
+    def _context_menu(self, pos) -> None:
+        item = self.table.itemAt(pos)
+        if item is None:
+            return
+        key_item = self.table.item(item.row(), 0)
+        if key_item is None:
+            return
+        key = key_item.text()
+        menu = QMenu(self)
+        a_preview = QAction(t("local.preview"), self)
+        a_preview.triggered.connect(lambda: self._preview_key(key))
+        menu.addAction(a_preview)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _preview_key(self, key: str) -> None:
+        """用框架核心渲染该 key 当前语言的显示效果。"""
+        from editor.rich_preview import RichPreviewDialog
+        if self.lang is None:
+            return
+        text = self.lang.resolve("{@%s}" % key)
+        RichPreviewDialog(text, self).exec()
 
     # ---- 数据 ---------------------------------------------------------
     def set_project(self, project) -> None:

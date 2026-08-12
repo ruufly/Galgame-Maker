@@ -151,10 +151,14 @@ class FlowGraph:
             g.add_node("label", x=0, y=0, node_id=label,
                        data={"text": label})
         # 第二遍: 标签体内每条语句一个节点, 顺序连线
+        # (if 块特殊处理: 分支体每行一个节点, elif/else 为边界节点)
         y = 0
         for label, body in script.labels.items():
             prev = label
             for stmt in body:
+                if stmt.op == "if":
+                    prev, y = g._import_if(stmt, prev, y)
+                    continue
                 kind, data, options, raw = _stmt_to_node(stmt)
                 node = g.add_node(kind, x=0, y=y, data=data,
                                   options=options, raw=raw)
@@ -164,6 +168,58 @@ class FlowGraph:
         if layout:
             g.auto_layout()
         return g
+
+    def _import_if(self, stmt: Statement, prev: str, y: int):
+        """if 块 -> 条件边界节点 + 分支体每行一个节点。
+
+        返回 (最后一个节点 id, 下一个 y)。分支体节点 data["branch"]=
+        分支索引 (0=if 体, 1=第一个 elif...); else 分支 = len(branches)。
+        elif/else 为 role 标记的 if 节点 (data["role"]="elif"/"else")。
+        """
+        branches = stmt.kwargs.get("branches", [])
+        else_body = stmt.kwargs.get("else")
+        # 主 if 条件节点
+        cond0 = str(branches[0][0]) if branches else \
+            str(stmt.kwargs.get("cond", ""))
+        node = self.add_node("if", x=0, y=y,
+                             data={"cond": cond0, "role": "if"}, raw=stmt)
+        y += 1
+        self.connect(prev, node.node_id)
+        prev = node.node_id
+        # 各分支体平铺 (elif 前插入边界节点)
+        for idx, (cond, body) in enumerate(branches):
+            if idx > 0:
+                bnode = self.add_node("if", x=0, y=y,
+                                      data={"cond": str(cond),
+                                            "role": "elif"}, raw=stmt)
+                y += 1
+                self.connect(prev, bnode.node_id)
+                prev = bnode.node_id
+            for bstmt in body:
+                kind, data, options, raw = _stmt_to_node(bstmt)
+                n = self.add_node(kind, x=0, y=y, data=data,
+                                  options=options, raw=raw)
+                n.data["branch"] = idx
+                y += 1
+                self.connect(prev, n.node_id)
+                prev = n.node_id
+        # else 边界
+        if else_body is not None:
+            enode = self.add_node("if", x=0, y=y,
+                                  data={"cond": "", "role": "else"},
+                                  raw=stmt)
+            y += 1
+            self.connect(prev, enode.node_id)
+            prev = enode.node_id
+            for bstmt in else_body:
+                kind, data, options, raw = _stmt_to_node(bstmt)
+                n = self.add_node(kind, x=0, y=y, data=data,
+                                  options=options, raw=raw)
+                n.data["branch"] = len(branches)
+                y += 1
+                self.connect(prev, n.node_id)
+                prev = n.node_id
+        return prev, y
 
     # ---- 导出: 节点图 -> Script(story.gal) ----------------------------
     def to_script(self) -> Script:
@@ -197,6 +253,11 @@ class FlowGraph:
                 n = self.nodes[nxt]
                 if n.kind == "label":
                     break
+                if n.kind == "if" and n.data.get("role") == "if":
+                    # 条件块: 分支体节点重建为 if 语句, 跳到主线恢复点
+                    stmt, nxt = self._collect_if_block(n)
+                    body.append(stmt)
+                    continue
                 body.extend(_node_to_statements(n))
                 if n.kind in ("jump", "ending"):
                     break
@@ -208,6 +269,58 @@ class FlowGraph:
         for rid in promoted:
             collect(rid, rid)
         return script
+
+    def _collect_if_block(self, if_node: FlowNode):
+        """从条件节点沿链收集分支体, 重建 if 语句。
+
+        返回 (if Statement, 主线恢复点节点 id)。分支体节点
+        data["branch"] 标记归属; elif/else 为边界节点。
+        """
+        branches: list = []
+        else_body = None
+        cur_cond = if_node.data.get("cond", "")
+        cur_body: list = []
+        in_else = False
+        nxt = if_node.next_id
+        visited = set()
+        while nxt and nxt not in visited and nxt in self.nodes:
+            visited.add(nxt)
+            n = self.nodes[nxt]
+            if n.kind == "label":
+                break
+            role = n.data.get("role") if n.kind == "if" else None
+            if role == "elif":
+                branches.append([cur_cond, cur_body])
+                cur_cond = n.data.get("cond", "")
+                cur_body = []
+                in_else = False
+                nxt = n.next_id
+                continue
+            if role == "else":
+                branches.append([cur_cond, cur_body])
+                cur_cond = ""
+                cur_body = []
+                in_else = True
+                nxt = n.next_id
+                continue
+            if role == "if":
+                sub_stmt, nxt = self._collect_if_block(n)
+                cur_body.append(sub_stmt)
+                continue
+            if n.data.get("branch") is None:
+                break          # 主线恢复 (endif 后)
+            cur_body.extend(_node_to_statements(n))
+            if n.kind in ("jump", "ending"):
+                break
+            nxt = n.next_id
+        if in_else:
+            else_body = cur_body
+        elif cur_body or not branches:
+            branches.append([cur_cond, cur_body])
+        stmt = Statement(op="if", kwargs={"branches": branches})
+        if else_body is not None:
+            stmt.kwargs["else"] = else_body
+        return stmt, nxt
 
     # ---- 布局 ---------------------------------------------------------
     def auto_layout(self, x_gap: float = 260.0, y_gap: float = 120.0) -> None:
@@ -302,11 +415,8 @@ def _stmt_to_node(stmt: Statement):
         return ("stage", {"bg": [scene, pose, effect], "sprites": []},
                 [], stmt)
     if op == "if":
-        cond = str(stmt.kwargs.get("cond", ""))
-        branches = stmt.kwargs.get("branches", [])
-        if branches:
-            cond = str(branches[0][0])
-        return ("if", {"cond": cond}, [], stmt)
+        # 顶层 if 由 from_script 特殊展开; 分支体内嵌套 if 保留为 raw
+        return ("raw", {}, [], stmt)
     # 其它普通语句 (show/music/set/sleep/typing/插件指令...): 动作节点
     if stmt.op:
         return ("action", {}, [], stmt)

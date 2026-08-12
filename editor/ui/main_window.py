@@ -286,6 +286,9 @@ class MainWindow(QMainWindow):
             path = QFileDialog.getExistingDirectory(self, "选择 Galgame 项目目录")
         if not path:
             return
+        # 当前画布有未保存修改 -> 确认
+        if not self._confirm_unsaved():
+            return
         try:
             self.project = Project(path)
             self.project.load()
@@ -450,7 +453,26 @@ class MainWindow(QMainWindow):
                           "编辑器版本: 0.4 (P0-P3 + 独立预览调试 / 多语言可视化 / 脚本编辑器)")
 
 
+    def _confirm_unsaved(self) -> bool:
+        """画布未保存时询问: 保存/丢弃/取消。返回是否继续。"""
+        if self.project is None or not self.flow.is_dirty():
+            return True
+        ret = QMessageBox.question(
+            self, t("flow.unsaved_title"),
+            t("flow.unsaved_body"),
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save)
+        if ret == QMessageBox.Save:
+            self.flow.save()
+            return True
+        if ret == QMessageBox.Discard:
+            return True
+        return False
+
     def closeEvent(self, event):
+        if not self._confirm_unsaved():
+            event.ignore()
+            return
         if self._preview_window is not None:
             self._preview_window.close()
         super().closeEvent(event)

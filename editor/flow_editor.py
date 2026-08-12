@@ -51,8 +51,46 @@ KERNEL_OPS = ["say", "nar", "text", "bg", "show", "hide", "clear", "move",
               "rotate", "flip", "music", "sfx", "volume", "pause", "resume",
               "stop", "set", "sleep", "typing", "use", "fade", "fadeout",
               "save", "load", "fullscreen", "do_action", "using", "plugin",
-              "confirm", "read_settings", "ending", "jump", "call", "window",
-              "window config"]
+              "confirm", "read_settings", "ending", "jump", "call", "window"]
+
+
+def _to_int(v, default=0) -> int:
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
+# 立绘登场/退场/变换效果候选 (内核 + 插件注册)
+KERNEL_SPRITE_EFFECTS = ["", "slide_right", "slide_left", "fade", "bounce",
+                         "pop", "zoom_in", "zoom_out", "wobble", "sway",
+                         "zoom_bounce", "fade_rotate", "float", "squash"]
+
+
+def _sprite_effect_cands() -> list:
+    out = list(KERNEL_SPRITE_EFFECTS)
+    try:
+        from editor.plugins_api import registry
+        for e in registry.sprite_effects():
+            if e and e not in out:
+                out.append(e)
+    except Exception:
+        pass
+    return out
+
+
+def _char_ids_of(project) -> list:
+    """项目 cast.gal 的角色 id 列表 (下拉候选)。"""
+    if project is None:
+        return []
+    cast = project.scripts.get("cast.gal")
+    if cast is None:
+        return []
+    try:
+        from editor.definitions import iter_defs
+        return [s.args[0] for s in iter_defs(cast, "char")]
+    except Exception:
+        return []
 
 NODE_W = 200
 
@@ -102,14 +140,19 @@ class NodeItem(QGraphicsItem):
                       else QPen(QColor("#000000"), 1))
         painter.setBrush(QBrush(QColor("#26263a")))
         painter.drawRoundedRect(r, 8, 8)
-        # 标题条
-        title = "%s  [%s]" % (KIND_NAMES.get(self.node.kind, self.node.kind),
-                              self.node.node_id)
+        # 标题条 (所属标签树前缀 + 树色块)
+        label = self.flow_scene._label_map.get(self.node.node_id, "")
+        tree_color = self.flow_scene._label_color(label) if label \
+            else QColor("#555")
+        painter.fillRect(QRectF(8, 6, 5, 20), tree_color)
+        title = ("[%s] " % label if label else "") \
+            + "%s  [%s]" % (KIND_NAMES.get(self.node.kind, self.node.kind),
+                            self.node.node_id)
         painter.setPen(Qt.white)
         f = painter.font()
         f.setBold(True)
         painter.setFont(f)
-        painter.drawText(QRectF(8, 6, NODE_W - 16, 22), Qt.AlignLeft, title)
+        painter.drawText(QRectF(17, 6, NODE_W - 24, 22), Qt.AlignLeft, title)
         # 类型色条
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(color))
@@ -322,14 +365,21 @@ def _summary_lines(node, lang=None) -> list:
         if len(node.options) > 4:
             lines.append("  …")
     elif node.kind == "if":
-        lines.append("如果 %s:" % node.data.get("cond", "?"))
+        role = node.data.get("role", "if")
+        cond = node.data.get("cond", "")
+        if role == "elif":
+            lines.append("否则如果 %s:" % cond)
+        elif role == "else":
+            lines.append("否则:")
+        else:
+            lines.append("如果 %s:" % cond)
         if node.raw is not None:
             branches = node.raw.kwargs.get("branches", [])
             else_body = node.raw.kwargs.get("else")
-            for idx, (cond, body) in enumerate(branches[1:], start=1):
-                lines.append("  否则如果 %s  (%d 行)" % (cond, len(body)))
+            total = sum(len(b) for _c, b in branches)
             if else_body is not None:
-                lines.append("  否则 (%d 行)" % len(else_body))
+                total += len(else_body)
+            lines.append("  [分支体 %d 条语句 → 画布独立节点]" % total)
     elif node.kind == "stage":
         scene, pose, effect = node.data.get("bg", ["", "", ""])
         lines.append("背景: %s%s%s" % (scene or pose or "(路径)",
@@ -414,6 +464,10 @@ def action_edit_spec(op: str, caps: dict):
         return ("none", ("黑幕过渡", []))
     if op == "volume":
         return ("volume", ("音量", ["music", "sfx", "voice"]))
+    if op == "window":
+        return ("window", ("窗口配置", []))
+    if op == "confirm":
+        return ("confirm", ("确认框", []))
     # 插件指令参数表单 (插件经 editor/plugins/<名>.py 主动注册)
     for c in caps.values():
         fields = c.get("command_params", {}).get(op)
@@ -438,6 +492,7 @@ class FlowScene(QGraphicsScene):
         self.lang = None           # GameLang | None (项目多语言表)
         self.items_by_id: dict = {}
         self.edges: list = []
+        self._label_map: dict = {}   # node_id -> 所属标签树 (视觉分组)
         self._drag = None          # (src_id, port, temp_line)
         self.log = lambda msg: None
         self._undo_stack: list = []
@@ -518,7 +573,58 @@ class FlowScene(QGraphicsScene):
             self.items_by_id[nid] = item
             self.addItem(item)
         self.rebuild_edges()
+        self._compute_label_map()
         self._sync_scene_rect()
+
+    # ---- 标签树分组 (视觉) --------------------------------------------
+    def _compute_label_map(self) -> None:
+        """每个节点归属的标签树。
+
+        第一遍: 沿 next 顺序链传播 (每棵树只覆盖自己的链);
+        第二遍: 仅被 jump/选择支引用 (不在任何链上) 的孤岛节点
+        归入引用源所属的树。
+        """
+        self._label_map = {}
+        if self.graph is None:
+            return
+        # 第一遍: next 链
+        for nid in self.graph.order:
+            n = self.graph.nodes.get(nid)
+            if n is None or n.kind != "label":
+                continue
+            cur = nid
+            while cur and cur not in self._label_map \
+                    and cur in self.graph.nodes:
+                self._label_map[cur] = nid
+                nxt = self.graph.nodes[cur].next_id
+                if nxt is None or nxt in self._label_map:
+                    break
+                cur = nxt
+        # 第二遍: 孤岛节点 (被跳转/选择支引用)
+        for nid in self.graph.nodes:
+            if nid in self._label_map:
+                continue
+            for src in self.graph.nodes.values():
+                owner = None
+                if src.kind == "jump" and src.data.get("target") == nid:
+                    owner = self._label_map.get(src.node_id)
+                else:
+                    for _t, tg in src.options:
+                        if tg == nid:
+                            owner = self._label_map.get(src.node_id)
+                            break
+                if owner:
+                    self._label_map[nid] = owner
+                    break
+
+    @staticmethod
+    def _label_color(label: str):
+        """标签树颜色 (按名 hash 到色相)。"""
+        from PySide6.QtGui import QColor
+        if not label:
+            return QColor("#666")
+        hue = (sum(ord(c) for c in label) * 47) % 360
+        return QColor.fromHsl(hue, 130, 62)
 
     def _sync_scene_rect(self) -> None:
         """sceneRect 跟随内容 (修复: 固定区域时超出部分无法滚动)。"""
@@ -567,6 +673,13 @@ class FlowScene(QGraphicsScene):
         self.rebuild_edges()
         self.log(t("flow.edge_deleted"))
 
+    def delete_edge_at(self, scene_pos) -> None:
+        """右键点击 (视图层): 命中连线则删除。"""
+        for e in self.edges:
+            if e.hit_test(scene_pos):
+                self.delete_edge(e)
+                return
+
     def edges_changed(self) -> None:
         self.update()
         self._sync_scene_rect()
@@ -606,13 +719,7 @@ class FlowScene(QGraphicsScene):
     # ---- 交互 ---------------------------------------------------------
     def mousePressEvent(self, event):
         pos = event.scenePos()
-        # 右键删除连线 (EdgeItem 不覆盖 contextMenuEvent)
-        if event.button() == Qt.RightButton:
-            for e in self.edges:
-                if e.hit_test(pos):
-                    self.delete_edge(e)
-                    event.accept()
-                    return
+        # 右键删除连线已移至视图层 (右键拖动画布; 点击删除), 见 ZoomView
         for nid, item in self.items_by_id.items():
             port = item.output_port_at(pos)
             if port is not None and event.button() == Qt.LeftButton:
@@ -713,7 +820,16 @@ class FlowScene(QGraphicsScene):
         dlg.setWindowTitle(t("flow.edit_dialogue"))
         dlg.resize(560, 480)
         form = QVBoxLayout(dlg)
-        ed_speaker = QLineEdit(node.data.get("speaker", ""))
+        # 说话者: 可编辑下拉 (候选 = cast.gal 角色)
+        ed_speaker = QComboBox()
+        ed_speaker.setEditable(True)
+        chars = _char_ids_of(self.project)
+        ed_speaker.addItems(chars)
+        cur_sp = node.data.get("speaker", "")
+        if cur_sp in chars:
+            ed_speaker.setCurrentText(cur_sp)
+        elif cur_sp:
+            ed_speaker.setCurrentText(cur_sp)
         form.addWidget(QLabel(t("flow.speaker_hint")))
         form.addWidget(ed_speaker)
         # 台词: 显示当前语言效果 + 多语言编辑按钮
@@ -754,7 +870,7 @@ class FlowScene(QGraphicsScene):
         btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
         form.addLayout(btns)
         if dlg.exec() == QDialog.Accepted:
-            sp = ed_speaker.text().strip()
+            sp = ed_speaker.currentText().strip()
             node.data["op"] = "say" if sp else "text"
             node.data["speaker"] = sp
             self._apply_extra_edits(node)
@@ -789,7 +905,7 @@ class FlowScene(QGraphicsScene):
         layout: 父布局; text: 原始文本 (可含 {@key}); commit: 保存回调。
         项目无语言表 (langs 空) 时回退为普通单行编辑框。
         """
-        gl = self.scene.lang
+        gl = self.lang
         if gl is None or not gl.langs:
             ed = QLineEdit(text)
             ed.textChanged.connect(commit)
@@ -942,41 +1058,23 @@ class FlowScene(QGraphicsScene):
             self.set_graph(self.graph)
 
     def _edit_if(self, node):
-        """条件节点 (if/elif/else 块): 编辑条件 + 分支预览。"""
+        """条件节点 (if/elif/else 边界): 编辑条件; 分支体为独立节点。"""
         from PySide6.QtWidgets import QPlainTextEdit
-        if node.raw is None:
-            return
+        role = node.data.get("role", "if")
         stmt = node.raw
-        branches = stmt.kwargs.get("branches", [])
-        else_body = stmt.kwargs.get("else")
         dlg = QDialog()
         dlg.setWindowTitle(t("flow.edit_if"))
-        dlg.resize(520, 380)
+        dlg.resize(520, 300)
         lay = QVBoxLayout(dlg)
-        lay.addWidget(QLabel(t("flow.if_cond")))
-        ed_cond = QLineEdit(node.data.get("cond", ""))
-        lay.addWidget(ed_cond)
-        # 分支预览 (只读)
-        lay.addWidget(QLabel(t("flow.if_branches")))
-        preview = QPlainTextEdit()
-        preview.setReadOnly(True)
-        lines = []
-        for idx, (cond, body) in enumerate(branches):
-            kw = "if" if idx == 0 else "elif"
-            lines.append("%s %s:" % (kw, cond))
-            for b in body[:6]:
-                lines.append("    %s %s" % (b.op, " ".join(b.args)[:40]))
-            if len(body) > 6:
-                lines.append("    … (%d 行)" % len(body))
-        if else_body is not None:
-            lines.append("else:")
-            for b in else_body[:6]:
-                lines.append("    %s %s" % (b.op, " ".join(b.args)[:40]))
-            if len(else_body) > 6:
-                lines.append("    … (%d 行)" % len(else_body))
-        preview.setPlainText(chr(10).join(lines))
-        lay.addWidget(preview, 1)
-        hint = QLabel(t("flow.if_hint"))
+        if role == "else":
+            lay.addWidget(QLabel(t("flow.else_hint")))
+        else:
+            lay.addWidget(QLabel(
+                t("flow.if_cond") if role == "if"
+                else t("flow.elif_cond")))
+            ed_cond = QLineEdit(node.data.get("cond", ""))
+            lay.addWidget(ed_cond)
+        hint = QLabel(t("flow.if_branch_nodes"))
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#888;")
         lay.addWidget(hint)
@@ -985,11 +1083,21 @@ class FlowScene(QGraphicsScene):
         cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
         btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
         lay.addLayout(btns)
-        if dlg.exec() == QDialog.Accepted:
+        if dlg.exec() == QDialog.Accepted and role != "else":
             cond = ed_cond.text().strip()
             node.data["cond"] = cond
-            if branches:
-                branches[0][0] = cond
+            # 同步写回 raw 的 branches (保持导出一致)
+            if stmt is not None:
+                branches = stmt.kwargs.get("branches", [])
+                if role == "if" and branches:
+                    branches[0][0] = cond
+                elif role == "elif":
+                    # 匹配当前 elif 条件 (对应 branches[1..])
+                    old_cond = node.data.get("cond", "")
+                    for idx, (c, _b) in enumerate(branches[1:], start=1):
+                        if c == old_cond:
+                            branches[idx][0] = cond
+                            break
             self.set_graph(self.graph)
 
     def _edit_action(self, node):
@@ -1009,10 +1117,113 @@ class FlowScene(QGraphicsScene):
             self._edit_action_plugin(node, cands)
         elif form_key == "volume":
             self._edit_action_volume(node, cands)
+        elif form_key == "window":
+            self._edit_action_window(node)
+        elif form_key == "confirm":
+            self._edit_action_confirm(node)
         elif form_key == "params":
             self._edit_action_params(node, cands, False)
         elif form_key == "none":
             self._edit_action_generic(node)
+
+    def _edit_action_window(self, node):
+        """window config 节点: 项目设置式表单 (写回 kwargs)。"""
+        from PySide6.QtWidgets import QCheckBox as _Chk
+        from PySide6.QtWidgets import QSpinBox as _Spin
+        stmt = node.raw
+        k = dict(stmt.kwargs)
+        dlg = QDialog()
+        dlg.setWindowTitle(t("flow.edit_window_cfg"))
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout()
+        ed_title = QLineEdit(str(k.get("title", "")))
+        form.addRow(t("flow.win_title"), ed_title)
+        sp_w = _Spin(); sp_w.setRange(320, 7680)
+        sp_w.setValue(_to_int(k.get("width"), 1280))
+        sp_h = _Spin(); sp_h.setRange(240, 4320)
+        sp_h.setValue(_to_int(k.get("height"), 720))
+        row = QHBoxLayout(); row.addWidget(sp_w)
+        row.addWidget(QLabel("×")); row.addWidget(sp_h)
+        form.addRow(t("flow.win_size"), row)
+        sp_fps = _Spin(); sp_fps.setRange(15, 240)
+        sp_fps.setValue(_to_int(k.get("fps"), 60))
+        form.addRow(t("flow.win_fps"), sp_fps)
+        ed_icon = QLineEdit(str(k.get("icon", "")))
+        form.addRow(t("flow.win_icon"), ed_icon)
+        chk_full = _Chk(t("flow.win_fullscreen"))
+        chk_full.setChecked(str(k.get("fullscreen", "false")).lower()
+                            in ("true", "1", "yes", "on"))
+        chk_res = _Chk(t("flow.win_resizable"))
+        chk_res.setChecked(str(k.get("resizable", "true")).lower()
+                           in ("true", "1", "yes", "on"))
+        form.addRow("", chk_full)
+        form.addRow("", chk_res)
+        lay.addLayout(form)
+        btns = QHBoxLayout()
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() == QDialog.Accepted:
+            stmt.kwargs["title"] = ed_title.text().strip()
+            stmt.kwargs["width"] = str(sp_w.value())
+            stmt.kwargs["height"] = str(sp_h.value())
+            stmt.kwargs["fps"] = str(sp_fps.value())
+            if ed_icon.text().strip():
+                stmt.kwargs["icon"] = ed_icon.text().strip()
+            else:
+                stmt.kwargs.pop("icon", None)
+            stmt.kwargs["fullscreen"] = "true" if chk_full.isChecked() \
+                else "false"
+            stmt.kwargs["resizable"] = "true" if chk_res.isChecked() \
+                else "false"
+            self.set_graph(self.graph)
+
+    def _edit_action_confirm(self, node):
+        """confirm 节点: 文本 + yes/no + -> 变量。"""
+        stmt = node.raw
+        args = list(stmt.args)
+        text = args[0] if args else ""
+        yes = no = var = ""
+        i = 1
+        while i < len(args):
+            if args[i] == "yes" and i + 1 < len(args):
+                yes = args[i + 1]; i += 2
+            elif args[i] == "no" and i + 1 < len(args):
+                no = args[i + 1]; i += 2
+            elif args[i] == "->" and i + 1 < len(args):
+                var = args[i + 1]; i += 2
+            else:
+                i += 1
+        dlg = QDialog()
+        dlg.setWindowTitle(t("flow.edit_confirm"))
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout()
+        ed_text = QLineEdit(text)
+        form.addRow(t("flow.confirm_text"), ed_text)
+        ed_yes = QLineEdit(yes)
+        form.addRow(t("flow.confirm_yes"), ed_yes)
+        ed_no = QLineEdit(no)
+        form.addRow(t("flow.confirm_no"), ed_no)
+        ed_var = QLineEdit(var)
+        ed_var.setPlaceholderText(t("flow.confirm_var_hint"))
+        form.addRow(t("flow.confirm_var"), ed_var)
+        lay.addLayout(form)
+        btns = QHBoxLayout()
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() == QDialog.Accepted:
+            out = [ed_text.text()]
+            if ed_yes.text().strip():
+                out += ["yes", ed_yes.text().strip()]
+            if ed_no.text().strip():
+                out += ["no", ed_no.text().strip()]
+            if ed_var.text().strip():
+                out += ["->", ed_var.text().strip()]
+            stmt.args = out
+            self.set_graph(self.graph)
 
     def _edit_action_generic(self, node):
         """未知/无参数指令: 通用参数表单 (不再"后续版本提供")。"""
@@ -1221,9 +1432,15 @@ class FlowScene(QGraphicsScene):
 
 
 class ZoomView(QGraphicsView):
-    """带缩放比例反馈的视图。"""
+    """带缩放比例反馈的视图 + 右键拖动画布 (右键点击连线=删除)。"""
 
     zoom_changed = Signal(float)
+    _PAN_THRESHOLD = 6
+
+    def __init__(self, scene=None, parent=None):
+        super().__init__(scene, parent)
+        self._pan_start = None
+        self._panning = False
 
     def wheelEvent(self, event):
         factor = 1.15 if event.angleDelta().y() > 0 else 1 / 1.15
@@ -1235,10 +1452,36 @@ class ZoomView(QGraphicsView):
         super().showEvent(event)
         self.zoom_changed.emit(self.transform().m11())
 
-    # ---- 拖动同步 (PySide6 6.11: setPos 不触发 itemChange) ------------
+    # ---- 右键: 拖动画布 / 点击删除连线 --------------------------------
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            self._pan_start = event.position().toPoint()
+            self._panning = False
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
     def mouseMoveEvent(self, event):
+        if self._pan_start is not None:
+            pos = event.position().toPoint()
+            if not self._panning and (pos - self._pan_start).manhattanLength() \
+                    > self._PAN_THRESHOLD:
+                self._panning = True
+                self.setCursor(Qt.ClosedHandCursor)
+            if self._panning:
+                delta = pos - self._pan_start
+                self._pan_start = pos
+                self.horizontalScrollBar().setValue(
+                    self.horizontalScrollBar().value() - delta.x())
+                self.verticalScrollBar().setValue(
+                    self.verticalScrollBar().value() - delta.y())
+                event.accept()
+                return
+            # 未开始平移: 让场景处理 (悬停高亮)
+            super().mouseMoveEvent(event)
+            return
         super().mouseMoveEvent(event)
-        # 拖动中仅回写坐标; 不更新 sceneRect (否则视图每帧跳动=鬼畜)
+        # 拖动同步 (PySide6 6.11: setPos 不触发 itemChange)
         sync = getattr(self.scene(), "_sync_positions", None)
         if sync is not None:
             sync(update_rect=False)
@@ -1247,11 +1490,31 @@ class ZoomView(QGraphicsView):
         self.scene().update()
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.RightButton and self._pan_start is not None:
+            pos = event.position().toPoint()
+            moved = (pos - self._pan_start).manhattanLength() \
+                > self._PAN_THRESHOLD
+            self._pan_start = None
+            self._panning = False
+            self.unsetCursor()
+            if not moved:
+                # 右键点击 (未拖动): 命中连线则删除
+                self._right_click_handle(event)
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
         # 松开后: 回写坐标 + 扩展 sceneRect (滚动条跟随)
         sync = getattr(self.scene(), "_sync_positions", None)
         if sync is not None:
             sync(update_rect=True)
+
+    def _right_click_handle(self, event) -> None:
+        """右键点击: 命中连线 -> 删除 (等价原 scene 右键行为)。"""
+        scene = self.scene()
+        pos = self.mapToScene(event.position().toPoint())
+        delete = getattr(scene, "delete_edge_at", None)
+        if delete is not None:
+            delete(pos)
 
 
 class FlowEditor(QWidget):
@@ -1265,6 +1528,7 @@ class FlowEditor(QWidget):
         super().__init__(parent)
         self.project = None
         self.graph = FlowGraph()
+        self._dirty = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -1347,6 +1611,7 @@ class FlowEditor(QWidget):
         if self.project is None:
             self.graph = FlowGraph()
             self.scene.set_graph(self.graph)
+            self._dirty = False
             return
         script = self.project.scripts.get("story.gal")
         if script is None:
@@ -1356,6 +1621,7 @@ class FlowEditor(QWidget):
         self.scene.set_graph(self.graph)
         self.log.emit(t("flow.story_imported", n=len(self.graph.nodes)))
         self._fit()
+        self._dirty = False
 
     def save(self) -> None:
         if self.project is None:
@@ -1366,11 +1632,17 @@ class FlowEditor(QWidget):
         self.log.emit(t("flow.story_saved", n=len(script.labels)))
         self.project.load()
         self.scene.set_graph(self.graph)   # 重建 (id 可能新增)
+        self._dirty = False
+
+    def is_dirty(self) -> bool:
+        """画布有未保存修改 (供关闭/切项目确认)。"""
+        return self._dirty
 
     # ---- 操作 ---------------------------------------------------------
     def _on_graph_changed(self):
         """scene 内部替换 graph (撤销) 后同步引用, 避免保存旧数据。"""
         self.graph = self.scene.graph
+        self._dirty = True
         self._update_status()
 
     def _emit_selection(self) -> None:
@@ -1633,10 +1905,62 @@ class StageDialog(QDialog):
         self.lbl_preview.setText("")
 
     def _add_row(self, row):
+        """新增立绘动作行 (全下拉化: 动作/角色/表情/效果)。"""
         r = self.table.rowCount()
         self.table.insertRow(r)
-        for c, val in enumerate(row):
-            self.table.setItem(r, c, QTableWidgetItem(val))
+        # 动作
+        cb_act = QComboBox()
+        cb_act.addItems(["show", "hide", "clear"])
+        cb_act.setCurrentText(row[0] if row and row[0] in
+                              ("show", "hide", "clear") else "show")
+        self.table.setCellWidget(r, 0, cb_act)
+        # 角色 (可编辑下拉, 候选 = cast.gal 角色)
+        cb_char = QComboBox()
+        cb_char.setEditable(True)
+        cb_char.addItems(self.char_ids)
+        if row and row[1]:
+            cb_char.setCurrentText(row[1])
+        self.table.setCellWidget(r, 1, cb_char)
+        # 表情 (联动所选角色的表情表)
+        cb_expr = QComboBox()
+        cb_expr.setEditable(True)
+        self.table.setCellWidget(r, 2, cb_expr)
+        cb_char.currentTextChanged.connect(
+            lambda c, w=cb_expr: self._fill_expressions(w, c))
+        self._fill_expressions(cb_expr, cb_char.currentText())
+        if row and row[2]:
+            cb_expr.setCurrentText(row[2])
+        # 效果 (内核 + 插件注册)
+        cb_eff = QComboBox()
+        cb_eff.setEditable(True)
+        cb_eff.addItems(_sprite_effect_cands())
+        if row and row[3]:
+            cb_eff.setCurrentText(row[3])
+        self.table.setCellWidget(r, 3, cb_eff)
+
+    def _fill_expressions(self, cb: QComboBox, char_id: str) -> None:
+        """按角色填充表情候选 (char 定义的立绘名)。"""
+        cb.blockSignals(True)
+        cur = cb.currentText()
+        cb.clear()
+        cands = [""]
+        if self.project is not None:
+            cast = self.project.scripts.get("cast.gal")
+            if cast is not None:
+                from editor.definitions import iter_defs
+                for s in iter_defs(cast, "char"):
+                    if s.args[0] == char_id:
+                        cands += [k for k in s.kwargs.keys()
+                                  if k not in ("name", "default",
+                                               "voice_volume", "desc",
+                                               "description", "bio",
+                                               "intro", "cv", "birthday",
+                                               "height", "age")]
+                        break
+        cb.addItems(cands)
+        if cur in cands:
+            cb.setCurrentText(cur)
+        cb.blockSignals(False)
 
     def _add_audio_row(self, row):
         items = self.timeline.items_data()
@@ -1644,27 +1968,46 @@ class StageDialog(QDialog):
         self.timeline.set_items(items)
 
     def _edit_audio_item(self, index):
-        """双击时间线条目: 4 字段编辑对话框。"""
+        """双击时间线条目: 操作/对象下拉 + 参数编辑。"""
         data = self.timeline.items_data()[index]
         dlg = QDialog(self)
-        dlg.setWindowTitle("编辑音频条目")
+        dlg.setWindowTitle(t("flow.edit_audio"))
         lay = QVBoxLayout(dlg)
-        eds = []
-        labels = ["操作 (music/sfx/volume/pause/resume/stop)",
-                  "对象 (名称/目标)", "参数A (loop/角色)", "参数B (fade/音量)"]
-        for i, (lab, val) in enumerate(zip(labels, data)):
-            lay.addWidget(QLabel(lab + ":"))
-            ed = QLineEdit(val)
-            eds.append(ed)
-            lay.addWidget(ed)
+        form = QFormLayout()
+        # 操作 (下拉)
+        cb_op = QComboBox()
+        cb_op.addItems(["music", "sfx", "volume", "pause", "resume", "stop"])
+        cur_op = data[0] if data and data[0] in (
+            "music", "sfx", "volume", "pause", "resume", "stop") else "music"
+        cb_op.setCurrentText(cur_op)
+        form.addRow(t("flow.audio_op"), cb_op)
+        # 对象 (可编辑下拉: sound 注册名 + music/sfx/voice)
+        cb_obj = QComboBox()
+        cb_obj.setEditable(True)
+        cands = list(self._sound_names)
+        for x in ("music", "sfx", "voice"):
+            if x not in cands:
+                cands.append(x)
+        cb_obj.addItems(cands)
+        if len(data) > 1 and data[1]:
+            cb_obj.setCurrentText(data[1])
+        form.addRow(t("flow.audio_obj"), cb_obj)
+        ed_a = QLineEdit(data[2] if len(data) > 2 else "")
+        ed_a.setPlaceholderText(t("flow.audio_a"))
+        form.addRow(t("flow.audio_a"), ed_a)
+        ed_b = QLineEdit(data[3] if len(data) > 3 else "")
+        ed_b.setPlaceholderText(t("flow.audio_b"))
+        form.addRow(t("flow.audio_b"), ed_b)
+        lay.addLayout(form)
         btns = QHBoxLayout()
-        ok = QPushButton("确定"); ok.clicked.connect(dlg.accept)
-        cc = QPushButton("取消"); cc.clicked.connect(dlg.reject)
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
         btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
         lay.addLayout(btns)
         if dlg.exec() == QDialog.Accepted:
             self.timeline.set_item_data(
-                index, [e.text().strip() for e in eds])
+                index, [cb_op.currentText(), cb_obj.currentText().strip(),
+                        ed_a.text().strip(), ed_b.text().strip()])
 
     def _engine_preview(self):
         from editor.stage_preview import StagePreviewDialog
@@ -1685,8 +2028,12 @@ class StageDialog(QDialog):
         for r in range(self.table.rowCount()):
             vals = []
             for c in range(4):
-                it = self.table.item(r, c)
-                vals.append(it.text().strip() if it else "")
+                w = self.table.cellWidget(r, c)
+                if isinstance(w, QComboBox):
+                    vals.append(w.currentText().strip())
+                else:
+                    it = self.table.item(r, c)
+                    vals.append(it.text().strip() if it else "")
             if vals[0]:
                 tmp_node.data["sprites"].append(vals)
         dlg = StagePreviewDialog(self.project, tmp_node, self,
@@ -1709,8 +2056,12 @@ class StageDialog(QDialog):
         for r in range(self.table.rowCount()):
             vals = []
             for c in range(4):
-                it = self.table.item(r, c)
-                vals.append(it.text().strip() if it else "")
+                w = self.table.cellWidget(r, c)
+                if isinstance(w, QComboBox):
+                    vals.append(w.currentText().strip())
+                else:
+                    it = self.table.item(r, c)
+                    vals.append(it.text().strip() if it else "")
             if vals[0]:
                 sprites.append(vals)
         node.data["bg"] = bg
