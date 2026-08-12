@@ -172,6 +172,7 @@ class AssetPanel(QWidget):
     """素材树面板 (递归目录组织 + 预览 + 右键管理)。"""
 
     status = Signal(str)
+    selected = Signal(object)   # 选中文件相对路径 (str) 或 None -> 属性面板
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -208,6 +209,7 @@ class AssetPanel(QWidget):
         self.tree.setHeaderLabels([t("assets.col_name"), t("assets.col_type")])
         self.tree.setColumnWidth(0, 320)
         self.tree.itemDoubleClicked.connect(self._on_double)
+        self.tree.itemSelectionChanged.connect(self._emit_selection)
         self.tree.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._context_menu)
         self.tree.setDragDropMode(QTreeWidget.DropOnly)
@@ -300,6 +302,9 @@ class AssetPanel(QWidget):
             return None
         rel = it.data(0, Qt.UserRole)
         return rel if rel else None
+
+    def _emit_selection(self) -> None:
+        self.selected.emit(self._selected_rel())
 
     def _selected_dir(self) -> str | None:
         """当前选中目录的绝对路径 (文件则取其所在目录)。"""

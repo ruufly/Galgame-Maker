@@ -212,6 +212,17 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
         # 流程画布选中节点 -> 属性面板
         self.flow.node_selected.connect(self.props.show_flow_node)
+        # 素材树 / 定义列表选中 -> 属性面板 (素材/定义联动)
+        self.assets.selected.connect(self.props.show_asset)
+        self.defs.selected.connect(self.props.show_definition)
+        self.props.changed.connect(self._on_prop_changed)
+
+    def _on_prop_changed(self, target: str) -> None:
+        """属性面板内编辑素材/定义后: 刷新对应面板。"""
+        if target == "assets":
+            self.assets.refresh()
+        elif target == "defs":
+            self.defs.refresh()
 
     def _locate_key(self, key: str) -> None:
         """切到多语言面板并定位指定 key (来自画布/定义等跳转)。"""
@@ -293,6 +304,7 @@ class MainWindow(QMainWindow):
         self.props.set_lang(GameLang(self.project.root,
                                      self.project.main_script()))
         self.props.set_flow_scene(self.flow.scene)
+        self.props.set_project(self.project)
         self.props.show_message(t("props.empty"))
         main = self.project.main_script()
         if main is not None:

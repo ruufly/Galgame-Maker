@@ -16,7 +16,7 @@ DefinitionsPanel: 类型列表 + 新建/编辑/删除; 保存 = 改模型 + 序�
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QComboBox, QDialog, QDoubleSpinBox, QFileDialog,
                                QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox,
@@ -109,6 +109,8 @@ def scene_backgrounds(stmt: Statement) -> list:
 class DefinitionsPanel(QWidget):
     """角色 / 场景 / 声音 定义浏览器 + 编辑入口。"""
 
+    selected = Signal(object)   # (op, ident) 或 None -> 属性面板
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.project = None
@@ -142,7 +144,12 @@ class DefinitionsPanel(QWidget):
 
         self.list = QListWidget()
         self.list.itemDoubleClicked.connect(lambda _i: self._edit())
+        self.list.itemSelectionChanged.connect(self._emit_selection)
         layout.addWidget(self.list, 1)
+
+    def _emit_selection(self) -> None:
+        ident = self._selected_ident()
+        self.selected.emit((self._op(), ident) if ident else None)
 
     # ---- 语言刷新 -----------------------------------------------------
     def apply_lang(self) -> None:

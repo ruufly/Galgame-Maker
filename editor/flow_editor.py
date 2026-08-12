@@ -46,6 +46,14 @@ KIND_NAMES = {"dialogue": "对话", "choice": "选择支", "jump": "跳转",
               "ending": "结局", "label": "标签", "raw": "代码",
               "action": "动作", "stage": "场景", "if": "条件"}
 
+# 常用指令 (动作节点候选; 插件注册指令自动并入)
+KERNEL_OPS = ["say", "nar", "text", "bg", "show", "hide", "clear", "move",
+              "rotate", "flip", "music", "sfx", "volume", "pause", "resume",
+              "stop", "set", "sleep", "typing", "use", "fade", "fadeout",
+              "save", "load", "fullscreen", "do_action", "using", "plugin",
+              "confirm", "read_settings", "ending", "jump", "call", "window",
+              "window config"]
+
 NODE_W = 200
 
 
@@ -1267,7 +1275,11 @@ class FlowEditor(QWidget):
                           ("flow.add_choice", "choice"),
                           ("flow.add_jump", "jump"),
                           ("flow.add_ending", "ending"),
-                          ("flow.add_label", "label")):
+                          ("flow.add_label", "label"),
+                          ("flow.add_stage", "stage"),
+                          ("flow.add_if", "if"),
+                          ("flow.add_action", "action"),
+                          ("flow.add_raw", "raw")):
             btn = QPushButton(t(key))
             btn.clicked.connect(lambda _c=False, k=kind: self._add(k))
             bar.addWidget(btn)
@@ -1391,8 +1403,64 @@ class FlowEditor(QWidget):
             node.data["target"] = None
         elif kind == "ending":
             node.data["name"] = "结局"
+        elif kind == "stage":
+            node.data["bg"] = ["", "", ""]
+        elif kind == "if":
+            from framework.engine.parser import Statement
+            node.data["cond"] = ""
+            node.raw = Statement(op="if",
+                                 kwargs={"branches": [["", []]]})
+        elif kind == "action":
+            from framework.engine.parser import Statement
+            op = self._pick_action_op()
+            if op is None:
+                self.graph.remove_node(node.node_id)
+                return
+            node.raw = Statement(op=op, args=[])
+        elif kind == "raw":
+            from framework.engine.parser import Statement
+            node.raw = Statement(op="python",
+                                 kwargs={"code": "# 在此编写 Python 代码"})
         self.scene.set_graph(self.graph)
         self.scene.items_by_id[node.node_id].setSelected(True)
+
+    def _pick_action_op(self) -> str | None:
+        """动作节点指令选择: 内核常用指令 + 插件注册指令/动作。"""
+        cands = list(KERNEL_OPS)
+        try:
+            from editor.plugins_api import registry
+            for name, p in registry.plugins().items():
+                cands.extend(p.commands.keys())
+            for a in registry.actions():
+                if a not in cands:
+                    cands.append("do_action: %s" % a)
+        except Exception:
+            pass
+        seen, out = set(), []
+        for c in cands:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(t("flow.pick_action"))
+        lay = QVBoxLayout(dlg)
+        cb = QComboBox()
+        cb.setEditable(True)
+        cb.addItems(out)
+        cb.setCurrentText("say")
+        lay.addWidget(QLabel(t("flow.pick_action_hint")))
+        lay.addWidget(cb)
+        btns = QHBoxLayout()
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        op = cb.currentText().strip()
+        if op.startswith("do_action: "):
+            op = "do_action"
+        return op or None
 
     def _auto_layout(self):
         self.graph.auto_layout()
