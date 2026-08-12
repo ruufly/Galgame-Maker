@@ -11,7 +11,8 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
-from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QPushButton,
+                               QVBoxLayout, QWidget)
 
 from editor.i18n import t
 
@@ -124,7 +125,6 @@ class RichPreviewDialog(QDialog):
         lay.addWidget(self.widget, 1)
         btn = QPushButton(t("richpreview.close"))
         btn.clicked.connect(self.accept)
-        from PySide6.QtWidgets import QHBoxLayout
         row = QHBoxLayout()
         row.addStretch(1)
         row.addWidget(btn)

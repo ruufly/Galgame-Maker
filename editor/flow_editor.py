@@ -367,19 +367,32 @@ def _summary_lines(node, lang=None) -> list:
     elif node.kind == "if":
         role = node.data.get("role", "if")
         cond = node.data.get("cond", "")
-        if role == "elif":
-            lines.append("否则如果 %s:" % cond)
-        elif role == "else":
+        branches = node.raw.kwargs.get("branches", []) \
+            if node.raw is not None else []
+        else_body = node.raw.kwargs.get("else") \
+            if node.raw is not None else None
+        if role == "else":
             lines.append("否则:")
+        elif role == "elif":
+            # 从当前 elif 起显示分支列表 (体现选择性质)
+            start = 0
+            for i, (c, _b) in enumerate(branches):
+                if c == cond:
+                    start = i
+                    break
+            lines.append("否则如果 %s:" % cond)
+            for i in range(start + 1, len(branches)):
+                c, b = branches[i]
+                lines.append("  ├ 否则如果 %s  (%d 节点)" % (c, len(b)))
+            if else_body is not None:
+                lines.append("  └ 否则 (%d 节点)" % len(else_body))
         else:
             lines.append("如果 %s:" % cond)
-        if node.raw is not None:
-            branches = node.raw.kwargs.get("branches", [])
-            else_body = node.raw.kwargs.get("else")
-            total = sum(len(b) for _c, b in branches)
+            for i, (c, b) in enumerate(branches):
+                kw = "├ 否则如果" if i > 0 else "├ 分支"
+                lines.append("  %s %s  (%d 节点)" % (kw, c, len(b)))
             if else_body is not None:
-                total += len(else_body)
-            lines.append("  [分支体 %d 条语句 → 画布独立节点]" % total)
+                lines.append("  └ 否则 (%d 节点)" % len(else_body))
     elif node.kind == "stage":
         scene, pose, effect = node.data.get("bg", ["", "", ""])
         lines.append("背景: %s%s%s" % (scene or pose or "(路径)",
@@ -1052,7 +1065,8 @@ class FlowScene(QGraphicsScene):
 
     def _edit_stage(self, node):
         """场景分镜编辑: 背景 + 立绘动作列表。"""
-        dlg = StageDialog(self.project, node, self)
+        # parent=None: FlowScene 不是 QWidget, 不能作 QDialog 父窗口
+        dlg = StageDialog(self.project, node, None)
         if dlg.exec() == QDialog.Accepted:
             dlg.apply(node)
             self.set_graph(self.graph)
@@ -1664,7 +1678,13 @@ class FlowEditor(QWidget):
 
     def _add(self, kind: str):
         self.scene.push_undo()
-        node = self.graph.add_node(kind)
+        # 新节点出现在画布当前可见区域中央 (带轻微偏移防重叠),
+        # 而不是图原点/活动节点位置
+        center = self.view.mapToScene(self.view.viewport().rect().center())
+        offset = (len(self.graph.nodes) % 6) * 18
+        x = center.x() + offset - 100
+        y = center.y() + offset - 40
+        node = self.graph.add_node(kind, x=x, y=y)
         # 给新节点一个可读的默认内容
         if kind == "dialogue":
             node.data["op"] = "text"

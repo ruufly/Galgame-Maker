@@ -19,6 +19,9 @@ from editor.ui.main_window import MainWindow
 
 
 def main() -> int:
+    # 全局异常处理: 弹窗 + 复制完整错误 (避免直接崩溃无提示)
+    from editor.error_dialog import install_excepthook
+    install_excepthook()
     app = QApplication(sys.argv)
     app.setApplicationName("Galgame Maker 编辑器")
     win = MainWindow()
