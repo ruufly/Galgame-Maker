@@ -40,10 +40,11 @@ KIND_COLORS = {
     "raw": "#8e44ad",
     "action": "#3a86a8",
     "stage": "#4e937a",
+    "if": "#c05ac0",
 }
 KIND_NAMES = {"dialogue": "对话", "choice": "选择支", "jump": "跳转",
               "ending": "结局", "label": "标签", "raw": "代码",
-              "action": "动作", "stage": "场景"}
+              "action": "动作", "stage": "场景", "if": "条件"}
 
 NODE_W = 200
 
@@ -312,6 +313,15 @@ def _summary_lines(node, lang=None) -> list:
             lines.append("  %d. %s" % (i + 1, (resolved or "")[:24]))
         if len(node.options) > 4:
             lines.append("  …")
+    elif node.kind == "if":
+        lines.append("如果 %s:" % node.data.get("cond", "?"))
+        if node.raw is not None:
+            branches = node.raw.kwargs.get("branches", [])
+            else_body = node.raw.kwargs.get("else")
+            for idx, (cond, body) in enumerate(branches[1:], start=1):
+                lines.append("  否则如果 %s  (%d 行)" % (cond, len(body)))
+            if else_body is not None:
+                lines.append("  否则 (%d 行)" % len(else_body))
     elif node.kind == "stage":
         scene, pose, effect = node.data.get("bg", ["", "", ""])
         lines.append("背景: %s%s%s" % (scene or pose or "(路径)",
@@ -683,6 +693,8 @@ class FlowScene(QGraphicsScene):
             self._edit_label(node)
         elif node.kind == "stage":
             self._edit_stage(node)
+        elif node.kind == "if":
+            self._edit_if(node)
         elif node.kind == "action":
             self._edit_action(node)
         elif node.kind == "raw":
@@ -919,6 +931,57 @@ class FlowScene(QGraphicsScene):
         dlg = StageDialog(self.project, node, self)
         if dlg.exec() == QDialog.Accepted:
             dlg.apply(node)
+            self.set_graph(self.graph)
+
+    def _edit_if(self, node):
+        """条件节点 (if/elif/else 块): 编辑条件 + 分支预览。"""
+        from PySide6.QtWidgets import QPlainTextEdit
+        if node.raw is None:
+            return
+        stmt = node.raw
+        branches = stmt.kwargs.get("branches", [])
+        else_body = stmt.kwargs.get("else")
+        dlg = QDialog()
+        dlg.setWindowTitle(t("flow.edit_if"))
+        dlg.resize(520, 380)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(t("flow.if_cond")))
+        ed_cond = QLineEdit(node.data.get("cond", ""))
+        lay.addWidget(ed_cond)
+        # 分支预览 (只读)
+        lay.addWidget(QLabel(t("flow.if_branches")))
+        preview = QPlainTextEdit()
+        preview.setReadOnly(True)
+        lines = []
+        for idx, (cond, body) in enumerate(branches):
+            kw = "if" if idx == 0 else "elif"
+            lines.append("%s %s:" % (kw, cond))
+            for b in body[:6]:
+                lines.append("    %s %s" % (b.op, " ".join(b.args)[:40]))
+            if len(body) > 6:
+                lines.append("    … (%d 行)" % len(body))
+        if else_body is not None:
+            lines.append("else:")
+            for b in else_body[:6]:
+                lines.append("    %s %s" % (b.op, " ".join(b.args)[:40]))
+            if len(else_body) > 6:
+                lines.append("    … (%d 行)" % len(else_body))
+        preview.setPlainText(chr(10).join(lines))
+        lay.addWidget(preview, 1)
+        hint = QLabel(t("flow.if_hint"))
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#888;")
+        lay.addWidget(hint)
+        btns = QHBoxLayout()
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() == QDialog.Accepted:
+            cond = ed_cond.text().strip()
+            node.data["cond"] = cond
+            if branches:
+                branches[0][0] = cond
             self.set_graph(self.graph)
 
     def _edit_action(self, node):
@@ -1171,6 +1234,9 @@ class ZoomView(QGraphicsView):
         sync = getattr(self.scene(), "_sync_positions", None)
         if sync is not None:
             sync(update_rect=False)
+        # 显式全场景重绘: Qt 增量重绘只更新节点附近区域,
+        # 长连线远处段会残留旧位置 (拖动时连线"一坨")
+        self.scene().update()
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
@@ -1373,10 +1439,17 @@ class StageDialog(QDialog):
         form.addRow("背景名", self.ed_pose)
         self.cb_effect = QComboBox()
         self.cb_effect.setEditable(True)
-        self.cb_effect.addItems(
-            ["", "fade", "dissolve", "blinds", "slide", "circle", "pixelate",
-             "zoom", "wipe", "iris", "curtain", "sweep", "fade_white",
-             "checker", "stripes"])
+        # 过渡效果候选: 引擎内核 + 插件注册 (transitions_plus 等)
+        effect_cands = ["", "fade", "dissolve", "blinds", "slide",
+                        "circle", "pixelate", "zoom"]
+        try:
+            from editor.plugins_api import registry
+            for tr in registry.transitions():
+                if tr and tr not in effect_cands:
+                    effect_cands.append(tr)
+        except Exception:
+            pass
+        self.cb_effect.addItems(effect_cands)
         self.cb_effect.setCurrentText(bg[2] or "")
         form.addRow("过渡效果", self.cb_effect)
         btn_preview = QPushButton("引擎真实预览…")

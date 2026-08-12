@@ -1,14 +1,15 @@
-"""流程节点模型 (P2): 对话流节点图 <-> story.gal 标签结构。
+"""流程节点模型 (P4 重构): 对话流节点图 <-> story.gal 标签结构。
 
-映射约定 (v1, 语义等价优先于文本简洁):
-- 节点 = story.gal 的一个标签 (label: 块)
-- 顺序后继 (dialogue -> next) = 块尾追加 `jump <next>`
-- 选择支选项 = choice 块内 `"文本" -> <目标标签>`
-- jump 节点 = `jump/call <目标>`; ending = `ending [名称]`
-- raw 节点 = 原样保留未知语句 (导入兜底, 不丢内容)
+映射约定 (v2, 每行代码都有节点):
+- **每个标签 = 独立的剧情树入口** (label 节点, 节点 id = 标签名)
+- 标签体内**每条语句 = 一个节点**, 顺序连线 (不再合并对话链)
+- choice / if / python:: 为块语句 -> 单节点 (选项/分支/代码保留在节点内)
+- jump/call 单独呈现为 jump 节点 (不再折叠为块尾连线)
+- 声音/立绘/插件等任意指令 -> action 节点 (原语句保留, 参数表单编辑)
+- bg -> stage 节点 (场景缩略图)
 
-导入: labels -> 节点图 (标签名即节点 id, 保证 jump/choice 目标有效)
-导出: 节点图 -> Script (story.gal), 每个节点一个标签
+导出: 从每个 label 入口沿 next 链收集语句 (遇 jump/ending/label 终止),
+选择支/跳转目标均为标签名 (节点 id), 语义与导入完全一致, 天然幂等。
 """
 
 from framework.engine.parser import Script, Statement
@@ -18,10 +19,10 @@ DIALOGUE_LABEL = {"say": "对话", "nar": "旁白", "text": "文本"}
 
 
 class FlowNode:
-    """一个流程节点 (= 一个标签块)。
+    """一个流程节点。
 
-    extra_stmts: 块内紧随本节点语句之后的顺序语句 (对话链合并用,
-    避免每句对话都生成一个标签)。
+    v2 简化: 每节点对应一条语句 (或一个块); extra_stmts 保留字段
+    兼容旧数据, 新导入不再填充。
     """
 
     def __init__(self, node_id: str, kind: str, x: float = 0.0,
@@ -30,13 +31,14 @@ class FlowNode:
                  options: list | None = None, raw: Statement | None = None,
                  extra_stmts: list | None = None):
         self.node_id = node_id
-        self.kind = kind          # dialogue/choice/jump/ending/label/raw
+        self.kind = kind          # label/dialogue/choice/jump/ending/stage/
+                                  # action/raw/if
         self.x, self.y = x, y
         self.next_id = next_id    # 顺序后继节点 id
         self.data = data or {}    # dialogue: op/speaker/text; jump: target/is_call;
-                                  # ending: name; label: text
+                                  # ending: name; label: text; if: raw
         self.options = options or []   # choice: [[text, target_id], ...]
-        self.raw = raw            # raw: 原始语句
+        self.raw = raw            # action/raw/if: 原始语句
         self.extra_stmts = extra_stmts or []
 
     def summary(self) -> str:
@@ -54,6 +56,8 @@ class FlowNode:
         if self.kind == "label":
             return "标签%s" % ("「%s」" % self.data.get("text", "")
                                if self.data.get("text") else "")
+        if self.kind == "if":
+            return "如果 %s" % self.data.get("cond", "?")
         if self.kind == "action":
             return "%s %s" % (self.raw.op, " ".join(self.raw.args)) \
                 if self.raw else "动作"
@@ -61,9 +65,6 @@ class FlowNode:
             scene, pose, effect = self.data.get("bg", ["", "", ""])
             head = "场景: %s%s" % (scene or pose or "(直接路径)",
                                    " [%s]" % pose if scene and pose else "")
-            sprites = self.data.get("sprites", [])
-            if sprites:
-                head += "  (%d 个立绘动作)" % len(sprites)
             return head
         if self.kind == "raw":
             return self.raw.op if self.raw else "代码块"
@@ -140,82 +141,77 @@ class FlowGraph:
             node.options.append(["", None])
         node.options[idx] = [text, target]
 
-    # ---- 导入: Script(story.gal) -> 节点图 ---------------------------
+    # ---- 导入: Script(story.gal) -> 节点图 (每行一个节点) -------------
     @classmethod
     def from_script(cls, script: Script, script_name: str = "story.gal",
                     layout: bool = True) -> "FlowGraph":
         g = cls(script_name)
-        # 第一遍: 注册全部标签节点 (保证自动 id 不与标签名冲突)
+        # 第一遍: 注册全部标签入口节点 (自动 id 不与标签名冲突)
         for label in script.labels:
             g.add_node("label", x=0, y=0, node_id=label,
                        data={"text": label})
-        # 第二遍: 填充标签内容; 顺序语句 (对话/动作/代码) 合并进
-        # extra_stmts, 分支语句 (choice/jump/ending) 新建节点
+        # 第二遍: 标签体内每条语句一个节点, 顺序连线
         y = 0
         for label, body in script.labels.items():
-            g.nodes[label].y = y
-            y += 1
             prev = label
-            first = True
-            n = len(body)
-            for idx, stmt in enumerate(body):
-                # 块尾 jump (目标标签已存在, 且 prev 非 choice) 折叠为
-                # next 连线, 不建节点 —— 保证 导入->导出->导入 幂等
-                if (idx == n - 1 and not first and stmt.op == "jump"
-                        and stmt.args and stmt.args[0] in g.nodes
-                        and g.nodes[prev].kind != "choice"):
-                    g.connect(prev, stmt.args[0])
-                    continue
+            for stmt in body:
                 kind, data, options, raw = _stmt_to_node(stmt)
-                if first:
-                    node = g.nodes[label]
-                    node.kind = kind
-                    node.data = data
-                    node.options = options
-                    node.raw = raw
-                    first = False
-                    prev = label
-                    continue
-                mergeable = kind in ("dialogue", "action", "raw")
-                prev_mergeable = g.nodes[prev].kind in (
-                    "dialogue", "action", "raw", "label")
-                # 紧跟 stage 的 show/hide/clear 并入该 stage 的立绘列表
-                if g.nodes[prev].kind == "stage" and stmt.op in (
-                        "show", "hide", "clear"):
-                    g.nodes[prev].data["sprites"].append(
-                        _sprite_from_stmt(stmt))
-                elif g.nodes[prev].kind == "stage" and stmt.op == "move":
-                    g.nodes[prev].data.setdefault("moves", []).append(
-                        _move_from_stmt(stmt))
-                elif g.nodes[prev].kind == "stage" and stmt.op in (
-                        "music", "sfx", "volume", "pause", "resume", "stop"):
-                    row = _audio_from_stmt(stmt)
-                    if row is not None:
-                        g.nodes[prev].data.setdefault("audio", []).append(row)
-                elif mergeable and prev_mergeable:
-                    g.nodes[prev].extra_stmts.append(stmt)
-                else:
-                    node = g.add_node(kind, x=0, y=y, data=data,
-                                      options=options, raw=raw)
-                    y += 1
-                    g.connect(prev, node.node_id)
-                    prev = node.node_id
+                node = g.add_node(kind, x=0, y=y, data=data,
+                                  options=options, raw=raw)
+                y += 1
+                g.connect(prev, node.node_id)
+                prev = node.node_id
         if layout:
             g.auto_layout()
         return g
 
-    # ---- 导出: 节点图 -> Script(story.gal) ---------------------------
+    # ---- 导出: 节点图 -> Script(story.gal) ----------------------------
     def to_script(self) -> Script:
+        """从每个 label 入口沿 next 链收集语句; 遇 jump/ending/其它
+        label 终止 (标签边界)。jump/选择支目标即标签名。
+
+        gal 语义: jump/选择支目标必须是标签 -> 被引用但不是 label 的
+        节点自动**提升为宿主标签** (以节点 id 为标签名), 保证任意
+        连线都能导出且往返稳定。
+        """
         script = Script(path=self.script_name)
-        for nid in self.order:
-            node = self.nodes[nid]
-            body = _node_to_statements(node)
-            script.labels[nid] = body
+        referenced: set = set()
+        for n in self.nodes.values():
+            if n.kind == "jump" and n.data.get("target"):
+                referenced.add(n.data["target"])
+            for _t, tg in n.options:
+                if tg:
+                    referenced.add(tg)
+        hosts = [nid for nid in self.order
+                 if self.nodes[nid].kind == "label"]
+        promoted = [rid for rid in self.order
+                    if rid in referenced and rid not in hosts
+                    and self.nodes[rid].kind != "label"]
+
+        def collect(start_id: str | None, label_name: str) -> None:
+            body: list = []
+            nxt = start_id
+            visited = set()
+            while nxt and nxt not in visited and nxt in self.nodes:
+                visited.add(nxt)
+                n = self.nodes[nxt]
+                if n.kind == "label":
+                    break
+                body.extend(_node_to_statements(n))
+                if n.kind in ("jump", "ending"):
+                    break
+                nxt = n.next_id
+            script.labels[label_name] = body
+
+        for nid in hosts:
+            collect(self.nodes[nid].next_id, nid)
+        for rid in promoted:
+            collect(rid, rid)
         return script
 
     # ---- 布局 ---------------------------------------------------------
     def auto_layout(self, x_gap: float = 260.0, y_gap: float = 120.0) -> None:
-        """简单分层布局 (BFS 分层)。"""
+        """竖向分层布局 (BFS): 主链从上到下, 分支左右展开。"""
         indeg = {nid: 0 for nid in self.order}
         for n in self.nodes.values():
             targets = []
@@ -229,10 +225,8 @@ class FlowGraph:
             for t in targets:
                 if t in indeg:
                     indeg[t] += 1
-        # 起点: 入度 0 (或 game_start 优先)
         import heapq
         ready = [nid for nid in self.order if indeg[nid] == 0]
-        # game_start 优先
         if "game_start" in ready:
             ready.remove("game_start")
             ready.insert(0, "game_start")
@@ -260,12 +254,9 @@ class FlowGraph:
                 if t in indeg and t not in layers:
                     indeg[t] -= 1
                     heapq.heappush(heap, (_l + 1, seq, t))
-        # 孤立节点补层
         for nid in self.order:
             if nid not in layers:
                 layers[nid] = 0
-        # 按层计算坐标: 竖向布局 (层=纵向 y, 层内横向 x 错开)
-        # 主链从上到下, 分支左右展开; 端口输入上/输出下, 连线以竖向为主
         per_layer = {}
         for nid, l in layers.items():
             per_layer.setdefault(l, []).append(nid)
@@ -283,29 +274,41 @@ def _stmt_to_node(stmt: Statement):
     """语句 -> (kind, data, options, raw)。"""
     op = stmt.op
     if op in DIALOGUE_OPS:
-        return ("dialogue",
-                {"op": op, "speaker": stmt.args[0] if op == "say"
-                 and stmt.args else "",
-                 "text": stmt.args[-1] if stmt.args else ""},
-                [], None)
+        args = list(stmt.args)
+        voice = ""
+        if "voice" in args:
+            i = args.index("voice")
+            voice = args[i + 1] if i + 1 < len(args) else ""
+            args = args[:i]
+        speaker = args[0] if op == "say" and args else ""
+        data = {"op": op, "speaker": speaker,
+                "text": args[-1] if args else ""}
+        if voice:
+            data["voice"] = voice
+        return ("dialogue", data, [], None)
     if op == "choice":
         options = [[t, tg] for t, tg in stmt.kwargs.get("options", [])]
-        return ("choice", {}, options, None)
+        return ("choice", {}, options, stmt)
     if op in ("jump", "call"):
         return ("jump",
                 {"target": stmt.args[0] if stmt.args else None,
                  "is_call": op == "call"},
-                [], None)
+                [], stmt)
     if op == "ending":
         return ("ending", {"name": stmt.args[0] if stmt.args else ""},
-                [], None)
+                [], stmt)
     if op == "bg":
-        # 场景节点: bg 参数解析 (scene [pose] [with effect] / 直接路径)
         scene, pose, effect = _parse_bg(stmt)
         return ("stage", {"bg": [scene, pose, effect], "sprites": []},
                 [], stmt)
-    # 其他普通语句 (show/music/set/save/fade/...): 动作节点, 原样保留
-    if op not in ("->",) and stmt.op:
+    if op == "if":
+        cond = str(stmt.kwargs.get("cond", ""))
+        branches = stmt.kwargs.get("branches", [])
+        if branches:
+            cond = str(branches[0][0])
+        return ("if", {"cond": cond}, [], stmt)
+    # 其它普通语句 (show/music/set/sleep/typing/插件指令...): 动作节点
+    if stmt.op:
         return ("action", {}, [], stmt)
     return ("raw", {}, [], stmt)
 
@@ -325,94 +328,20 @@ def _parse_bg(stmt: Statement):
     return (args[0], args[1], effect)
 
 
-def _move_from_stmt(stmt: Statement):
-    """move 语句 -> [角色, xy, 秒, 效果, 缓动] (紧跟 stage 的立绘定位)。
-
-    语法: move <char> [to] <xy> [秒] [ease <名>] [with 效果]
-    """
-    args = list(stmt.args)
-    char = args[0] if args else ""
-    rest = args[1:]
-    eff = ease = ""
-    if "with" in rest:
-        i = rest.index("with")
-        eff = rest[i + 1] if i + 1 < len(rest) else ""
-        rest = rest[:i]
-    if "ease" in rest:
-        i = rest.index("ease")
-        ease = rest[i + 1] if i + 1 < len(rest) else ""
-        rest = rest[:i]
-    if rest and rest[0] == "to":
-        rest = rest[1:]
-    xy = rest[0] if rest else ""
-    dur = rest[1] if len(rest) > 1 else "0"
-    return [char, xy, dur, eff, ease]
-
-
-def _audio_from_stmt(stmt: Statement):
-    """音乐/音效语句 -> [op, a, b, c] (stage 音频轨条目)。
-
-    music: [music, 名, loop, fade]   sfx: [sfx, 名, "", ""]
-    volume: [volume, 目标, 角色(voice), 值]
-    pause/resume/stop: [op, 目标, "", fade]
-    """
-    args = list(stmt.args)
-    op = stmt.op
-    if op == "music":
-        name = args[0] if args else ""
-        loop, fade = "1", ""
-        for i, a in enumerate(args):
-            if a == "loop" and i + 1 < len(args):
-                loop = args[i + 1]
-            elif a == "fade" and i + 1 < len(args):
-                fade = args[i + 1]
-        return ["music", name, loop, fade]
-    if op == "sfx":
-        return ["sfx", args[0] if args else "", "", ""]
-    if op == "volume":
-        if len(args) >= 2:
-            target = args[0]
-            if target == "voice" and len(args) >= 3:
-                return ["volume", "voice", args[1], args[2]]
-            return ["volume", target, "", args[-1]]
-        return ["volume", "", "", ""]
-    if op in ("pause", "resume", "stop"):
-        fade = ""
-        if "fade" in args:
-            i = args.index("fade")
-            fade = args[i + 1] if i + 1 < len(args) else ""
-        target = args[0] if args else "music"
-        return [op, target, "", fade]
-    return None
-
-
-def _sprite_from_stmt(stmt: Statement):
-    """show/hide/clear 语句 -> [动作, 角色, 表情, 效果]。"""
-    args = list(stmt.args)
-    effect = ""
-    if "with" in args:
-        i = args.index("with")
-        effect = args[i + 1] if i + 1 < len(args) else ""
-        args = args[:i]
-    op = stmt.op
-    if op == "clear":
-        return ["clear", "", "", ""]
-    char = args[0] if args else ""
-    expr = args[1] if op == "show" and len(args) > 1 else ""
-    return [op, char, expr, effect]
-
-
 def _node_to_statements(node: FlowNode) -> list:
     out = []
     k = node.kind
     if k == "dialogue":
         op = node.data.get("op", "text")
+        voice = node.data.get("voice", "")
         if op == "say":
-            out.append(Statement(op="say",
-                                 args=[node.data.get("speaker", ""),
-                                       node.data.get("text", "")]))
+            args = [node.data.get("speaker", ""),
+                    node.data.get("text", "")]
         else:
-            out.append(Statement(op=op, args=[node.data.get("text", "")]))
+            args = [node.data.get("text", "")]
+        if voice:
+            args += ["voice", voice]
+        out.append(Statement(op=op, args=args))
     elif k == "choice":
         options = [[t or "", tg or ""] for t, tg in node.options]
         out.append(Statement(op="choice", kwargs={"options": options}))
@@ -423,6 +352,10 @@ def _node_to_statements(node: FlowNode) -> list:
     elif k == "ending":
         name = node.data.get("name")
         out.append(Statement(op="ending", args=[name] if name else []))
+    elif k == "if":
+        # 原样保留 if 块 (编辑时改 data.cond 已写回 raw)
+        if node.raw is not None:
+            out.append(node.raw)
     elif k == "action" and node.raw is not None:
         out.append(node.raw)
     elif k == "stage":
@@ -481,10 +414,7 @@ def _node_to_statements(node: FlowNode) -> list:
             out.append(Statement(op="move", args=margs))
     elif k == "raw" and node.raw is not None:
         out.append(node.raw)
-    # label: 无主语句 (纯汇合点)
-    # 合并的顺序语句
+    # label: 无主语句 (纯剧情树入口)
+    # 兼容: 手动附加语句 (旧数据)
     out.extend(node.extra_stmts)
-    # 顺序后继 (块尾 jump)
-    if k in ("dialogue", "action", "raw", "label", "stage") and node.next_id:
-        out.append(Statement(op="jump", args=[node.next_id]))
     return out

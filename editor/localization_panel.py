@@ -22,6 +22,9 @@ def scan_refs(project) -> dict:
     refs: dict = {}
 
     def _scan_text(text: str, where: tuple):
+        # 属性值可能是非字符串 (数字/布尔), 跳过
+        if not isinstance(text, str):
+            return
         for m in PLACEHOLDER_RE.finditer(text):
             refs.setdefault(m.group(1), []).append(where)
 
@@ -111,7 +114,7 @@ class LocalizationPanel(QWidget):
         keys = self.lang.keys()
         self.table.blockSignals(True)
         self.table.clear()
-        self.table.setColumnCount(len(langs) + 1)
+        self.table.setColumnCount(len(langs) + 2)
         self.table.setHorizontalHeaderLabels(
             [t("local.key")] + [lang_label(c) for c in langs]
             + [t("local.refs")])

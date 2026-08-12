@@ -175,5 +175,9 @@
   "styles.pick_source": "请选择左侧样式源",
   "styles.missing": "未定义 (点击右侧新建)",
   "styles.saved": "样式已保存: %{target}",
-  "styles.created": "已新建 %{op} 块 (%{rel})"
+  "styles.created": "已新建 %{op} 块 (%{rel})",
+  "flow.edit_if": "编辑条件",
+  "flow.if_cond": "条件表达式 (如 love > 0):",
+  "flow.if_branches": "分支结构 (只读预览):",
+  "flow.if_hint": "提示: 分支内的语句是独立节点, 可在画布上编辑; 此对话框只编辑条件。"
 }

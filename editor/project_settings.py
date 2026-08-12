@@ -157,14 +157,17 @@ class ProjectSettingsDialog(QDialog):
                            ("confirm_title", "返回标题")):
             chk = QCheckBox("启用「%s」确认框" % label)
             chk.setChecked(gal_to_bool(k.get(key, "true")))
-            text = QLineEdit(str(k.get(key + "_text", "")))
-            yes = QLineEdit(str(k.get(key + "_yes", "")))
-            no = QLineEdit(str(k.get(key + "_no", "")))
-            text.setPlaceholderText("提示文案 (支持 {@key})")
-            form.addRow(chk, text)
-            form.addRow("    确定按钮", yes)
-            form.addRow("    取消按钮", no)
-            self.conf[key] = (chk, text, yes, no)
+            text_w, text_g = make_lang_edit_widget(
+                self._gl, str(k.get(key + "_text", "")))
+            yes_w, yes_g = make_lang_edit_widget(
+                self._gl, str(k.get(key + "_yes", "")))
+            no_w, no_g = make_lang_edit_widget(
+                self._gl, str(k.get(key + "_no", "")))
+            form.addRow(chk, text_w)
+            form.addRow("    确定按钮", yes_w)
+            form.addRow("    取消按钮", no_w)
+            self.conf[key] = (chk, (text_w, text_g), (yes_w, yes_g),
+                              (no_w, no_g))
         wrap = QVBoxLayout()
         wrap.addWidget(box)
         wrap.addStretch(1)
@@ -188,15 +191,15 @@ class ProjectSettingsDialog(QDialog):
         return w
 
     def _tab_menu(self, k):
-        box = QGroupBox("ESC 菜单 / 标题按钮文案 (支持 {@key})")
+        box = QGroupBox("ESC 菜单 / 标题按钮文案")
         form = QFormLayout(box)
         self.menu_texts = {}
         for key, label in (("menu_continue", "继续游戏"), ("menu_save", "存档"),
                            ("menu_load", "读取存档"), ("menu_title", "返回标题"),
                            ("menu_quit", "退出游戏")):
-            ed = QLineEdit(str(k.get(key, "")))
-            form.addRow(label, ed)
-            self.menu_texts[key] = ed
+            w, getter = make_lang_edit_widget(self._gl, str(k.get(key, "")))
+            form.addRow(label, w)
+            self.menu_texts[key] = (w, getter)
         wrap = QVBoxLayout()
         wrap.addWidget(box)
         wrap.addStretch(1)
@@ -227,15 +230,15 @@ class ProjectSettingsDialog(QDialog):
             "music_fade": str(round(self.sp_fade.value(), 2)),
             "ui_click_sound": self.ed_click.text().strip(),
         }
-        for key, (chk, text, yes, no) in self.conf.items():
+        for key, (chk, text_pair, yes_pair, no_pair) in self.conf.items():
             v[key] = bool_to_gal(chk.isChecked())
-            v[key + "_text"] = text.text().strip()
-            v[key + "_yes"] = yes.text().strip()
-            v[key + "_no"] = no.text().strip()
+            v[key + "_text"] = text_pair[1]().strip()
+            v[key + "_yes"] = yes_pair[1]().strip()
+            v[key + "_no"] = no_pair[1]().strip()
         for key, ed in self.keys.items():
             v[key] = ed.text().strip()
-        for key, ed in self.menu_texts.items():
-            v[key] = ed.text().strip()
+        for key, (w, getter) in self.menu_texts.items():
+            v[key] = getter().strip()
         return v
 
     def _save(self):

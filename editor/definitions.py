@@ -360,10 +360,12 @@ class DefDialog(QDialog):
             self.sp_voice.setValue(1.0)
         return self.sp_voice
 
-    def _ed(self, key, k, form) -> QLineEdit:
-        ed = QLineEdit(str(k.get(key, "")))
-        self.ed_extra[key] = ed
-        return ed
+    def _ed(self, key, k, form):
+        """描述类字段 (desc/cv 等, 引擎支持 {@key}): 多语言编辑控件。"""
+        from editor.lang_dialog import make_lang_edit_widget
+        w, getter = make_lang_edit_widget(self._gl, str(k.get(key, "")))
+        self.ed_extra[key] = (w, getter)
+        return w
 
     def _build_table(self, k, title: str) -> QTableWidget:
         t = QTableWidget(0, 2)
@@ -419,9 +421,10 @@ class DefDialog(QDialog):
                 v["default"] = self._extra_paths["default"].text().strip()
             if self.sp_voice.value() != 1.0:
                 v["voice_volume"] = str(self.sp_voice.value())
-            for key, ed in self.ed_extra.items():
-                if ed.text().strip():
-                    v[key] = ed.text().strip()
+            for key, pair in self.ed_extra.items():
+                _w, getter = pair
+                if getter().strip():
+                    v[key] = getter().strip()
             for r in range(self.table_ref.rowCount()):
                 name = self.table_ref.item(r, 0)
                 path = self.table_ref.item(r, 1)

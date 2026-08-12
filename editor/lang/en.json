@@ -175,5 +175,9 @@
   "styles.pick_source": "Pick a style source on the left",
   "styles.missing": "not defined (create on the right)",
   "styles.saved": "Style saved: %{target}",
-  "styles.created": "Created %{op} block (%{rel})"
+  "styles.created": "Created %{op} block (%{rel})",
+  "flow.edit_if": "Edit Condition",
+  "flow.if_cond": "Condition expression (e.g. love > 0):",
+  "flow.if_branches": "Branch structure (read-only preview):",
+  "flow.if_hint": "Note: statements inside branches are separate nodes, editable on the canvas; this dialog edits the condition only."
 }

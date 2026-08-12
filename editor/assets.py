@@ -9,15 +9,17 @@
 import os
 import shutil
 
-from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPixmap
-from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QHBoxLayout,
-                               QInputDialog, QLabel, QListWidget,
+from PySide6.QtCore import QFileInfo, Qt, QSize, Signal
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFileIconProvider,
+                               QHBoxLayout, QInputDialog, QLabel, QListWidget,
                                QListWidgetItem, QMenu, QMessageBox,
                                QPushButton, QTreeWidget, QTreeWidgetItem,
                                QVBoxLayout, QWidget)
 
 from editor.i18n import t
+
+_ICON_PROVIDER = QFileIconProvider()
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
 AUDIO_EXTS = {".wav", ".mp3", ".ogg", ".flac", ".m4a"}
@@ -66,6 +68,17 @@ def _make_thumb(path: str, size: int = 64) -> QPixmap:
                (ext[1:] or "file").upper()[:5])
     p.end()
     return pix
+
+
+def _file_icon(path: str):
+    """文件图标: 图片用缩略图, 其它用系统文件图标。"""
+    ext = os.path.splitext(path)[1].lower()
+    if ext in IMAGE_EXTS:
+        pix = _make_thumb(path, 24)
+        from PySide6.QtGui import QIcon
+        return QIcon(pix)
+    info = os.path.abspath(path)
+    return _ICON_PROVIDER.icon(QFileInfo(info))
 
 
 # ----------------------------------------------------------------------
@@ -137,7 +150,8 @@ def open_audio_preview(path: str, parent=None) -> None:
     player = QMediaPlayer(dlg)
     out = QAudioOutput(dlg)
     player.setAudioOutput(out)
-    player.setSource(path)
+    from PySide6.QtCore import QUrl
+    player.setSource(QUrl.fromLocalFile(os.path.abspath(path)))
     btn_play = QPushButton(t("assets.play"))
     btn_stop = QPushButton(t("assets.stop"))
     btn_play.clicked.connect(player.play)
@@ -227,7 +241,7 @@ class AssetPanel(QWidget):
             return
         cat = self.cb_cat.currentData()
         root_item = QTreeWidgetItem([os.path.basename(self._root) or "project"])
-        root_item.setIcon(0, _make_thumb("", 16))
+        root_item.setIcon(0, _ICON_PROVIDER.icon(QFileIconProvider.Folder))
         self._walk(self._root, root_item, cat)
         self.tree.addTopLevelItem(root_item)
         root_item.setExpanded(True)
@@ -257,7 +271,7 @@ class AssetPanel(QWidget):
                 if name in _SKIP_DIRS:
                     continue
                 node = QTreeWidgetItem([name, ""])
-                node.setIcon(0, _make_thumb("", 16))
+                node.setIcon(0, _ICON_PROVIDER.icon(QFileIconProvider.Folder))
                 parent.addChild(node)
                 self._walk(full, node, cat)
             else:
@@ -273,7 +287,8 @@ class AssetPanel(QWidget):
                             "audio": t("assets.cat_audio"),
                             "font": t("assets.cat_font"),
                             "other": t("assets.cat_other")}.get(c, c)])
-                node.setIcon(0, _make_thumb(full))
+                # 图片用缩略图, 其它用系统文件图标
+                node.setIcon(0, _file_icon(full))
                 node.setData(0, Qt.UserRole, rel)
                 node.setToolTip(0, rel)
                 parent.addChild(node)
