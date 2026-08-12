@@ -264,15 +264,16 @@ class FlowGraph:
         for nid in self.order:
             if nid not in layers:
                 layers[nid] = 0
-        # 按层计算坐标 (每层横向错开)
+        # 按层计算坐标: 竖向布局 (层=纵向 y, 层内横向 x 错开)
+        # 主链从上到下, 分支左右展开; 端口输入上/输出下, 连线以竖向为主
         per_layer = {}
         for nid, l in layers.items():
             per_layer.setdefault(l, []).append(nid)
         for l, ids in per_layer.items():
             for i, nid in enumerate(ids):
                 node = self.nodes[nid]
-                node.x = l * x_gap
-                node.y = i * y_gap - (len(ids) - 1) * y_gap / 2
+                node.x = i * x_gap - (len(ids) - 1) * x_gap / 2
+                node.y = l * y_gap
 
 
 # ----------------------------------------------------------------------

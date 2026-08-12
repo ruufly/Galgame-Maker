@@ -87,13 +87,29 @@ def launch(gal_file: str) -> int:
     engine.apply_config(cfg)   # 运行时选项 (含 font)
     if icon:
         engine.set_icon(icon)
+    if _DEBUG_PORT is not None:
+        # 调试服务器: 编辑器预览窗口经 TCP 实时读取 FPS/变量/日志
+        from framework.engine.debug_server import DebugServer
+        DebugServer.start(engine, _DEBUG_PORT)
     engine.run(gal_file)
     return 0
 
 
+_DEBUG_PORT: int | None = None   # 由 main() 解析 --debug-port 设置
+
+
 def main() -> None:
-    if len(sys.argv) > 1:
-        target = sys.argv[1]
+    global _DEBUG_PORT
+    args = list(sys.argv[1:])
+    if "--debug-port" in args:
+        i = args.index("--debug-port")
+        try:
+            _DEBUG_PORT = int(args[i + 1])
+            del args[i:i + 2]
+        except (ValueError, IndexError):
+            _DEBUG_PORT = None
+    if args:
+        target = args[0]
     else:
         target = os.path.join(_ROOT, "test", "engine_demo", "demo.gal")
         log.i("log.launcher.no_script_demo")

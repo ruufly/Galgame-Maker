@@ -63,7 +63,7 @@ class NodeItem(QGraphicsItem):
 
     # ---- 尺寸 ---------------------------------------------------------
     def _calc_rect(self) -> QRectF:
-        lines = _summary_lines(self.node)
+        lines = _summary_lines(self.node, self.flow_scene.lang)
         h = 34 + max(1, len(lines)) * 17 + 10
         if self.node.kind == "choice":
             h += len(self.node.options) * 16
@@ -119,7 +119,7 @@ class NodeItem(QGraphicsItem):
             painter.drawPixmap(QRectF(8, 38, NODE_W - 16, 58).toRect(),
                                thumb)
             y = 38 + 58 + 6
-        for line in _summary_lines(self.node):
+        for line in _summary_lines(self.node, self.flow_scene.lang):
             painter.drawText(QRectF(8, y, NODE_W - 16, 16),
                              Qt.AlignLeft, line)
             y += 17
@@ -221,6 +221,19 @@ class EdgeItem:
 _THUMB_CACHE = {}
 
 
+def _choice_insert_row(tbl, row: int = -1) -> None:
+    """选择支编辑表: 插入一行 (可指定位置)。"""
+    if row < 0 or row > tbl.rowCount():
+        row = tbl.rowCount()
+    tbl.insertRow(row)
+    tbl.setItem(row, 0, QTableWidgetItem(""))
+
+
+def _choice_remove_row(tbl, row: int) -> None:
+    if 0 <= row < tbl.rowCount():
+        tbl.removeRow(row)
+
+
 def _clear_thumb_cache():
     _THUMB_CACHE.clear()
 
@@ -266,13 +279,37 @@ def _thumb_pixmap(path: str, w: int, h: int):
     return pix
 
 
-def _summary_lines(node) -> list:
+def _summary_lines(node, lang=None) -> list:
+    """节点摘要行; lang 提供时把 {@key} 解析为当前语言文本。"""
     s = node.summary()
     lines = []
-    if node.kind == "choice":
+    if node.kind == "dialogue":
+        sp = node.data.get("speaker", "")
+        tx = node.data.get("text", "")
+        resolved = lang.resolve(tx) if (lang and tx) else tx
+        lines.append(("%s: %s" % (sp, resolved)) if sp else resolved)
+        # 对话链合并的语句可视化 (让"被吞"的语句可见)
+        extra = node.extra_stmts
+        if extra:
+            lines.append("  [合并 %d 句]" % len(extra))
+            for stmt in extra[:3]:
+                if stmt.op in ("say", "nar", "text"):
+                    sp2 = stmt.args[0] if stmt.op == "say" and stmt.args \
+                        else ""
+                    tx2 = stmt.args[-1] if stmt.args else ""
+                    r2 = lang.resolve(tx2) if (lang and tx2) else tx2
+                    lines.append("  %s" % (("%s: %s" % (sp2, r2))
+                                           if sp2 else r2))
+                else:
+                    lines.append("  [%s %s]" % (stmt.op,
+                                                " ".join(stmt.args)[:18]))
+            if len(extra) > 3:
+                lines.append("  …")
+    elif node.kind == "choice":
         lines.append("选择支 (%d 项):" % len(node.options))
         for i, (text, _tg) in enumerate(node.options[:4]):
-            lines.append("  %d. %s" % (i + 1, (text or "")[:24]))
+            resolved = lang.resolve(text) if lang and text else text
+            lines.append("  %d. %s" % (i + 1, (resolved or "")[:24]))
         if len(node.options) > 4:
             lines.append("  …")
     elif node.kind == "stage":
@@ -292,7 +329,8 @@ def _summary_lines(node) -> list:
             lines.append("  …")
     else:
         for ln in s.split("\n")[:4]:
-            lines.append(ln[:36])
+            resolved = lang.resolve(ln) if lang else ln
+            lines.append(resolved[:36])
     return lines
 
 
@@ -379,6 +417,7 @@ class FlowScene(QGraphicsScene):
         super().__init__(parent)
         self.graph: FlowGraph | None = None
         self.project = None        # 用于 stage 缩略图路径解析
+        self.lang = None           # GameLang | None (项目多语言表)
         self.items_by_id: dict = {}
         self.edges: list = []
         self._drag = None          # (src_id, port, temp_line)
@@ -386,6 +425,31 @@ class FlowScene(QGraphicsScene):
         self._undo_stack: list = []
         self._redo_stack: list = []
         self.setBackgroundBrush(QColor("#1c1c28"))
+        # PySide6 6.11 不触发 ItemPositionChange/ItemPositionHasChanged
+        # (setPos/moveBy 静默), 节点拖动回写与 sceneRect 跟随改由
+        # 视图层 mouseMove/Release 后显式 _sync_positions() 完成;
+        # scene.changed 仅在真实渲染时发射, 作为 GUI 兜底。
+        self.changed.connect(self._on_scene_changed)
+
+    def _on_scene_changed(self, _changes=None) -> None:
+        """场景内容变化 (真实渲染时 Qt 才发此信号) 后同步。"""
+        self._sync_positions()
+
+    def _sync_positions(self, update_rect: bool = True) -> None:
+        """把节点 item 当前位置回写模型坐标。
+
+        update_rect=True 时同时扩展 sceneRect (松开鼠标后调用);
+        拖动过程中传 False, 避免每帧 setSceneRect 导致视图跳动。
+        """
+        if self.graph is None:
+            return
+        for nid, item in self.items_by_id.items():
+            node = item.node
+            p = item.pos()
+            if node.x != p.x() or node.y != p.y():
+                node.x, node.y = p.x(), p.y()
+        if update_rect:
+            self._sync_scene_rect()
 
     # ---- 撤销 ---------------------------------------------------------
     def push_undo(self) -> None:
@@ -436,6 +500,15 @@ class FlowScene(QGraphicsScene):
             self.items_by_id[nid] = item
             self.addItem(item)
         self.rebuild_edges()
+        self._sync_scene_rect()
+
+    def _sync_scene_rect(self) -> None:
+        """sceneRect 跟随内容 (修复: 固定区域时超出部分无法滚动)。"""
+        rect = self.itemsBoundingRect()
+        if rect.isNull():
+            rect = QRectF(-2000, -2000, 4000, 4000)
+        margin = 160
+        self.setSceneRect(rect.adjusted(-margin, -margin, margin, margin))
 
     def rebuild_edges(self) -> None:
         # EdgeItem 为纯数据 (场景前景绘制), 不 addItem/removeItem
@@ -478,6 +551,7 @@ class FlowScene(QGraphicsScene):
 
     def edges_changed(self) -> None:
         self.update()
+        self._sync_scene_rect()
 
     # ---- 绘制 ---------------------------------------------------------
     def drawBackground(self, painter, rect):
@@ -611,51 +685,177 @@ class FlowScene(QGraphicsScene):
             self._edit_stage(node)
         elif node.kind == "action":
             self._edit_action(node)
+        elif node.kind == "raw":
+            self._edit_raw(node)
 
     def _edit_dialogue(self, node):
-        from PySide6.QtWidgets import QDialog as _D
-        dlg = _D()
-        dlg.setWindowTitle("编辑对话")
+        dlg = QDialog()
+        dlg.setWindowTitle(t("flow.edit_dialogue"))
+        dlg.resize(560, 480)
         form = QVBoxLayout(dlg)
         ed_speaker = QLineEdit(node.data.get("speaker", ""))
-        ed_text = QLineEdit(node.data.get("text", ""))
-        form.addWidget(QLabel("说话者 (留空=旁白)"))
+        form.addWidget(QLabel(t("flow.speaker_hint")))
         form.addWidget(ed_speaker)
-        form.addWidget(QLabel("台词"))
-        form.addWidget(ed_text)
+        # 台词: 显示当前语言效果 + 多语言编辑按钮
+        form.addWidget(QLabel(t("flow.line_hint")))
+        self._lang_row(form, node.data.get("text", ""),
+                       lambda new_text: node.data.__setitem__("text",
+                                                              new_text))
+        # 合并的语句 (对话链): 文本可编辑; 清空文本 = 删除该句
+        extra = list(node.extra_stmts)
+        self._extra_orig = extra
+        self._extra_table = None
+        if extra:
+            from PySide6.QtWidgets import QHeaderView
+            form.addWidget(QLabel(t("flow.merged_hint", n=len(extra))))
+            self._extra_table = QTableWidget(len(extra), 2)
+            self._extra_table.setHorizontalHeaderLabels(
+                [t("flow.speaker_hint"), t("flow.line_hint")])
+            self._extra_table.horizontalHeader().setSectionResizeMode(
+                1, QHeaderView.Stretch)
+            for i, stmt in enumerate(extra):
+                if stmt.op in ("say", "nar", "text"):
+                    sp2 = stmt.args[0] if stmt.op == "say" and stmt.args \
+                        else ""
+                    tx2 = stmt.args[-1] if stmt.args else ""
+                else:
+                    sp2, tx2 = stmt.op, " ".join(stmt.args)
+                it_sp = QTableWidgetItem(sp2)
+                it_tx = QTableWidgetItem(tx2)
+                if stmt.op not in ("say", "nar", "text"):
+                    it_sp.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                    it_tx.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                self._extra_table.setItem(i, 0, it_sp)
+                self._extra_table.setItem(i, 1, it_tx)
+            form.addWidget(self._extra_table, 1)
         btns = QHBoxLayout()
-        ok = QPushButton("确定"); ok.clicked.connect(dlg.accept)
-        cc = QPushButton("取消"); cc.clicked.connect(dlg.reject)
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
         btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
         form.addLayout(btns)
-        if dlg.exec() == _D.Accepted:
+        if dlg.exec() == QDialog.Accepted:
             sp = ed_speaker.text().strip()
             node.data["op"] = "say" if sp else "text"
             node.data["speaker"] = sp
-            node.data["text"] = ed_text.text()
+            self._apply_extra_edits(node)
+            self.set_graph(self.graph)
+
+    def _apply_extra_edits(self, node) -> None:
+        """把合并语句编辑表写回 node.extra_stmts (空文本 = 删除)。"""
+        if self._extra_table is None or not self._extra_orig:
+            return
+        from framework.engine.parser import Statement
+        out = []
+        for r in range(self._extra_table.rowCount()):
+            if r >= len(self._extra_orig):
+                break
+            stmt = self._extra_orig[r]
+            if stmt.op not in ("say", "nar", "text"):
+                out.append(stmt)          # 非对话语句原样保留
+                continue
+            sp2 = (self._extra_table.item(r, 0).text().strip()
+                   if self._extra_table.item(r, 0) else "")
+            tx2 = (self._extra_table.item(r, 1).text()
+                   if self._extra_table.item(r, 1) else "")
+            if tx2.strip():
+                args = [sp2, tx2] if sp2 else [tx2]
+                out.append(Statement(op="say" if sp2 else "text",
+                                     args=args))
+        node.extra_stmts = out
+
+    def _lang_row(self, layout, text: str, commit) -> None:
+        """一行"当前语言预览 + 编辑多语言"控件。
+
+        layout: 父布局; text: 原始文本 (可含 {@key}); commit: 保存回调。
+        项目无语言表 (langs 空) 时回退为普通单行编辑框。
+        """
+        gl = self.scene.lang
+        if gl is None or not gl.langs:
+            ed = QLineEdit(text)
+            ed.textChanged.connect(commit)
+            layout.addWidget(ed)
+            return
+        row = QHBoxLayout()
+        resolved = gl.resolve(text)
+        lbl = QLabel(resolved or " ")
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet("color:#d8d8e0; background:#14141c; padding:6px;"
+                          " border-radius:4px;")
+        btn = QPushButton(t("flow.edit_lang"))
+        btn.clicked.connect(lambda: self._open_lang_edit(text, commit))
+        row.addWidget(lbl, 1)
+        row.addWidget(btn)
+        layout.addLayout(row)
+
+    def _open_lang_edit(self, text: str, commit) -> None:
+        from editor.lang_dialog import LangEditDialog
+        gl = self.scene.lang
+        dlg = LangEditDialog(gl, text, self)
+        dlg.locate_requested.connect(self.locate_key.emit)
+        if dlg.exec() == QDialog.Accepted:
+            commit(dlg.result_text())
             self.set_graph(self.graph)
 
     def _edit_choice(self, node):
         dlg = QDialog()
-        dlg.setWindowTitle("编辑选择支 (连线设定选项目标)")
+        dlg.setWindowTitle(t("flow.edit_choice"))
         lay = QVBoxLayout(dlg)
-        t = QTableWidget(len(node.options), 1)
-        t.setHorizontalHeaderLabels(["选项文本"])
-        t.horizontalHeader().setStretchLastSection(True)
+        gl = self.scene.lang
+        tbl = QTableWidget(len(node.options), 1)
+        tbl.setHorizontalHeaderLabels([t("flow.choice_text")])
+        tbl.horizontalHeader().setStretchLastSection(True)
         for i, (text, _tg) in enumerate(node.options):
-            t.setItem(i, 0, QTableWidgetItem(text))
-        lay.addWidget(t)
+            item = QTableWidgetItem(
+                gl.resolve(text) if (gl is not None and gl.langs) else text)
+            item.setData(Qt.UserRole, text)   # 原文 (含 {@key})
+            if gl is not None and gl.langs:
+                # 有语言表: 单元格只读, 编辑走"编辑多语言"按钮
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            tbl.setItem(i, 0, item)
+        lay.addWidget(tbl, 1)
+        # 选项增删
+        row_btns = QHBoxLayout()
+        b_add = QPushButton(t("flow.choice_add"))
+        b_del = QPushButton(t("flow.choice_del"))
+        b_add.clicked.connect(lambda: _choice_insert_row(tbl, row=tbl.rowCount()))
+        b_del.clicked.connect(
+            lambda: _choice_remove_row(tbl, tbl.currentRow()))
+        row_btns.addWidget(b_add)
+        row_btns.addWidget(b_del)
+        row_btns.addStretch(1)
+        # 多语言: 批量编辑全部选项文本
+        if gl is not None and gl.langs:
+            b_lang = QPushButton(t("flow.edit_lang_all"))
+            b_lang.clicked.connect(
+                lambda: self._edit_choice_lang(tbl, node))
+            row_btns.addWidget(b_lang)
+        lay.addLayout(row_btns)
         btns = QHBoxLayout()
-        ok = QPushButton("确定"); ok.clicked.connect(dlg.accept)
-        cc = QPushButton("取消"); cc.clicked.connect(dlg.reject)
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
         btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
         lay.addLayout(btns)
         if dlg.exec() == QDialog.Accepted:
-            for i in range(t.rowCount()):
-                it = t.item(i, 0)
-                if i < len(node.options):
-                    node.options[i][0] = it.text() if it else ""
+            node.options = [[(tbl.item(r, 0).text() if tbl.item(r, 0) else ""),
+                             node.options[r][1] if r < len(node.options)
+                             else None]
+                            for r in range(tbl.rowCount())]
             self.set_graph(self.graph)
+
+    def _edit_choice_lang(self, tbl, node) -> None:
+        """批量编辑选择支全部选项的多语言 (逐选项打开 LangEditDialog)。"""
+        from editor.lang_dialog import LangEditDialog
+        gl = self.scene.lang
+        for r in range(tbl.rowCount()):
+            item = tbl.item(r, 0)
+            if item is None:
+                continue
+            orig = item.data(Qt.UserRole) or item.text()
+            dlg = LangEditDialog(gl, orig, self)
+            if dlg.exec() == QDialog.Accepted:
+                new_text = dlg.result_text()
+                item.setText(new_text)
+                item.setData(Qt.UserRole, new_text)
 
     def _edit_jump(self, node):
         dlg = QDialog()
@@ -683,17 +883,35 @@ class FlowScene(QGraphicsScene):
             self.rebuild_edges()
 
     def _edit_ending(self, node):
-        name, ok = QInputDialog.getText(None, "编辑结局", "结局名 (可留空)",
-                                        text=node.data.get("name", ""))
-        if ok:
-            node.data["name"] = name.strip()
+        dlg = QDialog()
+        dlg.setWindowTitle(t("flow.edit_ending"))
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(t("flow.ending_hint")))
+        self._lang_row(lay, node.data.get("name", ""),
+                       lambda new_text: node.data.__setitem__("name",
+                                                              new_text))
+        btns = QHBoxLayout()
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() == QDialog.Accepted:
             self.set_graph(self.graph)
 
     def _edit_label(self, node):
-        text, ok = QInputDialog.getText(None, "编辑标签", "说明文字 (显示用)",
-                                        text=node.data.get("text", ""))
-        if ok:
-            node.data["text"] = text.strip()
+        dlg = QDialog()
+        dlg.setWindowTitle(t("flow.edit_label"))
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel(t("flow.label_hint")))
+        self._lang_row(lay, node.data.get("text", ""),
+                       lambda new_text: node.data.__setitem__("text",
+                                                              new_text))
+        btns = QHBoxLayout()
+        ok = QPushButton(t("flow.ok")); ok.clicked.connect(dlg.accept)
+        cc = QPushButton(t("flow.cancel")); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() == QDialog.Accepted:
             self.set_graph(self.graph)
 
     def _edit_stage(self, node):
@@ -704,12 +922,12 @@ class FlowScene(QGraphicsScene):
             self.set_graph(self.graph)
 
     def _edit_action(self, node):
-        """动作节点: 已知指令弹参数表单 (按插件能力给候选), 否则只读。"""
+        """动作节点: 已知指令弹参数表单 (按插件能力给候选), 否则通用表单。"""
         if node.raw is None:
             return
         spec = action_edit_spec(node.raw.op, collect_plugin_caps(self.project))
         if spec is None:
-            self._show_action_raw(node)
+            self._edit_action_generic(node)
             return
         form_key, (label, cands) = spec
         if form_key == "combo":
@@ -723,7 +941,78 @@ class FlowScene(QGraphicsScene):
         elif form_key == "params":
             self._edit_action_params(node, cands, False)
         elif form_key == "none":
-            self._show_action_raw(node)
+            self._edit_action_generic(node)
+
+    def _edit_action_generic(self, node):
+        """未知/无参数指令: 通用参数表单 (不再"后续版本提供")。"""
+        from PySide6.QtWidgets import QPlainTextEdit
+        stmt = node.raw
+        dlg = QDialog()
+        dlg.setWindowTitle("编辑动作 — %s" % stmt.op)
+        lay = QVBoxLayout(dlg)
+        eds: list = []
+        if not stmt.args and not stmt.kwargs:
+            lay.addWidget(QLabel("语句: %s (无参数)" % stmt.op))
+        else:
+            for i, a in enumerate(stmt.args):
+                lay.addWidget(QLabel("参数 %d:" % (i + 1)))
+                e = QLineEdit(a)
+                eds.append(e)
+                lay.addWidget(e)
+            for k, v in stmt.kwargs.items():
+                lay.addWidget(QLabel("属性 %s:" % k))
+                e = QLineEdit(str(v))
+                eds.append(e)
+                lay.addWidget(e)
+        btns = QHBoxLayout()
+        ok = QPushButton("确定"); ok.clicked.connect(dlg.accept)
+        cc = QPushButton("取消"); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() == QDialog.Accepted:
+            n_args = len(stmt.args)
+            if stmt.args or stmt.kwargs:
+                stmt.args = [e.text() for e in eds[:n_args]]
+                for i, k in enumerate(stmt.kwargs.keys()):
+                    stmt.kwargs[k] = eds[n_args + i].text()
+            self.set_graph(self.graph)
+
+    def _edit_raw(self, node):
+        """代码节点 (python:: 块或未知语句): 原样内容可编辑。"""
+        from PySide6.QtWidgets import QPlainTextEdit
+        from PySide6.QtGui import QFont as _QF
+        if node.raw is None:
+            return
+        stmt = node.raw
+        dlg = QDialog()
+        dlg.setWindowTitle("代码节点 — %s" % stmt.op)
+        dlg.resize(560, 360)
+        lay = QVBoxLayout(dlg)
+        lay.addWidget(QLabel("语句: %s (内容原样保留)" % stmt.op))
+        if "code" in stmt.kwargs:
+            ed = QPlainTextEdit(stmt.kwargs.get("code", ""))
+            ed.setFont(_QF("Consolas", 10))
+            lay.addWidget(ed, 1)
+            eds = None
+        else:
+            eds = []
+            for i, a in enumerate(stmt.args):
+                lay.addWidget(QLabel("参数 %d:" % (i + 1)))
+                e = QLineEdit(a)
+                eds.append(e)
+                lay.addWidget(e)
+            ed = None
+        btns = QHBoxLayout()
+        ok = QPushButton("确定"); ok.clicked.connect(dlg.accept)
+        cc = QPushButton("取消"); cc.clicked.connect(dlg.reject)
+        btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
+        lay.addLayout(btns)
+        if dlg.exec() == QDialog.Accepted:
+            if ed is not None:
+                stmt.kwargs["code"] = ed.toPlainText()
+            elif eds:
+                stmt.args = [e.text() for e in eds]
+            self.set_graph(self.graph)
 
     def _edit_action_volume(self, node, cands):
         dlg = QDialog()
@@ -875,18 +1164,28 @@ class ZoomView(QGraphicsView):
         super().showEvent(event)
         self.zoom_changed.emit(self.transform().m11())
 
+    # ---- 拖动同步 (PySide6 6.11: setPos 不触发 itemChange) ------------
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        # 拖动中仅回写坐标; 不更新 sceneRect (否则视图每帧跳动=鬼畜)
+        sync = getattr(self.scene(), "_sync_positions", None)
+        if sync is not None:
+            sync(update_rect=False)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        # 松开后: 回写坐标 + 扩展 sceneRect (滚动条跟随)
+        sync = getattr(self.scene(), "_sync_positions", None)
+        if sync is not None:
+            sync(update_rect=True)
+
 
 class FlowEditor(QWidget):
     """流程节点编辑器 (逻辑 Tab)。"""
 
     log = Signal(str)
-
-    def _edit_stage(self, node):
-        """场景分镜编辑: 背景 + 立绘动作列表。"""
-        dlg = StageDialog(self.project, node, self)
-        if dlg.exec() == QDialog.Accepted:
-            dlg.apply(node)
-            self.set_graph(self.graph)
+    locate_key = Signal(str)   # 请求主窗口在多语言面板定位 key
+    node_selected = Signal(object)   # 选中节点 (FlowNode | None) -> 属性面板
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -925,10 +1224,11 @@ class FlowEditor(QWidget):
         self.scene = FlowScene()
         self.scene.log = lambda msg: self.log.emit(msg)
         self.scene.graph_changed.connect(self._on_graph_changed)
+        # 选中变化 -> 属性面板 (右键画布空白处取消选中 -> None)
+        self.scene.selectionChanged.connect(self._emit_selection)
         self.view = ZoomView(self.scene)
         self.view.setRenderHint(QPainter.Antialiasing)
         self.view.setDragMode(QGraphicsView.RubberBandDrag)
-        self.view.setSceneRect(-2000, -2000, 4000, 4000)
         layout.addWidget(self.view, 1)
 
         status = QHBoxLayout()
@@ -955,6 +1255,12 @@ class FlowEditor(QWidget):
     def set_project(self, project) -> None:
         self.project = project
         self.scene.project = project
+        # 项目多语言表 (节点摘要/编辑对话框显示当前语言文本)
+        if project is not None:
+            from editor.lang_utils import GameLang
+            self.scene.lang = GameLang(project.root, project.main_script())
+        else:
+            self.scene.lang = None
         _clear_thumb_cache()
         self.load()
 
@@ -988,6 +1294,16 @@ class FlowEditor(QWidget):
         """scene 内部替换 graph (撤销) 后同步引用, 避免保存旧数据。"""
         self.graph = self.scene.graph
         self._update_status()
+
+    def _emit_selection(self) -> None:
+        """把当前选中节点发给属性面板 (多选/空选 -> None)。"""
+        sel = self.scene.selectedItems()
+        node = None
+        for item in sel:
+            if isinstance(item, NodeItem):
+                node = item.node
+                break
+        self.node_selected.emit(node)
 
     def _update_status(self):
         if self.scene is not None:

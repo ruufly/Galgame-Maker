@@ -27,7 +27,7 @@ from framework.engine.parser import parse
 
 from editor.compare import norm_script, roundtrip_ok
 from editor.model import Project
-from editor.preview import PreviewPanel
+from editor.preview_window import PreviewWindow
 from editor.i18n import t, _i18n
 import editor.plugins  # noqa: F401  (加载内置插件编辑器接口)
 from editor.project_wizard import NewProjectDialog
@@ -38,6 +38,8 @@ from editor.assets import AssetPanel
 from editor.styles_editor import StylesEditor
 from editor.build import BuildPanel
 from editor.plugins_panel import PluginsPanel
+from editor.localization_panel import LocalizationPanel
+from editor.property_panel import PropertyPanel
 
 _RUNTIME_DIRS = {"save", "logs", "__pycache__", "nowfiletmp", "fonts"}
 
@@ -51,8 +53,9 @@ class MainWindow(QMainWindow):
         self.resize(1280, 800)
         self.project: Project | None = None
 
-        # 预览面板先建 (菜单动作需要引用)
-        self.preview = PreviewPanel()
+        # 独立预览窗口 (单例, 首次点击预览时创建)
+        self._preview_window: PreviewWindow | None = None
+        self._preview_script: str = ""
         self._dock_sized = False
         self._tab_keys: list = []
         self._dock_keys: list = []
@@ -87,11 +90,11 @@ class MainWindow(QMainWindow):
 
         self.act_preview = QAction(t("act.preview"), self)
         self.act_preview.setShortcut("F5")
-        self.act_preview.triggered.connect(self.preview.start)
+        self.act_preview.triggered.connect(self._open_preview)
 
         self.act_stop = QAction(t("act.stop"), self)
         self.act_stop.setShortcut("Shift+F5")
-        self.act_stop.triggered.connect(self.preview.stop)
+        self.act_stop.triggered.connect(self._stop_preview)
 
         self.act_about = QAction(t("act.about"), self)
         self.act_about.triggered.connect(self._about)
@@ -141,21 +144,17 @@ class MainWindow(QMainWindow):
         self.tree.itemDoubleClicked.connect(self._on_tree_double)
         self._dock_tree = self._make_dock("dock.project", self.tree, Qt.LeftDockWidgetArea)
 
-        # 右: 属性 (占位)
-        prop = QLabel("属性面板 (P2 实现)\n\n选中节点/素材后\n在此编辑属性")
-        prop.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        prop.setWordWrap(True)
-        prop.setStyleSheet("color:#666; padding:8px;")
-        self._dock_prop = self._make_dock("dock.props", prop, Qt.RightDockWidgetArea)
+        # 右: 属性面板 (P4: 流程节点等选中对象的快捷编辑)
+        self.props = PropertyPanel()
+        self._dock_prop = self._make_dock("dock.props", self.props,
+                                          Qt.RightDockWidgetArea)
 
-        # 下: 输出 + 预览 (并排; 16:9 画面需要宽度)
+        # 下: 输出日志
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setMaximumBlockCount(2000)
         self._dock_out = self._make_dock("dock.output", self.output,
                                          Qt.BottomDockWidgetArea)
-        self._dock_preview = self._make_dock("dock.preview", self.preview,
-                                             Qt.BottomDockWidgetArea)
 
     def showEvent(self, event):
         """首次显示、布局就绪后分配 dock 尺寸 (build 阶段调用无效)。"""
@@ -163,11 +162,8 @@ class MainWindow(QMainWindow):
         if self._dock_sized:
             return
         self._dock_sized = True
-        # 预览宽 / 输出窄
-        self.resizeDocks([self._dock_out, self._dock_preview],
-                         [300, 900], Qt.Horizontal)
-        # 底部区域加高, 让 16:9 画面更舒展
-        self.resizeDocks([self._dock_preview], [400], Qt.Vertical)
+        # 底部输出日志: 默认高度即可, 不再为预览预留大块空间
+        self.resizeDocks([self._dock_out], [180], Qt.Vertical)
 
     def _make_dock(self, key: str, widget: QWidget, area) -> QDockWidget:
         dock = QDockWidget(t(key), self)
@@ -191,23 +187,37 @@ class MainWindow(QMainWindow):
         # 逻辑: 流程节点画布 (P2)
         self.flow = FlowEditor()
         self.flow.log.connect(self._log)
+        self.flow.locate_key.connect(self._locate_key)
         self.tabs.addTab(self.flow, t("tab.logic"))
         self._tab_keys.append((2, "tab.logic"))
-        # 样式: 可视化配色编辑 (P3)
+        # 多语言: 全项目占位符条目大列表 (P4)
+        self.localization = LocalizationPanel()
+        self.tabs.addTab(self.localization, t("tab.local"))
+        self._tab_keys.append((3, "tab.local"))
+        # 样式: 可视化配色编辑 (P3/P4: 多样式源 + 插件字段)
         self.styles = StylesEditor()
+        self.styles.log.connect(self._log)
         self.tabs.addTab(self.styles, t("tab.styles"))
-        self._tab_keys.append((3, "tab.styles"))
+        self._tab_keys.append((4, "tab.styles"))
         # 插件: 能力总览 + 装载配置 (P3)
         self.plugins_panel = PluginsPanel()
         self.plugins_panel.log.connect(self._log)
         self.tabs.addTab(self.plugins_panel, t("tab.plugins"))
-        self._tab_keys.append((4, "tab.plugins"))
+        self._tab_keys.append((5, "tab.plugins"))
         # 编译: 校验/导出/打包 (P3)
         self.build = BuildPanel()
         self.build.log.connect(self._log)
         self.tabs.addTab(self.build, t("tab.build"))
-        self._tab_keys.append((5, "tab.build"))
+        self._tab_keys.append((6, "tab.build"))
         self.setCentralWidget(self.tabs)
+        # 流程画布选中节点 -> 属性面板
+        self.flow.node_selected.connect(self.props.show_flow_node)
+
+    def _locate_key(self, key: str) -> None:
+        """切到多语言面板并定位指定 key (来自画布/定义等跳转)。"""
+        self.localization.refresh()
+        self.tabs.setCurrentWidget(self.localization)
+        self.localization.locate(key)
 
     def _new_project(self) -> None:
         """新建项目向导: 创建成功 -> 直接打开。"""
@@ -278,15 +288,43 @@ class MainWindow(QMainWindow):
         self.styles.set_project(self.project)
         self.plugins_panel.set_project(self.project)
         self.build.set_project(self.project)
+        self.localization.set_project(self.project)
+        from editor.lang_utils import GameLang
+        self.props.set_lang(GameLang(self.project.root,
+                                     self.project.main_script()))
+        self.props.set_flow_scene(self.flow.scene)
+        self.props.show_message(t("props.empty"))
         main = self.project.main_script()
         if main is not None:
-            self.preview.set_script(os.path.join(self.project.root,
-                                                 self.project.main))
+            self._preview_script = os.path.join(self.project.root,
+                                                self.project.main)
+            if self._preview_window is not None:
+                self._preview_window.set_script(self._preview_script)
             self.setWindowTitle("Galgame Maker 编辑器 — %s" % path)
             self._log("项目已打开: %s (%d 个脚本)" % (path, len(self.project.scripts)))
             self._log("预览脚本: %s" % self.project.main)
         else:
             self._log("警告: 目录中未找到主脚本 %s" % self.project.main)
+
+    def _open_preview(self) -> None:
+        """打开独立预览窗口 (真实进程运行游戏 + 调试控制台)。"""
+        if not self._preview_script:
+            self._log("请先打开项目")
+            return
+        if self._preview_window is None:
+            self._preview_window = PreviewWindow(self)
+            self._preview_window.destroyed.connect(
+                lambda: setattr(self, "_preview_window", None))
+        self._preview_window.set_script(self._preview_script)
+        self._preview_window.show()
+        self._preview_window.raise_()
+        self._preview_window.activateWindow()
+        self._preview_window.start()
+
+    def _stop_preview(self) -> None:
+        """停止当前预览 (若窗口已打开)。"""
+        if self._preview_window is not None:
+            self._preview_window.stop()
 
     def _populate_tree(self) -> None:
         self.tree.clear()
@@ -311,8 +349,24 @@ class MainWindow(QMainWindow):
 
     def _on_tree_double(self, item: QTreeWidgetItem, _col: int) -> None:
         text = item.text(0)
-        if text.endswith(".gal"):
-            self._log("打开脚本编辑器: %s (P2 实现)" % text)
+        if text.endswith(".gal") and self.project is not None:
+            from editor.script_editor import ScriptEditorDialog
+            dlg = ScriptEditorDialog(self.project, text, self)
+            if dlg.exec() == ScriptEditorDialog.Accepted:
+                self._reload_project_panels()
+                self._log("脚本已保存并重新解析: %s" % text)
+
+    def _reload_project_panels(self) -> None:
+        """脚本被文本编辑后: 重载模型并刷新全部面板。"""
+        if self.project is None:
+            return
+        self.project.load()
+        for panel in (self.assets, self.defs, self.flow, self.styles,
+                      self.plugins_panel, self.build, self.localization):
+            fn = getattr(panel, "set_project", None)
+            if fn is not None:
+                fn(self.project)
+        self._populate_tree()
 
     # ==================================================================
     # 校验与日志
@@ -368,7 +422,8 @@ class MainWindow(QMainWindow):
             dock.setWindowTitle(t(key))
         self.tree.setHeaderLabels([t("tree.project")])
         self.statusBar().showMessage(t("status.ready"))
-        self.preview.apply_lang()
+        if self._preview_window is not None:
+            self._preview_window.apply_lang()
         for panel in (self.assets, self.defs, self.flow, self.styles,
                       self.build):
             fn = getattr(panel, "apply_lang", None)
@@ -380,11 +435,10 @@ class MainWindow(QMainWindow):
                           "Galgame Maker 编辑器\n\n"
                           "可视化制作 .gal 视觉小说, 零基础友好。\n"
                           "引擎: framework 子模块 (Python 3.10 + pygame)\n"
-                          "编辑器版本: 0.2 (P1 骨架)")
+                          "编辑器版本: 0.4 (P0-P3 + 独立预览调试 / 多语言可视化 / 脚本编辑器)")
 
 
     def closeEvent(self, event):
-        self.preview.stop()
-        if self.preview._thread is not None:
-            self.preview._thread.wait(5000)
+        if self._preview_window is not None:
+            self._preview_window.close()
         super().closeEvent(event)

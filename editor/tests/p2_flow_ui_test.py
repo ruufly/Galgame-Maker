@@ -125,6 +125,35 @@ def main() -> int:
           and all(e.src.node.node_id != victim
                   and e.dst.node.node_id != victim for e in ed.scene.edges))
 
+    # 4.5 滚动条修复: sceneRect 必须覆盖全部节点 (含拖出初始区域的)
+    from PySide6.QtCore import QPointF, QRectF
+    ed3 = FlowEditor()
+    ed3.set_project(Project(demo_dir).load())
+    far = ed3.graph.add_node("dialogue", x=3000, y=2500,
+                             data={"op": "text", "text": "远处节点"})
+    ed3.scene.set_graph(ed3.graph)
+    sr = ed3.scene.sceneRect()
+    bb = ed3.scene.itemsBoundingRect()
+    check("sceneRect 覆盖远距节点", sr.contains(bb), "sr=%s bb=%s" % (sr, bb))
+    check("sceneRect 有滚动余量",
+          sr.width() >= bb.width() + 200 and sr.height() >= bb.height() + 200,
+          "sr=%s bb=%s" % (sr, bb))
+    # 拖动节点到更远处 -> sceneRect 跟随扩展
+    # (PySide6 6.11 setPos 不触发 itemChange; 视图层拖动结束后调用
+    #  _sync_positions, 此处模拟该路径)
+    ed3.scene.items_by_id[far.node_id].setPos(6000, 5000)
+    ed3.scene._sync_positions()
+    sr2 = ed3.scene.sceneRect()
+    bb2 = ed3.scene.itemsBoundingRect()
+    check("拖动后 sceneRect 跟随扩展", sr2.contains(bb2),
+          "sr=%s bb=%s" % (sr2, bb2))
+    # 坐标回写模型 (修复: 此前拖动位置从不保存)
+    check("拖动坐标回写模型",
+          ed3.graph.nodes[far.node_id].x == 6000
+          and ed3.graph.nodes[far.node_id].y == 5000,
+          "node=%s,%s" % (ed3.graph.nodes[far.node_id].x,
+                          ed3.graph.nodes[far.node_id].y))
+
     print()
     if FAILURES:
         print("结果: %d 项失败 -> %s" % (len(FAILURES), FAILURES))

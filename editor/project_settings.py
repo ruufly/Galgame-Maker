@@ -69,6 +69,11 @@ class ProjectSettingsDialog(QDialog):
             # 主脚本没有 window 块: 允许新建 (保存时插入到顶层)
             self.block = None
 
+        from editor.lang_dialog import make_lang_edit_widget
+        from editor.lang_utils import GameLang
+        self._gl = GameLang(project.root, project.main_script()) \
+            if project is not None else None
+
         k = self.block.kwargs if self.block else {}
 
         tabs = QTabWidget(self)
@@ -95,7 +100,8 @@ class ProjectSettingsDialog(QDialog):
         box = QGroupBox("窗口与常规")
         form = QFormLayout(box)
 
-        self.ed_title = QLineEdit(str(k.get("title", "")))
+        self.ed_title, self._title_getter = make_lang_edit_widget(
+            self._gl, str(k.get("title", "")))
         form.addRow("窗口标题", self.ed_title)
 
         self.sp_w = QSpinBox(); self.sp_w.setRange(320, 7680)
@@ -210,7 +216,7 @@ class ProjectSettingsDialog(QDialog):
 
     def _collect_values(self) -> dict:
         v = {
-            "title": self.ed_title.text().strip(),
+            "title": self._title_getter().strip(),
             "width": str(self.sp_w.value()),
             "height": str(self.sp_h.value()),
             "fps": str(self.sp_fps.value()),

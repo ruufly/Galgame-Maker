@@ -40,6 +40,7 @@ class PluginRegistration:
     keybinds: list = field(default_factory=list)      # (name, label)
     menu_buttons: list = field(default_factory=list)
     events: list = field(default_factory=list)        # 事件监听
+    style_fields: dict = field(default_factory=dict)  # 块 op -> 字段清单
 
     # ---- 链式注册 API ------------------------------------------------
     def add_command(self, cmd: str, params: list | None = None):
@@ -83,6 +84,15 @@ class PluginRegistration:
 
     def add_event(self, *events: str):
         self.events.extend(events)
+        return self
+
+    def add_style_fields(self, block_op: str, fields: list):
+        """声明某样式块 (如 gallery) 的可编辑字段。
+
+        fields: [(key, 标签, 类型, 默认值)] 类型 color/int/text/bool/combo。
+        样式面板按块列出, 与内核字段合并显示。
+        """
+        self.style_fields.setdefault(block_op, []).extend(list(fields))
         return self
 
 

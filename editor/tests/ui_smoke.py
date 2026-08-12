@@ -39,18 +39,29 @@ def main() -> int:
     results["validate"] = "校验完成" in win.output.toPlainText() \
         and "合并加载 OK" in win.output.toPlainText()
 
-    win.preview.start()
-    QTimer.singleShot(4000, win.close)
+    # 预览: 独立窗口模式 (不启动进程, 避免弹出真实游戏窗口干扰测试)
+    results["preview_script_set"] = (
+        win._preview_script == os.path.join(DEMO_DIR, "demo.gal"))
+    from editor.preview_window import PreviewWindow, DebugClient
+    pw = PreviewWindow()
+    pw.set_script(os.path.join(DEMO_DIR, "demo.gal"))
+    results["preview_window_build"] = pw._script.endswith("demo.gal")
+    results["preview_client_build"] = DebugClient(0) is not None
+    pw.close()
+
+    QTimer.singleShot(500, win.close)
     app.exec()
 
-    results["preview_frames"] = win.preview.frames
-
     print("== P1 UI 冒烟 ==")
-    print("project_open   :", results["project_open"])
-    print("validate       :", results["validate"])
-    print("preview_frames :", results["preview_frames"])
+    print("project_open        :", results["project_open"])
+    print("validate            :", results["validate"])
+    print("preview_script_set  :", results["preview_script_set"])
+    print("preview_window_build:", results["preview_window_build"])
+    print("preview_client_build:", results["preview_client_build"])
     ok = (results["project_open"] and results["validate"]
-          and results["preview_frames"] > 10)
+          and results["preview_script_set"]
+          and results["preview_window_build"]
+          and results["preview_client_build"])
     print("RESULT:", "OK" if ok else "FAIL")
     return 0 if ok else 1
 

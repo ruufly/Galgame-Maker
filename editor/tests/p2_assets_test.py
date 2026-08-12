@@ -86,10 +86,27 @@ def main() -> int:
         check("重名导入不覆盖", n2 == 1
               and os.path.isfile(os.path.join(mats, "image", "a_1.png")))
 
-        # 刷新后列表数量
+        # 刷新后树中文件数量 (目录树视图)
         panel.refresh()
-        check("列表显示 5 项", panel.list.count() == 5,
-              "got %d" % panel.list.count())
+        def tree_file_count(item) -> int:
+            n = 0
+            for i in range(item.childCount()):
+                c = item.child(i)
+                n += 1 if c.data(0, 0x0100) else 0
+                n += tree_file_count(c)
+            return n
+        root_item = panel.tree.topLevelItem(0)
+        check("树显示 5 项", tree_file_count(root_item) == 5,
+              "got %d" % tree_file_count(root_item))
+
+        # 导入到指定目录 (文件夹化组织)
+        custom_dir = os.path.join(proj_dir, "materials", "custom")
+        n3 = panel._import_files([os.path.join(src, "b.wav")],
+                                 target_dir=custom_dir)
+        check("导入到指定目录", n3 == 1
+              and os.path.isfile(os.path.join(custom_dir, "b.wav")))
+        check("指定目录不按分类归档",
+              not os.path.isfile(os.path.join(custom_dir, "audio", "b.wav")))
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

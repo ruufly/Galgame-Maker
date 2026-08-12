@@ -112,6 +112,7 @@ class DefinitionsPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.project = None
+        self.lang = None           # GameLang (显示名多语言)
         self._script = None          # 当前类型对应的脚本 (cast.gal/audio.gal)
 
         layout = QVBoxLayout(self)
@@ -156,6 +157,9 @@ class DefinitionsPanel(QWidget):
     # ---- 数据 ---------------------------------------------------------
     def set_project(self, project) -> None:
         self.project = project
+        from editor.lang_utils import GameLang
+        self.lang = GameLang(project.root, project.main_script()) \
+            if project is not None else None
         self.refresh()
 
     def _op(self) -> str:
@@ -188,6 +192,8 @@ class DefinitionsPanel(QWidget):
         for stmt in items:
             ident = stmt.args[0]
             display = stmt.kwargs.get("name") or ident
+            if self.lang is not None:
+                display = self.lang.resolve(display)
             label = "%s  (%s)" % (display, ident)
             if op == "sound" and stmt.kwargs.get("type"):
                 label = "%s  [%s]" % (display, stmt.kwargs["type"])
@@ -274,7 +280,14 @@ class DefDialog(QDialog):
         self.ed_id.setEnabled(stmt is None)      # 编辑时 id 不可改
         form.addRow("ID (unique in script)", self.ed_id)
 
-        self.ed_name = QLineEdit(str(k.get("name", "")))
+        # Name: 有语言表时走"显示效果 + 多语言编辑" (可读性优先)
+        from editor.lang_dialog import make_lang_edit_widget
+        self._gl = None
+        if project is not None:
+            from editor.lang_utils import GameLang
+            self._gl = GameLang(project.root, None)
+        self.ed_name, self._name_getter = make_lang_edit_widget(
+            self._gl, str(k.get("name", "")))
         form.addRow("Name", self.ed_name)
 
         if op in ("char", "scene"):
@@ -398,8 +411,9 @@ class DefDialog(QDialog):
 
     def values(self) -> dict:
         v = {}
-        if self.ed_name.text().strip():
-            v["name"] = self.ed_name.text().strip()
+        name = self._name_getter().strip()
+        if name:
+            v["name"] = name
         if self.op == "char":
             if self._extra_paths.get("default").text().strip():
                 v["default"] = self._extra_paths["default"].text().strip()
