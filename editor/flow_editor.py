@@ -1660,8 +1660,18 @@ class FlowEditor(QWidget):
         self._update_status()
 
     def _emit_selection(self) -> None:
-        """把当前选中节点发给属性面板 (多选/空选 -> None)。"""
-        sel = self.scene.selectedItems()
+        """把当前选中节点发给属性面板 (多选/空选 -> None)。
+
+        窗口关闭时 scene 的 C++ 对象可能已销毁 (信号仍触发),
+        用 shiboken 有效性检查 + 异常兜底, 避免关闭时崩溃。
+        """
+        try:
+            from shiboken6 import isValid
+            if not isValid(self.scene):
+                return
+            sel = self.scene.selectedItems()
+        except RuntimeError:
+            return
         node = None
         for item in sel:
             if isinstance(item, NodeItem):
