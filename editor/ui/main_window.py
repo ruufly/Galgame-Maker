@@ -29,6 +29,7 @@ from editor.compare import norm_script, roundtrip_ok
 from editor.model import Project
 from editor.preview import PreviewPanel
 from editor.i18n import t, _i18n
+import editor.plugins  # noqa: F401  (加载内置插件编辑器接口)
 from editor.project_wizard import NewProjectDialog
 from editor.project_settings import ProjectSettingsDialog
 from editor.definitions import DefinitionsPanel
@@ -41,19 +42,6 @@ from editor.plugins_panel import PluginsPanel
 _RUNTIME_DIRS = {"save", "logs", "__pycache__", "nowfiletmp", "fonts"}
 
 
-def _placeholder(title: str, desc: str) -> QWidget:
-    """工作区占位页。"""
-    w = QWidget()
-    layout = QVBoxLayout(w)
-    label = QLabel(title)
-    label.setStyleSheet("font-size:20px; font-weight:600; padding:24px 8px 4px 8px;")
-    hint = QLabel(desc)
-    hint.setWordWrap(True)
-    hint.setStyleSheet("color:#666; padding:0 8px;")
-    layout.addWidget(label)
-    layout.addWidget(hint)
-    layout.addStretch(1)
-    return w
 
 
 class MainWindow(QMainWindow):
@@ -114,6 +102,10 @@ class MainWindow(QMainWindow):
         self.menu_file.addAction(self.act_open)
         self.menu_file.addSeparator()
         self.menu_file.addAction(self.act_settings)
+        self.menu_file.addSeparator()
+        self.act_import_plugin = QAction("导入插件 (.galpkg)…", self)
+        self.act_import_plugin.triggered.connect(self._import_plugin)
+        self.menu_file.addAction(self.act_import_plugin)
         self.menu_file.addSeparator()
         self.menu_file.addAction(t("act.exit"), self.close, QKeySequence.Quit)
 
@@ -224,6 +216,38 @@ class MainWindow(QMainWindow):
             path = dlg.result_path()
             self._log("新项目已创建: %s" % path)
             self.open_project(path)
+
+    def _import_plugin(self) -> None:
+        """导入 .galpkg 插件包: main.yml + framework/editor 双 py。"""
+        f, _ = QFileDialog.getOpenFileName(
+            self, "导入插件", "", "Galgame 插件包 (*.galpkg)")
+        if not f:
+            return
+        from editor.plugin_importer import (import_plugin_package,
+                                            load_plugin_editor_file)
+        _ROOT2 = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            result = import_plugin_package(
+                f,
+                editor_plugins_dir=os.path.join(_ROOT2, "plugins"),
+                framework_plugins_dir=os.path.join(_ROOT2, "framework",
+                                                   "plugins"))
+        except Exception as exc:
+            QMessageBox.critical(self, "导入失败", str(exc))
+            return
+        name = result["name"]
+        msgs = ["插件已导入: %s" % name]
+        if result.get("framework_file"):
+            msgs.append("引擎侧: %s" % result["framework_file"])
+        if result.get("editor_file"):
+            loaded = load_plugin_editor_file(result["editor_file"])
+            msgs.append("编辑器接口: %s%s" % (
+                result["editor_file"],
+                " (已注册)" if loaded else " (未注册 setup)"))
+        self._log(" | ".join(msgs))
+        if result.get("editor_file"):
+            self.plugins_panel.refresh()
+        self._log("注意: framework/plugins 为子模块, 变更后需自行管理 git 状态")
 
     def _project_settings(self) -> None:
         """项目设置: window 块表单, 保存后写回模型并落盘。"""
@@ -358,10 +382,6 @@ class MainWindow(QMainWindow):
                           "引擎: framework 子模块 (Python 3.10 + pygame)\n"
                           "编辑器版本: 0.2 (P1 骨架)")
 
-    def _todo(self, name: str):
-        def _f(*_a):
-            self._log("尚未实现: %s" % name)
-        return _f
 
     def closeEvent(self, event):
         self.preview.stop()

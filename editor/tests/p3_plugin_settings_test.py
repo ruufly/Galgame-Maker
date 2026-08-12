@@ -14,7 +14,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__
 sys.path.insert(0, _ROOT)
 
 from framework.engine.parser import parse, parse_file
-from editor.plugins_registry import scan_plugin_source
+from editor.plugins_api import registry
 from editor.plugin_settings import (add_plugin_settings, ensure_setting_item,
                                     settings_block_of)
 from editor.project_settings import save_script
@@ -63,29 +63,42 @@ class MyPlugin(Plugin):
 def main() -> int:
     print("== P3 插件设置项测试 ==")
 
-    cap = scan_plugin_source(PLUGIN_SRC)
-    check("发现 3 个设置项", len(cap["settings"]) == 3,
-          "got %s" % cap["settings"])
-    check("key/label 提取", ("my_slider", "自定滑条") in cap["settings"])
-    check("无 label 用位置参数", ("plain_toggle", "简单开关")
-          in cap["settings"])
-
-    d = cap["settings_detail"].get("my_slider", {})
-    check("kind 提取", d.get("kind") == "slider", "got %s" % d)
-    check("数值参数提取", d.get("min") == 0 and d.get("max") == 100
-          and d.get("step") == 5 and d.get("default") == 50)
-    check("var/section 提取", d.get("var") == "my_val"
-          and d.get("section") == "游戏")
-    d2 = cap["settings_detail"].get("my_choice", {})
-    check("options 提取", d2.get("options") == ["红", "绿", "蓝"],
-          "got %s" % d2)
+    # 插件经编辑器接口 API 注册设置项
+    reg = registry.register_plugin("_demo_plg")
+    reg.add_setting("my_slider", "自定滑条", kind="slider", var="my_val",
+                    default=50, min=0, max=100, step=5, section="游戏")
+    reg.add_setting("my_choice", "自定选择", kind="cycle",
+                    options=["红", "绿", "蓝"])
+    reg.add_setting("plain_toggle", "简单开关")
+    cap = {
+        "demo": {
+            "settings": [(k, d.get("label", k))
+                         for k, d in reg.settings.items()],
+            "settings_detail": dict(reg.settings),
+        }
+    }
+    check("注册 3 个设置项", len(cap["demo"]["settings"]) == 3)
+    check("key/label 注册", ("my_slider", "自定滑条")
+          in cap["demo"]["settings"])
+    check("kind 注册", reg.settings["my_slider"].get("kind") == "slider")
+    check("数值参数注册", reg.settings["my_slider"].get("min") == 0
+          and reg.settings["my_slider"].get("max") == 100
+          and reg.settings["my_slider"].get("step") == 5
+          and reg.settings["my_slider"].get("default") == 50)
+    check("var/section 注册", reg.settings["my_slider"].get("var")
+          == "my_val" and reg.settings["my_slider"].get("section") == "游戏")
+    check("options 注册", reg.settings["my_choice"].get("options")
+          == ["红", "绿", "蓝"])
+    check("无 detail 默认 label", reg.settings["plain_toggle"].get("label")
+          == "简单开关")
+    registry.unregister_plugin("_demo_plg")
 
     # 生成: 无 settings 块 -> 新建
     tmp = tempfile.mkdtemp(prefix="galmake_plgset_")
     try:
         text = 'name: demo\n\nimport "story.gal"\n\nstart:\n    text "hi"\n'
         s = parse(text, "demo.gal")
-        caps = {"my_plugin": cap}
+        caps = cap
         added = add_plugin_settings(s, caps)
         check("无 settings 块时新建并添加 3 项", len(added) == 3,
               "got %s" % added)

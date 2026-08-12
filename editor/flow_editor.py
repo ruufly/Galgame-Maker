@@ -28,8 +28,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFormLayout,
 from editor.flow import FlowGraph, DIALOGUE_LABEL
 from editor.project_settings import save_script
 from editor.i18n import t
-from editor.plugins_registry import (framework_plugins_dir,
-                                     scan_plugins_dir)
+from editor.plugins_api import registry
 from editor.audio_timeline import AudioTimeline
 
 KIND_COLORS = {
@@ -303,8 +302,6 @@ def _summary_lines(node) -> list:
 KERNEL_ACTIONS_HINT = ["start", "quit", "title", "continue", "slot_menu",
                        "save", "load", "close"]
 KERNEL_TEXT_MODES = ["typewriter", "instant", "terminal", "lines"]
-KERNEL_TRANSITIONS = ["fade", "dissolve", "blinds", "slide", "circle",
-                      "pixelate", "zoom"]
 
 
 def _dedup(items):
@@ -317,23 +314,20 @@ def _dedup(items):
 
 
 def collect_plugin_caps(project=None) -> dict:
-    """内置插件 + 项目插件能力。"""
-    caps = scan_plugins_dir(framework_plugins_dir())
-    if project is not None:
-        caps.update(scan_plugins_dir(os.path.join(project.root, "plugins")))
+    """插件能力 (从注册中心构建; 插件主动注册, 编辑器不分析源码)。
+
+    project 保留兼容参数 (项目级插件由导入器安装进 editor/plugins)。
+    """
+    caps = {}
+    for name, p in registry.plugins().items():
+        caps[name] = {
+            "commands": list(p.commands),
+            "actions": list(p.actions),
+            "text_modes": list(p.text_modes),
+            "transitions": list(p.transitions),
+            "command_params": {k: v for k, v in p.commands.items() if v},
+        }
     return caps
-
-
-# 内置插件指令参数模式 (framework/plugins, 与源码实现对应)
-# 格式: [(参数标签, 类型, 默认值)]  type: number/int/color/text
-BUILTIN_CMD_PARAMS = {
-    "shake": [("时长 (秒)", "number", "0.3"), ("幅度 (像素)", "int", "8")],
-    "flash": [("时长 (秒)", "number", "0.15")],
-    "blackflash": [("时长 (秒)", "number", "0.3")],
-    "strobe": [("时长 (秒)", "number", "0.8")],
-    "tint": [("颜色 r,g,b", "color", "255,0,0"), ("时长 (秒)", "number", "0.5")],
-    "pulse": [("颜色 r,g,b", "color", "0,255,128"), ("时长 (秒)", "number", "1.0")],
-}
 
 
 def action_edit_spec(op: str, caps: dict):
@@ -364,13 +358,11 @@ def action_edit_spec(op: str, caps: dict):
         return ("none", ("黑幕过渡", []))
     if op == "volume":
         return ("volume", ("音量", ["music", "sfx", "voice"]))
-    # 内置插件指令参数表 (fx 等, 与 framework/plugins 对应)
-    if op in BUILTIN_CMD_PARAMS:
-        return ("params", ("参数", BUILTIN_CMD_PARAMS[op]))
-    # 插件 docstring 约定: 指令函数 docstring 写 "<参数名> ..." 即得表单
+    # 插件指令参数表单 (插件经 editor/plugins/<名>.py 主动注册)
     for c in caps.values():
-        if op in c.get("command_params", {}):
-            return ("textparams", ("参数", c["command_params"][op]))
+        fields = c.get("command_params", {}).get(op)
+        if fields is not None:
+            return ("params", ("参数", fields)) if fields else None
     return None
 
 
@@ -730,8 +722,6 @@ class FlowScene(QGraphicsScene):
             self._edit_action_volume(node, cands)
         elif form_key == "params":
             self._edit_action_params(node, cands, False)
-        elif form_key == "textparams":
-            self._edit_action_params(node, cands, True)
         elif form_key == "none":
             self._show_action_raw(node)
 

@@ -10,7 +10,6 @@ BuildPanel (编译 Tab):
 """
 
 import os
-import shutil
 import zipfile
 
 from PySide6.QtCore import QProcess, Qt, Signal

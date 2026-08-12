@@ -14,8 +14,7 @@ from PySide6.QtWidgets import (QComboBox, QFormLayout, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTreeWidget,
                                QTreeWidgetItem, QVBoxLayout, QWidget)
 
-from editor.plugins_registry import (framework_plugins_dir, scan_plugins_dir,
-                                     scan_plugin_file)
+from editor.plugins_api import registry
 from editor.project_settings import save_script
 from editor.plugin_settings import add_plugin_settings
 
@@ -129,27 +128,27 @@ class PluginsPanel(QWidget):
         self.tree.addTopLevelItem(kernel)
         kernel.setExpanded(True)
 
-        # 2. 内置插件
-        plug_root = QTreeWidgetItem(["插件 (framework/plugins)", ""])
+        # 2. 插件 (editor/plugins 注册中心, 插件主动注册)
+        plug_root = QTreeWidgetItem(["插件 (editor/plugins 注册)", ""])
         plug_root.setForeground(0, Qt.darkGreen)
-        for name, cap in scan_plugins_dir(framework_plugins_dir()).items():
+        for name, reg in registry.plugins().items():
+            cap = {
+                "commands": list(reg.commands),
+                "actions": reg.actions,
+                "transitions": reg.transitions,
+                "sprite_effects": reg.sprite_effects,
+                "text_modes": reg.text_modes,
+                "settings": [(k, d.get("label", k))
+                             for k, d in reg.settings.items()],
+                "keybinds": reg.keybinds,
+                "menu_buttons": reg.menu_buttons,
+                "events": reg.events,
+            }
             self._add_plugin(plug_root, name, cap)
+        if not registry.plugins():
+            QTreeWidgetItem(plug_root, ["(无)", ""])
         self.tree.addTopLevelItem(plug_root)
         plug_root.setExpanded(True)
-
-        # 3. 项目插件
-        if self.project is not None:
-            pdir = os.path.join(self.project.root, "plugins")
-            proot = QTreeWidgetItem(["项目插件 (plugins/)", ""])
-            proot.setForeground(0, Qt.darkGreen)
-            caps = scan_plugins_dir(pdir)
-            if caps:
-                for name, cap in caps.items():
-                    self._add_plugin(proot, name, cap)
-            else:
-                QTreeWidgetItem(proot, ["(无 — 插件放入项目 plugins/ 目录 "
-                                        "即被自动识别)", ""])
-            self.tree.addTopLevelItem(proot)
 
     def _add_plugin(self, parent, name, cap):
         p = QTreeWidgetItem(["%s" % name, ""])
@@ -189,13 +188,15 @@ class PluginsPanel(QWidget):
         if self.project is None:
             self.log.emit("请先打开项目")
             return
-        caps = scan_plugins_dir(framework_plugins_dir())
-        pdir = os.path.join(self.project.root, "plugins")
-        caps.update(scan_plugins_dir(pdir))
+        caps = {name: {
+            "settings": [(k, d.get("label", k))
+                         for k, d in reg.settings.items()],
+            "settings_detail": dict(reg.settings),
+        } for name, reg in registry.plugins().items()}
         total = sum(len(c.get("settings", [])) for c in caps.values())
         if total == 0:
-            self.log.emit("当前插件未注册设置项 (可在插件源码用 "
-                          "engine.settings.register 注册)")
+            self.log.emit("当前插件未注册设置项 (插件可在编辑器接口用 "
+                          "add_setting 注册)")
             return
         script = self.project.scripts.get("setting.gal")
         if script is None:

@@ -11,8 +11,8 @@ import sys
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, _ROOT)
 
+import editor.plugins  # noqa: F401  内置接口注册
 from editor.flow_editor import action_edit_spec, collect_plugin_caps
-from editor.plugins_registry import scan_plugin_source
 
 FAILURES: list = []
 
@@ -81,19 +81,19 @@ def main() -> int:
     spec = action_edit_spec("flash", caps)
     check("flash 单参数", spec is not None and len(spec[1][1]) == 1)
 
-    # docstring 约定: 合成插件声明 <参数名>
-    demo_cap = scan_plugin_source(
-        "from framework.api import command\n"
-        "@command('my_fx')\n"
-        "def my_fx(engine, stmt, **kw):\n"
-        "    \"\"\"my_fx <强度> <颜色> —— 自定义特效\"\"\"\n"
-        "    pass\n")
-    check("docstring 参数提取", demo_cap["command_params"]
-          .get("my_fx") == ["强度", "颜色"])
-    spec = action_edit_spec("my_fx", {"demo": demo_cap})
-    check("自定义指令按约定出表单", spec is not None
-          and spec[0] == "textparams"
-          and spec[1][1] == ["强度", "颜色"])
+    # API 注册驱动: 插件经编辑器接口注册参数表单
+    from editor.plugins_api import registry
+    demo = registry.register_plugin("_demo_fx")
+    demo.add_command("my_fx", params=[("强度", "number", "1"),
+                                      ("颜色", "color", "255,0,0")])
+    caps = collect_plugin_caps()
+    spec = action_edit_spec("my_fx", caps)
+    check("API 注册参数出表单", spec is not None
+          and spec[0] == "params"
+          and len(spec[1][1]) == 2)
+    registry.unregister_plugin("_demo_fx")
+    check("注销后回到只读",
+          action_edit_spec("my_fx", collect_plugin_caps()) is None)
 
     # 未知指令 -> 只读
     check("未知指令返回 None", action_edit_spec("music", caps) is None)

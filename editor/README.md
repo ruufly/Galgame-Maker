@@ -57,12 +57,12 @@ F7             校验项目        视图→语言 切换中/英
   **场景**（normal/cg/默认背景/背景表）、**声音**（类型/文件/音量）
 - 约定：char/scene→cast.gal，sound→audio.gal
 
-### 4. 项目设置（project_settings.py）
+### 11. 项目设置（project_settings.py）
 - window 块表单：标题/分辨率/帧率/图标/全屏/缩放/存档槽位/
   BGM 淡入淡出/UI 音效 + 确认框 + 键盘导航 + 菜单文案
 - 保存即改模型并落盘（`{@key}` 占位符保留）
 
-### 5. 流程节点编辑器（flow.py + flow_editor.py）—— 核心创作面
+### 11. 流程节点编辑器（flow.py + flow_editor.py）—— 核心创作面
 - **节点类型**：对话 / 选择支（每选项端口）/ 跳转（call 可选）/
   结局 / 标签 / **场景 stage** / 动作（兜底保留任意语句）/ 代码块
 - **场景分镜**：背景（场景定义下拉+过渡效果）+ 立绘动作表 +
@@ -75,17 +75,17 @@ F7             校验项目        视图→语言 切换中/英
   （候选来自内核 + 插件能力，见第五节）
 - 导入 story.gal 无损失（对话链合并 + 块尾 jump 折叠 + 幂等）
 
-### 6. 样式可视化编辑器（styles_editor.py）
+### 11. 样式可视化编辑器（styles_editor.py）
 - 17 个样式字段（对话框/台词/名字框/选择支配色、字号、字体）
 - Qt 自绘实时样例预览，改即见；保存进 ui.gal style 块
 
-### 7. 插件面板（plugins_panel.py + plugins_registry.py）—— 见第五节
+### 11. 插件生态（plugins_api.py + plugins_panel.py + plugin_importer.py）—— 见第五节
 
-### 8. 编译与打包（build.py）
+### 11. 编译与打包（build.py）
 - 校验（往返 + import 合并加载）→ 导出项目 zip（排除运行时产物）
 - PyInstaller 打包（QProcess 实时输出，参数化 README 引擎侧方案）
 
-### 9. 国际化（i18n.py + lang/）
+### 11. 国际化（i18n.py + lang/）
 - zh-CN / en 双语；配置存 ~/.galmaker_editor.json；切换即时全 UI 刷新
 - 已覆盖：主窗口 + 全部工作区面板
 
@@ -110,46 +110,83 @@ framework 引擎 (真实运行/无头预览)
 - **幂等**：story.gal 导入→导出→再导入，节点结构稳定
 - **Editor-first**：一切编辑 = 改模型 → 序列化落盘
 
-## 五、插件生态（核心特性：内核 vs 插件能力严格区分）
+## 五、插件生态（责任反转：插件主动注册，编辑器不分析插件源码）
 
-### 能力来源树（插件面板展示）
+### 设计原则
+- 编辑器只提供**注册点**（PluginRegistry），不扫描/分析插件源码
+- 插件在 `editor/plugins/<名>.py` 中调用 API 主动声明能力
+  （指令参数表单 / 动作候选 / 文字模式 / 设置项 / 元信息）
+- 编辑器 UI（action 参数提示 / 插件面板 / 设置项生成）只查询注册中心
+- framework/plugins 的每个插件在 editor/plugins 有对应接口文件（内置 8 个）
+- 能力来源区分：**引擎内核（KERNEL_* 固定清单）** vs **插件（注册中心）**
 
-```
-引擎内核 (framework/engine)   —— 固定清单 (KERNEL_*)
-内置插件 (framework/plugins)  —— AST 自动扫描 8 个
-项目插件 (项目 plugins/)      —— 插件开发者放入即自动发现
-```
+### editor/plugins 内置接口（与 framework/plugins 一一对应）
 
-### 自动发现的能力（plugins_registry.py，AST 静态扫描，不执行插件代码）
-指令 / 动作 / 背景过渡 / 立绘效果 / 文字模式 / 设置项 / 快捷键 /
-菜单按钮 / 事件监听 —— 含轻量常量传播（for 解包、类 name 属性、
-`engine.display.register_sprite_effect(name, ...)` 形式）
+| 接口文件 | 注册内容 |
+|---|---|
+| fx.py | 6 指令参数表单（shake 时长+幅度 / flash / blackflash / strobe / tint 颜色+时长 / pulse） |
+| custom_actions.py | do_action 指令 + 4 动作 + 6 立绘效果 + 5 文字模式 |
+| transitions_plus.py | 7 种扩展过渡 |
+| debug_mode.py | debug_toggle 快捷键 |
+| gallery.py | gallery_open 动作 + script_block 事件 |
+| auto_skip.py | auto_toggle / skip_once 动作 + 菜单按钮 |
+| notice.py / slot_thumbnails.py | 元信息 + 事件（无注册项） |
 
-### 插件开发者对接路径（零引擎改动）
-1. 插件放入项目 `plugins/` → 编辑器自动列出全部能力
-2. **plugins 块配置**：插件面板设置 only/except → 保存进主脚本
-3. **设置项生成**：`engine.settings.register(...)` 的参数（kind/
-   var/default/min/max/step/options/section）自动提取 → 一键生成
-   `setting` 子块进 setting.gal → 游戏内设置界面即出现
-4. **指令参数表单**（docstring 约定）：指令函数 docstring 写
-   `shake <时长> <幅度> —— 说明`，编辑器即为其生成逐参表单；
-   内置 fx 插件参数表开箱即用（shake/flash/tint/pulse...）
+### 插件 API（editor/plugins_api.py）
 
-### 配置闭环示例
 ```python
-# 插件源码 (项目 plugins/my_plugin.py)
-class MyPlugin(Plugin):
-    def on_load(self):
-        self.engine.settings.register(
-            "my_speed", label="速度", kind="slider",
-            var="my_speed", default=1.0, min=0.1, max=5.0, step=0.1)
+from editor.plugins_api import registry
 
-        @self.add_command("my_fx")
-        def my_fx(engine, stmt, **kw):
-            """my_fx <强度> <颜色> —— 自定义特效"""
-            ...
+def setup(reg):                       # 编辑器加载时自动调用
+    p = reg.register_plugin("my_plugin", meta={"name": "my_plugin",
+                                               "description": "..."})
+    p.add_command("my_fx", params=[("强度", "number", "1"),
+                                   ("颜色", "color", "255,0,0")])
+    p.add_action("my_action")
+    p.add_text_mode("my_mode")
+    p.add_setting("my_speed", "速度", kind="slider",
+                  min=0.1, max=5.0, step=0.1, section="游戏")
+    p.add_keybind("my_toggle", "我的开关")
+    p.add_transition("my_trans")
+    p.add_sprite_effect("my_effect")
+    p.add_event("my_event")
 ```
-编辑器自动：能力入树 → 设置项一键生成 → `my_fx` 双击出参数表单。
+
+### 插件导入（.galpkg 标准包，文件→导入插件）
+
+包结构（zip）：
+
+```
+my_plugin.galpkg
+├── main.yml          # name/author/description/version/date/copyright
+│                     # + framework/editor 文件映射
+├── gal_impl.py       # -> framework/plugins/<name>.py (引擎侧实现)
+└── ed_impl.py        # -> editor/plugins/<name>.py (编辑器接口)
+```
+
+main.yml：
+
+```yaml
+name: my_plugin
+author: "xx"
+description: "自定义插件"
+version: 1.0
+date: 2026-08-12
+copyright: "xx 2026"
+framework: gal_impl.py
+editor: ed_impl.py
+```
+
+导入流程：校验 main.yml → 引擎侧写入 framework/plugins → 编辑器接口写入
+editor/plugins → 立即加载注册（**main.yml 元信息为权威**，setup 内 meta 仅补充）
+→ 插件面板刷新。注意：framework/plugins 为子模块，写入后需自行管理 git。
+
+### 配置闭环
+
+- **plugins 块**（only/except）：插件面板配置 → 保存进主脚本
+- **设置项**：插件 `add_setting` → 一键生成 setting.gal 子块 → 游戏内设置界面出现
+- **指令参数表单**：插件 `add_command(params=...)` → 流程画布双击该指令弹逐参表单
+- **动作/文字模式候选**：插件 `add_action` / `add_text_mode` → do_action / typing 下拉自动包含
 
 ## 六、测试清单（18 项，全绿）
 
@@ -167,11 +204,12 @@ class MyPlugin(Plugin):
 | p2_flow_ui_test | 画布 UI/撤销/连线删除 |
 | p3_styles_test | 样式块读写 |
 | p3_build_test | 导出 zip 排除规则 |
-| p3_plugins_test | 插件能力扫描 (13 断言) |
+| p3_plugins_test | 插件注册中心 (API 注册/查询/装卸, 15 断言) |
+| p4_plugin_import_test | .galpkg 导入/注册/错误处理 (8 断言) |
 | p3_stage_preview_test | 场景脚本生成 + 真实渲染 |
 | p3_i18n_test | 语言切换/回退 |
 | p3_plugin_settings_test | 设置项提取/生成 (13 断言) |
-| p3_action_hint_test | 参数提示 (21 断言) |
+| p3_action_hint_test | 参数提示 (API 驱动, 21 断言) |
 | p3_audio_timeline_test | 时间线数据/排序 (9 断言) |
 
 ```powershell
@@ -214,42 +252,50 @@ foreach ($t in $tests) { py -3.10 "editor\tests\$t.py"; "EXIT=$LASTEXITCODE" }
 - 批量替换时区间计算错误，showEvent/_make_dock/_build_central 出现两份副本且 addTab 括号被吃 → 语法错误
 - **教训**：大范围文本替换前先打印锚点位置/区间长度；改完立即 py_compile + 全量测试
 
-### 3. `_call_name` 不支持 Call 节点（docstring 约定失效）
+### 3. 责任反转：AST 静态扫描方案弃用
+- 初版"编辑器自动扫描插件源码"虽能工作（含常量传播），但把插件支持的
+  责任压在编辑器：新插件能力（参数语义等）必须由编辑器解析推断
+- 重构为**插件主动注册**（editor/plugins API）：编辑器只提供注册点，
+  插件自己声明参数表单/候选/设置项；framework/plugins 各插件在
+  editor/plugins 有对应接口文件；自定义插件经 .galpkg 导入
+- **教训**：平台（编辑器）的责任是提供稳定接口，而不是理解每个插件内部
+
+### 11. `_call_name` 不支持 Call 节点（docstring 约定失效）
 - 装饰器 `@command("x")` 的 AST 节点是 Call，`_call_name(dec)` 返回空串 → 指令注册分支静默失效（但 Call 段的重复处理让 commands 看似正常，掩盖了 docstring 参数提取的缺失）
 - 调试打印 `dec name: ''` 才暴露；改为 `_call_name(dec.func)`
 - **教训**：AST 工具函数要对 Name/Attribute/Call 全覆盖；同名功能重复出现时警惕"假正常"
 
-### 4. `setFlags(0)` 类型错误（PySide6 严格枚举）
+### 11. `setFlags(0)` 类型错误（PySide6 严格枚举）
 - 空态占位 item 用 `setFlags(0)`，Python 下 int 0 报 TypeError；此前从未走到空态分支所以测试全过
 - 修：`Qt.NoItemFlags`；**教训**：PySide6 严格类型检查，枚举别用整数
 
-### 5. pygame/SDL atexit 清理竞态
+### 11. pygame/SDL atexit 清理竞态
 - 测试/脚本退出码偶发非 0（SDL dummy 驱动在解释器关闭时清理问题）
 - 修：测试入口统一 `os._exit(main())` 跳过 atexit；引擎线程内显式 pygame.quit()
 - **教训**：GUI 测试的"退出阶段"也要验证，否则 CI 时灵时不灵
 
-### 6. 工具链转义：`\n` 被写进文件变成真实换行
+### 11. 工具链转义：`\n` 被写进文件变成真实换行
 - 通过文件工具写含 `\n` 的字符串时被转义为换行 → SyntaxError
 - 修：改用 `chr(10)` 拼接或三引号；**教训**：写代码生成工具时避免依赖转义序列
 
-### 7. parser 上游保真限制（序列化器无法找回）
+### 11. parser 上游保真限制（序列化器无法找回）
 - 注释/空行丢失；`choice` 行内参数被引擎 parser 丢弃；键值行 `" #"` 被当注释（十六进制颜色裸写被吞空）→ 序列化器强制 `#` 开头值加引号
 - **教训**：与上游 parser 对接时先做"最小意外测试"（把 demo 全文件往返跑一遍），限制会自己浮出来
 
-### 8. 幂等陷阱：块尾 jump 折叠
+### 11. 幂等陷阱：块尾 jump 折叠
 - 导入→导出→再导入时，块尾 jump 语句每轮多生成一个节点（15→11→…）
 - 修：块尾 jump（目标已存在、prev 非 choice）折叠回 next 连线；自动 id 生成器跳过已占用名
 - **教训**：任何"图↔文本"转换都要有幂等断言，否则一轮轮退化
 
-### 9. 默认值省略（loop=1）
+### 11. 默认值省略（loop=1）
 - `music x loop 1` 导出省略默认 loop → 测试断言过严报错；语义等价即可
 - **教训**：测试断言要区分"结构等价"与"语义等价"
 
-### 10. 测试隔离：用户配置污染
+### 11. 测试隔离：用户配置污染
 - i18n 测试断言默认中文，却被上一次截图脚本持久化的 en 配置污染 → 用临时配置路径隔离
 - **教训**：涉及用户级配置的测试必须隔离
 
-## 九、已知限制与兼容策略
+## 十、已知限制与兼容策略
 
 ### PySide6 渲染兼容（重要）
 PySide6 6.11 对本环境的自定义 `QGraphicsItem` 子类（覆盖
@@ -270,7 +316,7 @@ QGraphicsScene.drawForeground）——
 - 音频/图片缺失仅告警（引擎行为）；面板内部对话框文案部分未 t 化
 - 编辑器自身打包（PyInstaller）暂缓（用户决定）
 
-## 十、下一步方向
+## 十一、下一步方向
 
 - 更多 action 指令参数化（按 docstring 约定扩展）
 - 音乐轨时间线升级为横向时间轴（带时长/淡入淡出可视化）
