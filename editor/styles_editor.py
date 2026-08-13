@@ -250,8 +250,12 @@ class ColorButton(QPushButton):
         return self._color
 
 
-def _make_field_editor(field, current: str | None, parent=None):
-    """按字段类型创建编辑控件, 返回 (widget, getter)。"""
+def _make_field_editor(field, current: str | None, parent=None,
+                       root_dir: str | None = None):
+    """按字段类型创建编辑控件, 返回 (widget, getter)。
+
+    root_dir: 项目根目录 (image 字段浏览时转相对路径, 保证项目可移植)。
+    """
     key, label, ftype, default = field
     val = current if current is not None else default
     if ftype == "color":
@@ -285,7 +289,7 @@ def _make_field_editor(field, current: str | None, parent=None):
         ed = QLineEdit(str(val), row)
         btn = QPushButton("…", row)
         btn.setFixedWidth(30)
-        btn.clicked.connect(lambda: _browse_image(ed, parent))
+        btn.clicked.connect(lambda: _browse_image(ed, parent, root_dir))
         lay.addWidget(ed, 1)
         lay.addWidget(btn)
         return row, ed.text
@@ -293,10 +297,19 @@ def _make_field_editor(field, current: str | None, parent=None):
     return ed, ed.text
 
 
-def _browse_image(ed: QLineEdit, parent=None) -> None:
+def _browse_image(ed: QLineEdit, parent=None, root_dir: str | None = None) -> None:
     f, _ = QFileDialog.getOpenFileName(parent, "选择图片", "",
                                        "图片 (*.png *.jpg *.jpeg *.webp)")
     if f:
+        # 项目内素材存相对路径 (可移植/可打包); 项目外文件保留绝对路径
+        if root_dir:
+            try:
+                rel = os.path.relpath(f, root_dir).replace("\\", "/")
+                if not rel.startswith(".."):
+                    ed.setText(rel)
+                    return
+            except ValueError:
+                pass
         ed.setText(f)
 
 
@@ -486,11 +499,12 @@ class StylesEditor(QWidget):
         self.lbl_title.setText("%s — %s" % (_label_of(op), rel))
         self._clear_form()
         fields = fields_for(op)
+        root_dir = self.project.root if self.project is not None else None
         self._editors = []
         for key, label, ftype, default in fields:
             widget, getter = _make_field_editor(
                 (key, label, ftype, default),
-                stmt.kwargs.get(key), self.form_widget)
+                stmt.kwargs.get(key), self.form_widget, root_dir)
             self.form.addRow(label + ":", widget)
             self._editors.append((key, getter))
         self.btn_save.setEnabled(True)

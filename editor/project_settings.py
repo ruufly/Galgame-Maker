@@ -156,7 +156,9 @@ class ProjectSettingsDialog(QDialog):
         for key, label in (("confirm_quit", "退出游戏"), ("confirm_load", "读取存档"),
                            ("confirm_title", "返回标题")):
             chk = QCheckBox("启用「%s」确认框" % label)
-            chk.setChecked(gal_to_bool(k.get(key, "true")))
+            # 引擎默认不启用确认框 (False); 未配置时保持关闭,
+            # 避免"不改动直接保存"意外开启弹窗
+            chk.setChecked(gal_to_bool(k.get(key, "false")))
             text_w, text_g = make_lang_edit_widget(
                 self._gl, str(k.get(key + "_text", "")))
             yes_w, yes_g = make_lang_edit_widget(

@@ -99,18 +99,6 @@ class LangEditDialog(QDialog):
         self._refresh_preview()
         layout.addWidget(self.lbl_preview)
 
-    def _preview_menu(self, _pos) -> None:
-        from PySide6.QtGui import QAction
-        from PySide6.QtWidgets import QMenu
-        from editor.rich_preview import RichPreviewDialog
-        menu = QMenu(self)
-        a = QAction(t("local.preview"), self)
-        a.triggered.connect(
-            lambda: RichPreviewDialog(
-                self.gl.resolve(self._text), self).exec())
-        menu.addAction(a)
-        menu.exec(self.lbl_preview.mapToGlobal(_pos))
-
         if self._keys:
             self._build_matrix(layout)
         else:
@@ -129,6 +117,18 @@ class LangEditDialog(QDialog):
         btns.addWidget(ok)
         btns.addWidget(cc)
         layout.addLayout(btns)
+
+    def _preview_menu(self, _pos) -> None:
+        from PySide6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu
+        from editor.rich_preview import RichPreviewDialog
+        menu = QMenu(self)
+        a = QAction(t("local.preview"), self)
+        a.triggered.connect(
+            lambda: RichPreviewDialog(
+                self.gl.resolve(self._text), self).exec())
+        menu.addAction(a)
+        menu.exec(self.lbl_preview.mapToGlobal(_pos))
 
     def _open_panel(self) -> None:
         """关闭本对话框, 请求多语言面板定位第一个 key。"""

@@ -985,10 +985,18 @@ class FlowScene(QGraphicsScene):
         btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
         lay.addLayout(btns)
         if dlg.exec() == QDialog.Accepted:
-            node.options = [[(tbl.item(r, 0).text() if tbl.item(r, 0) else ""),
-                             node.options[r][1] if r < len(node.options)
-                             else None]
-                            for r in range(tbl.rowCount())]
+            # 有语言表时单元格显示解析后文本, 原文 ({@key}) 存 UserRole;
+            # 保存必须取原文, 否则多语言占位符会被解析文本覆盖 (i18n 往返丢失)
+            opts = []
+            for r in range(tbl.rowCount()):
+                it = tbl.item(r, 0)
+                if it is None:
+                    opts.append(["", None])
+                    continue
+                raw = it.data(Qt.UserRole) or it.text()
+                opts.append([raw, node.options[r][1]
+                             if r < len(node.options) else None])
+            node.options = opts
             self.set_graph(self.graph)
 
     def _edit_choice_lang(self, tbl, node) -> None:
@@ -1099,6 +1107,7 @@ class FlowScene(QGraphicsScene):
         lay.addLayout(btns)
         if dlg.exec() == QDialog.Accepted and role != "else":
             cond = ed_cond.text().strip()
+            old_cond = node.data.get("cond", "")   # 先取旧值再覆盖
             node.data["cond"] = cond
             # 同步写回 raw 的 branches (保持导出一致)
             if stmt is not None:
@@ -1107,7 +1116,6 @@ class FlowScene(QGraphicsScene):
                     branches[0][0] = cond
                 elif role == "elif":
                     # 匹配当前 elif 条件 (对应 branches[1..])
-                    old_cond = node.data.get("cond", "")
                     for idx, (c, _b) in enumerate(branches[1:], start=1):
                         if c == old_cond:
                             branches[idx][0] = cond
