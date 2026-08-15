@@ -19,6 +19,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QFileDialog,
                                QFormLayout, QHBoxLayout, QLineEdit, QMessageBox,
                                QPushButton, QVBoxLayout)
 
+from editor.i18n import t
+
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE_DIR = os.path.join(_ROOT, "test", "engine_demo")
 
@@ -29,8 +31,8 @@ RESOLUTIONS = [
     ("1280 × 800 (16:10)", 1280, 800),
 ]
 LANGUAGES = [
-    ("简体中文", "zh-CN"),
-    ("English", "en"),
+    ("zh-CN", "wizard.lang_zh"),
+    ("en", "wizard.lang_en"),
 ]
 _NAME_RE = re.compile(r"^[\w\u4e00-\u9fff][\w\u4e00-\u9fff ._-]*$")
 
@@ -103,41 +105,41 @@ class NewProjectDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("新建 Galgame 项目")
+        self.setWindowTitle(t("dlg.new_project"))
         self.setMinimumWidth(480)
         self._result_path = ""
 
         form = QFormLayout()
         self.ed_name = QLineEdit()
-        self.ed_name.setPlaceholderText("例如: 我的第一个游戏")
-        form.addRow("项目名称", self.ed_name)
+        self.ed_name.setPlaceholderText(t("wizard.name_hint"))
+        form.addRow(t("wizard.name"), self.ed_name)
 
         loc_row = QHBoxLayout()
         self.ed_loc = QLineEdit()
         self.ed_loc.setText(os.path.expanduser("~/Documents/GalgameProjects"))
-        btn_browse = QPushButton("浏览…")
+        btn_browse = QPushButton(t("wizard.browse"))
         btn_browse.clicked.connect(self._browse)
         loc_row.addWidget(self.ed_loc, 1)
         loc_row.addWidget(btn_browse)
-        form.addRow("保存位置", loc_row)
+        form.addRow(t("wizard.location"), loc_row)
 
         self.cb_res = QComboBox()
         for label, _w, _h in RESOLUTIONS:
             self.cb_res.addItem(label)
-        form.addRow("分辨率", self.cb_res)
+        form.addRow(t("wizard.resolution"), self.cb_res)
 
         self.cb_lang = QComboBox()
-        for label, code in LANGUAGES:
-            self.cb_lang.addItem(label, code)
-        form.addRow("默认语言", self.cb_lang)
+        for code, label_key in LANGUAGES:
+            self.cb_lang.addItem(t(label_key), code)
+        form.addRow(t("wizard.language"), self.cb_lang)
 
-        self.chk_materials = QCheckBox("复制演示素材 (背景/立绘/音频/UI)")
+        self.chk_materials = QCheckBox(t("wizard.materials"))
         self.chk_materials.setChecked(True)
         form.addRow("", self.chk_materials)
 
         btns = QHBoxLayout()
-        btn_ok = QPushButton("创建项目")
-        btn_cancel = QPushButton("取消")
+        btn_ok = QPushButton(t("wizard.create"))
+        btn_cancel = QPushButton(t("wizard.cancel"))
         btn_ok.clicked.connect(self._create)
         btn_cancel.clicked.connect(self.reject)
         btns.addStretch(1)
@@ -149,7 +151,7 @@ class NewProjectDialog(QDialog):
         layout.addLayout(btns)
 
     def _browse(self):
-        d = QFileDialog.getExistingDirectory(self, "选择保存位置",
+        d = QFileDialog.getExistingDirectory(self, t("wizard.pick_location"),
                                              self.ed_loc.text())
         if d:
             self.ed_loc.setText(d)
@@ -158,10 +160,12 @@ class NewProjectDialog(QDialog):
         name = self.ed_name.text().strip()
         base = self.ed_loc.text().strip()
         if not name:
-            QMessageBox.warning(self, "提示", "请填写项目名称")
+            QMessageBox.warning(self, t("wizard.hint"),
+                                t("wizard.need_name"))
             return
         if not base:
-            QMessageBox.warning(self, "提示", "请选择保存位置")
+            QMessageBox.warning(self, t("wizard.hint"),
+                                t("wizard.need_location"))
             return
         _label, w, h = RESOLUTIONS[self.cb_res.currentIndex()]
         lang = self.cb_lang.currentData()
@@ -170,7 +174,7 @@ class NewProjectDialog(QDialog):
                                   resolution=(w, h), language=lang,
                                   with_materials=self.chk_materials.isChecked())
         except Exception as exc:
-            QMessageBox.critical(self, "创建失败", str(exc))
+            QMessageBox.critical(self, t("wizard.create_failed"), str(exc))
             return
         self._result_path = path
         self.accept()

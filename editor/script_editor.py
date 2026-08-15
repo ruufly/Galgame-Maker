@@ -182,7 +182,7 @@ class ScriptEditorDialog(QDialog):
             with open(path, encoding="utf-8") as fh:
                 return fh.read()
         except OSError as exc:
-            return "# 读取失败: %s" % exc
+            return t("script_editor.read_failed", exc=exc)
 
     def _save(self) -> None:
         text = self.editor.toPlainText()

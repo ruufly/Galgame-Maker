@@ -36,23 +36,23 @@ _TRUE = ("true", "1", "yes", "on")
 # style 块字段 (P3 兼容: 三元组, _DEFAULTS 全覆盖)
 # ----------------------------------------------------------------------
 STYLE_FIELDS = [
-    ("textbox_bg", "对话框背景色", "color"),
-    ("textbox_alpha", "背景不透明度 (0-255)", "int"),
-    ("textbox_border", "对话框边框色", "color"),
-    ("textbox_border_width", "边框宽度", "int"),
-    ("textbox_radius", "圆角", "int"),
-    ("text_color", "台词颜色", "color"),
-    ("text_size", "台词字号", "int"),
-    ("speaker_color", "名字文字色", "color"),
-    ("speaker_bg", "名字背景色", "color"),
-    ("font", "字体", "text"),
-    ("choice_bg", "选项背景", "color"),
-    ("choice_bg_hover", "选项悬停背景", "color"),
-    ("choice_border", "选项边框", "color"),
-    ("choice_border_hover", "选项悬停边框", "color"),
-    ("choice_text_size", "选项字号", "int"),
-    ("choice_text_color", "选项文字色", "color"),
-    ("choice_text_color_hover", "选项悬停文字色", "color"),
+    ("textbox_bg", "styles.f_textbox_bg", "color"),
+    ("textbox_alpha", "styles.f_textbox_alpha", "int"),
+    ("textbox_border", "styles.f_textbox_border", "color"),
+    ("textbox_border_width", "styles.f_textbox_border_width", "int"),
+    ("textbox_radius", "styles.f_textbox_radius", "int"),
+    ("text_color", "styles.f_text_color", "color"),
+    ("text_size", "styles.f_text_size", "int"),
+    ("speaker_color", "styles.f_speaker_color", "color"),
+    ("speaker_bg", "styles.f_speaker_bg", "color"),
+    ("font", "styles.f_font", "text"),
+    ("choice_bg", "styles.f_choice_bg", "color"),
+    ("choice_bg_hover", "styles.f_choice_bg_hover", "color"),
+    ("choice_border", "styles.f_choice_border", "color"),
+    ("choice_border_hover", "styles.f_choice_border_hover", "color"),
+    ("choice_text_size", "styles.f_choice_text_size", "int"),
+    ("choice_text_color", "styles.f_choice_text_color", "color"),
+    ("choice_text_color_hover", "styles.f_choice_text_color_hover", "color"),
 ]
 
 _DEFAULTS = {
@@ -77,76 +77,76 @@ def _style_fields_with_defaults() -> list:
 # ----------------------------------------------------------------------
 KERNEL_SOURCE_FIELDS = {
     "selection_style": [
-        ("width_ratio", "宽度比例 (0-1)", "text", "0.32"),
-        ("width", "按钮宽度 (像素)", "int", "400"),
-        ("height", "按钮高度", "int", "56"),
-        ("gap", "按钮间距", "int", "14"),
-        ("anchor_x", "水平对齐", "combo", "center"),
-        ("anchor_y", "垂直对齐", "combo", "center"),
-        ("button_bg", "按钮背景", "color", "#2a2a44"),
-        ("button_bg_hover", "按钮悬停背景", "color", "#3a3a5c"),
-        ("button_border", "按钮边框", "color", "#5a5a7a"),
-        ("button_border_hover", "按钮悬停边框", "color", "#e94560"),
-        ("button_radius", "按钮圆角", "int", "8"),
-        ("text_size", "按钮字号", "int", "24"),
-        ("text_color", "按钮文字色", "color", "#eaeaea"),
-        ("text_color_hover", "按钮悬停文字色", "color", "#ffffff"),
-        ("dim_alpha", "背景遮罩不透明度", "int", "150"),
-        ("dialog_image", "面板背景图", "image", ""),
-        ("button_image", "按钮图 (默认, 焦点)", "text", ""),
+        ("width_ratio", "styles.f_width_ratio", "text", "0.32"),
+        ("width", "styles.f_width", "int", "400"),
+        ("height", "styles.f_height", "int", "56"),
+        ("gap", "styles.f_gap", "int", "14"),
+        ("anchor_x", "styles.f_anchor_x", "combo", "center"),
+        ("anchor_y", "styles.f_anchor_y", "combo", "center"),
+        ("button_bg", "styles.f_button_bg", "color", "#2a2a44"),
+        ("button_bg_hover", "styles.f_button_bg_hover", "color", "#3a3a5c"),
+        ("button_border", "styles.f_button_border", "color", "#5a5a7a"),
+        ("button_border_hover", "styles.f_button_border_hover", "color", "#e94560"),
+        ("button_radius", "styles.f_button_radius", "int", "8"),
+        ("text_size", "styles.f_text_size", "int", "24"),
+        ("text_color", "styles.f_text_color", "color", "#eaeaea"),
+        ("text_color_hover", "styles.f_text_color_hover", "color", "#ffffff"),
+        ("dim_alpha", "styles.f_dim_alpha", "int", "150"),
+        ("dialog_image", "styles.f_dialog_image", "image", ""),
+        ("button_image", "styles.f_button_image", "text", ""),
     ],
     "menu_bar": [
-        ("bg", "条背景色", "color", "#1a1a2e"),
-        ("border", "边框色", "color", "#5a5a7a"),
-        ("align", "按钮对齐", "combo", "center"),
-        ("gap", "按钮间距", "int", "12"),
-        ("padding", "按钮左右内边距", "int", "18"),
-        ("height", "条高度", "int", "56"),
-        ("btn_h", "按钮高度", "int", "38"),
-        ("y_offset", "纵向微调", "int", "0"),
-        ("button_bg", "按钮背景", "color", "#2a2a44"),
-        ("button_bg_hover", "按钮悬停背景", "color", "#e94560"),
-        ("button_border", "按钮边框", "color", "#44446a"),
-        ("button_border_hover", "按钮悬停边框", "color", "#ffd282"),
-        ("button_radius", "按钮圆角", "int", "8"),
-        ("text_color", "按钮文字色", "color", "#eaeaea"),
-        ("text_color_hover", "按钮悬停文字色", "color", "#ffffff"),
-        ("text_size", "按钮字号", "int", "22"),
-        ("bg_image", "条背景图", "image", ""),
-        ("button_image", "按钮图", "image", ""),
-        ("button_image_hover", "按钮悬停图", "image", ""),
-        ("button_image_active", "按钮激活图", "image", ""),
-        ("button_image_disabled", "按钮禁用图", "image", ""),
+        ("bg", "styles.f_bg", "color", "#1a1a2e"),
+        ("border", "styles.f_border", "color", "#5a5a7a"),
+        ("align", "styles.f_align", "combo", "center"),
+        ("gap", "styles.f_gap", "int", "12"),
+        ("padding", "styles.f_padding", "int", "18"),
+        ("height", "styles.f_height", "int", "56"),
+        ("btn_h", "styles.f_btn_h", "int", "38"),
+        ("y_offset", "styles.f_y_offset", "int", "0"),
+        ("button_bg", "styles.f_button_bg", "color", "#2a2a44"),
+        ("button_bg_hover", "styles.f_button_bg_hover", "color", "#e94560"),
+        ("button_border", "styles.f_button_border", "color", "#44446a"),
+        ("button_border_hover", "styles.f_button_border_hover", "color", "#ffd282"),
+        ("button_radius", "styles.f_button_radius", "int", "8"),
+        ("text_color", "styles.f_text_color", "color", "#eaeaea"),
+        ("text_color_hover", "styles.f_text_color_hover", "color", "#ffffff"),
+        ("text_size", "styles.f_text_size", "int", "22"),
+        ("bg_image", "styles.f_bg_image", "image", ""),
+        ("button_image", "styles.f_button_image", "image", ""),
+        ("button_image_hover", "styles.f_button_image_hover", "image", ""),
+        ("button_image_active", "styles.f_button_image_active", "image", ""),
+        ("button_image_disabled", "styles.f_button_image_disabled", "image", ""),
     ],
     "ui": [
-        ("textbox", "文本框背景", "image", ""),
-        ("choice_button", "选择按钮图 (默认, 焦点)", "text", ""),
-        ("title_buttons", "标题按钮图 (默认, 焦点; 多组用; 分隔)", "text", ""),
-        ("menu_button", "菜单按钮图", "text", ""),
-        ("confirm_panel", "确认框面板", "image", ""),
-        ("confirm_button", "确认框按钮", "text", ""),
-        ("slot_frame", "存档框", "image", ""),
-        ("slot_panel", "存档面板", "image", ""),
-        ("error_panel", "错误面板", "image", ""),
-        ("error_button", "错误按钮", "text", ""),
-        ("notice_panel", "通知面板", "image", ""),
+        ("textbox", "styles.f_textbox", "image", ""),
+        ("choice_button", "styles.f_choice_button", "text", ""),
+        ("title_buttons", "styles.f_title_buttons", "text", ""),
+        ("menu_button", "styles.f_menu_button", "text", ""),
+        ("confirm_panel", "styles.f_confirm_panel", "image", ""),
+        ("confirm_button", "styles.f_confirm_button", "text", ""),
+        ("slot_frame", "styles.f_slot_frame", "image", ""),
+        ("slot_panel", "styles.f_slot_panel", "image", ""),
+        ("error_panel", "styles.f_error_panel", "image", ""),
+        ("error_button", "styles.f_error_button", "text", ""),
+        ("notice_panel", "styles.f_notice_panel", "image", ""),
     ],
     "menu": [
-        ("button_columns", "按钮列数", "int", "1"),
-        ("ui_hover_sound", "悬停音效", "text", ""),
-        ("ui_click_sound", "点击音效", "text", ""),
+        ("button_columns", "styles.f_button_columns", "int", "1"),
+        ("ui_hover_sound", "styles.f_ui_hover_sound", "text", ""),
+        ("ui_click_sound", "styles.f_ui_click_sound", "text", ""),
     ],
     "gallery": [],
     "settings": [
-        ("title", "界面标题", "text", "设置"),
-        ("columns", "条目列数", "int", "2"),
-        ("bg", "面板背景图", "image", ""),
-        ("item_image", "条目背景图", "image", ""),
-        ("item_image_hover", "条目悬停图", "image", ""),
-        ("tab_image", "分栏图", "image", ""),
-        ("tab_image_hover", "分栏激活图", "image", ""),
-        ("back_image", "返回按钮图", "image", ""),
-        ("slider_track_image", "滑条轨道图", "image", ""),
+        ("title", "styles.f_title", "text", "设置"),
+        ("columns", "styles.f_columns", "int", "2"),
+        ("bg", "styles.f_bg", "image", ""),
+        ("item_image", "styles.f_item_image", "image", ""),
+        ("item_image_hover", "styles.f_item_image_hover", "image", ""),
+        ("tab_image", "styles.f_tab_image", "image", ""),
+        ("tab_image_hover", "styles.f_tab_image_hover", "image", ""),
+        ("back_image", "styles.f_back_image", "image", ""),
+        ("slider_track_image", "styles.f_slider_track_image", "image", ""),
     ],
 }
 
@@ -237,7 +237,7 @@ class ColorButton(QPushButton):
         self.clicked.connect(self._pick)
 
     def _pick(self):
-        c = QColorDialog.getColor(QColor(self._color), self, "选择颜色")
+        c = QColorDialog.getColor(QColor(self._color), self, t("styles.pick_color"))
         if c.isValid():
             self.set_color(c.name())
 
@@ -275,8 +275,7 @@ def _make_field_editor(field, current: str | None, parent=None,
         return chk, (lambda: "true" if chk.isChecked() else "false")
     if ftype == "combo":
         cb = QComboBox(parent)
-        if label.find("对齐") >= 0 or key in ("anchor_x", "anchor_y",
-                                              "align"):
+        if key in ("anchor_x", "anchor_y", "align"):
             cb.addItems(["left", "center", "right"])
         if str(val) in [cb.itemText(i) for i in range(cb.count())]:
             cb.setCurrentText(str(val))
@@ -298,8 +297,8 @@ def _make_field_editor(field, current: str | None, parent=None,
 
 
 def _browse_image(ed: QLineEdit, parent=None, root_dir: str | None = None) -> None:
-    f, _ = QFileDialog.getOpenFileName(parent, "选择图片", "",
-                                       "图片 (*.png *.jpg *.jpeg *.webp)")
+    f, _ = QFileDialog.getOpenFileName(parent, t("styles.pick_image"), "",
+                                       t("styles.image_filter"))
     if f:
         # 项目内素材存相对路径 (可移植/可打包); 项目外文件保留绝对路径
         if root_dir:
@@ -347,7 +346,7 @@ class StylePreview(QWidget):
             p.setPen(c)
             p.drawLine(0, i, w, i)
         p.setPen(QColor("#8a8ab0"))
-        p.drawText(20, 50, "样式预览 (游戏画面示意)")
+        p.drawText(20, 50, t("styles.preview_title"))
 
         box = QRectF(24, h * 0.45, w - 48, h * 0.47)
         alpha = int(v.get("textbox_alpha", "210"))
@@ -366,19 +365,18 @@ class StylePreview(QWidget):
         p.drawRoundedRect(QRectF(48, box.top() - 34, 110, 34), 8, 8)
         p.setPen(col("speaker_color", "#ffd282"))
         p.drawText(QRectF(48, box.top() - 34, 110, 34), Qt.AlignCenter,
-                   "制作人")
+                   t("styles.preview_speaker"))
         # 台词
         p.setPen(col("text_color", "#eaeaea"))
         f = p.font()
         f.setPointSize(int(v.get("text_size", "28")) // 4)
         p.setFont(f)
         p.drawText(QRectF(48, box.top() + 20, w - 96, 60),
-                   "欢迎来到 Galgame Maker 引擎演示！\n"
-                   "这是{c=#ffcc00}彩色文字{/c}示例。")
+                   t("styles.preview_line"))
         # 选择按钮
         y = box.top() - 140
-        for i, (txt, hover) in enumerate([("选项一", False),
-                                          ("选项二", True)]):
+        for i, (txt, hover) in enumerate([(t("styles.preview_opt1"), False),
+                                          (t("styles.preview_opt2"), True)]):
             rr = QRectF(w - 300, y + i * 52, 260, 42)
             p.setBrush(col("choice_bg_hover" if hover else "choice_bg",
                            "#3a3a5c" if hover else "#2a2a44"))
@@ -505,7 +503,7 @@ class StylesEditor(QWidget):
             widget, getter = _make_field_editor(
                 (key, label, ftype, default),
                 stmt.kwargs.get(key), self.form_widget, root_dir)
-            self.form.addRow(label + ":", widget)
+            self.form.addRow(t(label) + ":", widget)
             self._editors.append((key, getter))
         self.btn_save.setEnabled(True)
         self.preview.setVisible(op == "style")
@@ -579,7 +577,10 @@ class StylesEditor(QWidget):
 
 
 def _label_of(op: str) -> str:
-    return {"style": "对话框样式", "selection_style": "菜单按钮样式",
-            "menu_bar": "常驻菜单栏", "ui": "UI 主题切片",
-            "menu": "命名菜单", "gallery": "鉴赏 (插件)",
-            "settings": "设置界面"}.get(op, op)
+    return t({"style": "styles.source_style",
+              "selection_style": "styles.source_selection",
+              "menu_bar": "styles.source_menu_bar",
+              "ui": "styles.source_ui",
+              "menu": "styles.source_menu",
+              "gallery": "styles.source_gallery",
+              "settings": "styles.source_settings"}.get(op, op))

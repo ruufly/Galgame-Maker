@@ -113,11 +113,13 @@ class EnginePreviewThread(QThread):
 
         try:
             from framework.api import GameEngine
-            engine = GameEngine(self.width, self.height, "Galgame Maker 预览",
+            engine = GameEngine(self.width, self.height,
+                                t("preview.engine_title"),
                                 fps=self.fps, autoload_plugins=True)
             self._engine = engine
             self.status_changed.emit(
-                "引擎启动中… (%dx%d, %d fps)" % (self.width, self.height, self.fps))
+                t("preview.starting_fmt", w=self.width, h=self.height,
+                  fps=self.fps))
 
             def hook(dt):
                 if self._stop:
@@ -131,10 +133,10 @@ class EnginePreviewThread(QThread):
             engine.register_frame_hook(hook)
             engine.run(self.script_path)
             self.status_changed.emit(
-                "预览结束 (%d 帧)" % self.frames_rendered)
+                t("preview.finished", n=self.frames_rendered))
         except Exception as exc:  # noqa: BLE001 - 预览不应拖垮编辑器
             self.last_error = repr(exc)
-            self.status_changed.emit("预览出错: %s" % exc)
+            self.status_changed.emit(t("preview.error", exc=exc))
         finally:
             try:
                 pygame.quit()
@@ -198,10 +200,10 @@ class PreviewPanel(QWidget):
         if self._thread is not None and self._thread.isRunning():
             return
         if not self._script:
-            self.view.setText("未设置预览脚本")
+            self.view.setText(t("preview.no_script"))
             return
         self.frames = 0
-        self.view.setText("引擎启动中…")
+        self.view.setText(t("preview.starting"))
         self.btn_run.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self._thread = EnginePreviewThread(self._script)

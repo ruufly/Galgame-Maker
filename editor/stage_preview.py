@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel,
 from editor.preview import PreviewPanel, EnginePreviewThread
 from editor.flow_editor import resolve_bg_image
 from editor.definitions import CHAR_RESERVED, iter_defs
+from editor.i18n import t
 
 PREVIEW_W, PREVIEW_H = 1280, 720
 
@@ -65,7 +66,7 @@ def build_stage_script(project, node) -> str:
             lines.append("    show %s %s%s" % (char, expr, suffix))
         else:
             lines.append("    %s %s%s" % (act, char, suffix))
-    lines.append('    text "场景预览 (引擎真实渲染)"')
+    lines.append('    text "%s"' % t("stage_preview.placeholder_text"))
     return "\n".join(lines) + "\n"
 
 
@@ -179,13 +180,13 @@ class StagePreviewDialog(QDialog):
 
     def __init__(self, project, node, parent=None, on_apply=None):
         super().__init__(parent)
-        self.setWindowTitle("场景预览与立绘排布")
+        self.setWindowTitle(t("stage_preview.title"))
         self.resize(980, 640)
         self._tmp_path = ""
         self._on_apply = on_apply
 
         layout = QVBoxLayout(self)
-        hint = QLabel("上方: 引擎真实渲染 · 下方: 立绘排布 (拖动定位, 应用后生成 move 语句)")
+        hint = QLabel(t("stage_preview.hint"))
         hint.setStyleSheet("color:#888;")
         layout.addWidget(hint)
 
@@ -195,12 +196,12 @@ class StagePreviewDialog(QDialog):
         # ---- 立绘排布区 ----
         row = QHBoxLayout()
         left = QVBoxLayout()
-        lbl = QLabel("立绘源 (双击加入排布):")
+        lbl = QLabel(t("stage_preview.sprite_source"))
         left.addWidget(lbl)
         self.sprite_list = QListWidget()
         self.sprite_list.itemDoubleClicked.connect(self._add_sprite)
         left.addWidget(self.sprite_list, 1)
-        btn_apply = QPushButton("应用位置到分镜")
+        btn_apply = QPushButton(t("stage_preview.apply_positions"))
         btn_apply.clicked.connect(self._apply_positions)
         left.addWidget(btn_apply)
         row.addLayout(left, 1)
@@ -222,7 +223,7 @@ class StagePreviewDialog(QDialog):
             self.preview.set_script(self._tmp_path)
             self.preview.start()
         except Exception as exc:
-            self.preview.view.setText("预览生成失败: %s" % exc)
+            self.preview.view.setText(t("stage_preview.gen_failed", exc=exc))
 
     def _load_sources(self, project, node):
         """载入背景图 + 项目立绘源列表。"""
@@ -264,7 +265,8 @@ class StagePreviewDialog(QDialog):
                 py = int(y * PREVIEW_H)
                 moves.append([char, "%d,%d" % (px, py), "0", "", ""])
             self._on_apply(moves)
-            self.preview.view.setToolTip("已应用 %d 个立绘位置" % len(moves))
+            self.preview.view.setToolTip(
+                t("stage_preview.applied", n=len(moves)))
 
     def closeEvent(self, event):
         self.preview.stop()

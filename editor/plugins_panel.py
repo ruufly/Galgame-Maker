@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QComboBox, QFormLayout, QHBoxLayout, QLabel,
 from editor.plugins_api import registry
 from editor.project_settings import save_script
 from editor.plugin_settings import add_plugin_settings
+from editor.i18n import t
 
 # ----------------------------------------------------------------------
 # 内核能力清单 (framework/engine, 随框架版本)
@@ -43,17 +44,21 @@ KERNEL_ACTIONS = ["start", "quit", "title", "continue", "slot_menu",
                   "save", "load", "close"]
 
 _CAP_LABELS = {
-    "commands": "DSL 指令", "actions": "动作", "transitions": "背景过渡",
-    "sprite_effects": "立绘效果", "text_modes": "文字模式",
-    "settings": "设置项", "keybinds": "快捷键", "menu_buttons": "菜单按钮",
-    "events": "事件监听",
+    "commands": "plugins.cap_commands", "actions": "plugins.cap_actions",
+    "transitions": "plugins.cap_transitions",
+    "sprite_effects": "plugins.cap_sprite_effects",
+    "text_modes": "plugins.cap_text_modes",
+    "settings": "plugins.cap_settings", "keybinds": "plugins.cap_keybinds",
+    "menu_buttons": "plugins.cap_menu_buttons",
+    "events": "plugins.cap_events",
+    "blocks": "plugins.cap_blocks",
 }
 
 
 def _add_kv(parent, key, values):
     if not values:
         return
-    item = QTreeWidgetItem([_CAP_LABELS.get(key, key), ""])
+    item = QTreeWidgetItem([t(_CAP_LABELS.get(key, key)), ""])
     if isinstance(values, list):
         if values and isinstance(values[0], (list, tuple)):
             text = ", ".join("%s (%s)" % (k, l) for k, l in values)
@@ -79,13 +84,12 @@ class PluginsPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
 
-        info = QLabel("能力来源区分: 引擎内核 (framework/engine) 与插件 "
-                      "(framework/plugins + 项目 plugins/)")
+        info = QLabel(t("plugins.info"))
         info.setStyleSheet("color:#888;")
         layout.addWidget(info)
 
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["能力", "内容"])
+        self.tree.setHeaderLabels([t("plugins.cap"), t("plugins.content")])
         self.tree.header().setStretchLastSection(True)
         self.tree.setColumnWidth(0, 220)
         layout.addWidget(self.tree, 1)
@@ -93,16 +97,16 @@ class PluginsPanel(QWidget):
         # plugins 块配置
         form = QFormLayout()
         self.ed_only = QLineEdit()
-        self.ed_only.setPlaceholderText("只装载, 逗号分隔 (留空 = 全部)")
+        self.ed_only.setPlaceholderText(t("plugins.only_hint"))
         self.ed_except = QLineEdit()
-        self.ed_except.setPlaceholderText("排除, 逗号分隔 (留空 = 不排除)")
-        form.addRow("只装载 (only)", self.ed_only)
-        form.addRow("排除 (except)", self.ed_except)
-        btn_save = QPushButton("保存 plugins 配置")
+        self.ed_except.setPlaceholderText(t("plugins.except_hint"))
+        form.addRow(t("plugins.only"), self.ed_only)
+        form.addRow(t("plugins.except"), self.ed_except)
+        btn_save = QPushButton(t("plugins.save"))
         btn_save.clicked.connect(self._save_plugins_block)
         layout.addLayout(form)
         row = QHBoxLayout()
-        btn_gen = QPushButton("生成插件设置项 → setting.gal")
+        btn_gen = QPushButton(t("plugins.gen_settings"))
         btn_gen.clicked.connect(self._gen_settings)
         row.addWidget(btn_gen)
         row.addStretch(1)
@@ -119,7 +123,7 @@ class PluginsPanel(QWidget):
         self.tree.clear()
 
         # 1. 引擎内核
-        kernel = QTreeWidgetItem(["引擎内核 (framework/engine)", ""])
+        kernel = QTreeWidgetItem([t("plugins.kernel"), ""])
         kernel.setForeground(0, Qt.darkBlue)
         _add_kv(kernel, "commands", KERNEL_COMMANDS)
         _add_kv(kernel, "blocks", KERNEL_BLOCKS)
@@ -129,7 +133,7 @@ class PluginsPanel(QWidget):
         kernel.setExpanded(True)
 
         # 2. 插件 (editor/plugins 注册中心, 插件主动注册)
-        plug_root = QTreeWidgetItem(["插件 (editor/plugins 注册)", ""])
+        plug_root = QTreeWidgetItem([t("plugins.plugins_root"), ""])
         plug_root.setForeground(0, Qt.darkGreen)
         for name, reg in registry.plugins().items():
             cap = {
@@ -146,7 +150,7 @@ class PluginsPanel(QWidget):
             }
             self._add_plugin(plug_root, name, cap)
         if not registry.plugins():
-            QTreeWidgetItem(plug_root, ["(无)", ""])
+            QTreeWidgetItem(plug_root, [t("plugins.none"), ""])
         self.tree.addTopLevelItem(plug_root)
         plug_root.setExpanded(True)
 
@@ -186,7 +190,7 @@ class PluginsPanel(QWidget):
     def _gen_settings(self):
         """把全部插件注册的设置项写入 setting.gal 的 settings 块。"""
         if self.project is None:
-            self.log.emit("请先打开项目")
+            self.log.emit(t("plugins.no_project"))
             return
         caps = {name: {
             "settings": [(k, d.get("label", k))
@@ -195,26 +199,26 @@ class PluginsPanel(QWidget):
         } for name, reg in registry.plugins().items()}
         total = sum(len(c.get("settings", [])) for c in caps.values())
         if total == 0:
-            self.log.emit("当前插件未注册设置项 (插件可在编辑器接口用 "
-                          "add_setting 注册)")
+            self.log.emit(t("plugins.no_registered_settings"))
             return
         script = self.project.scripts.get("setting.gal")
         if script is None:
-            self.log.emit("项目缺少 setting.gal, 跳过")
+            self.log.emit(t("plugins.no_setting_gal"))
             return
         added = add_plugin_settings(script, caps)
         if added:
             save_script(script, os.path.join(self.project.root, "setting.gal"))
-            self.log.emit("已生成 %d 个插件设置项: %s"
-                          % (len(added),
-                             ", ".join("%s.%s" % (p, k) for p, k in added)))
+            self.log.emit(t("plugins.settings_generated",
+                            n=len(added),
+                            names=", ".join("%s.%s" % (p, k)
+                                            for p, k in added)))
         else:
-            self.log.emit("插件设置项均已存在, 无新增")
+            self.log.emit(t("plugins.settings_exist"))
 
     def _save_plugins_block(self):
         got = self._plugins_script()
         if got is None:
-            self.log.emit("请先打开项目")
+            self.log.emit(t("plugins.no_project"))
             return
         script, stmt = got
         only = self.ed_only.text().strip()
@@ -226,4 +230,4 @@ class PluginsPanel(QWidget):
         if except_:
             stmt.kwargs["except"] = except_
         save_script(script, os.path.join(self.project.root, self.project.main))
-        self.log.emit("plugins 配置已保存")
+        self.log.emit(t("plugins.saved"))

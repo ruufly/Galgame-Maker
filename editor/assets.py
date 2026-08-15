@@ -127,7 +127,7 @@ class FontPreviewDialog(QDialog):
         self.resize(560, 300)
         lay = QVBoxLayout(self)
         f = QFont(path, 28)
-        lbl = QLabel("Galgame Maker 预览\n中文示例: 你好，世界！\nThe quick brown fox 0123456789")
+        lbl = QLabel(t("assets.font_sample"))
         lbl.setFont(f)
         lbl.setStyleSheet("color:#eaeaea; background:#14141c; padding:16px;")
         lay.addWidget(lbl, 1)
@@ -360,9 +360,7 @@ class AssetPanel(QWidget):
 
     def _import_here(self) -> None:
         files, _f = QFileDialog.getOpenFileNames(
-            self, "导入素材", "",
-            "素材文件 (*.png *.jpg *.jpeg *.gif *.bmp *.webp "
-            "*.wav *.mp3 *.ogg *.flac *.m4a *.ttf *.otf *.ttc)")
+            self, t("assets.import"), "", t("assets.import_filter"))
         if files:
             self._import_files(files, target_dir=self._selected_dir())
 
@@ -414,9 +412,7 @@ class AssetPanel(QWidget):
     # ---- 导入 ---------------------------------------------------------
     def _import_dialog(self) -> None:
         files, _f = QFileDialog.getOpenFileNames(
-            self, "导入素材", "",
-            "素材文件 (*.png *.jpg *.jpeg *.gif *.bmp *.webp "
-            "*.wav *.mp3 *.ogg *.flac *.m4a *.ttf *.otf *.ttc)")
+            self, t("assets.import"), "", t("assets.import_filter"))
         if files:
             # 导入到当前选中的目录 (文件夹化组织)
             self._import_files(files, target_dir=self._selected_dir())

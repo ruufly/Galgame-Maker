@@ -175,8 +175,8 @@ class PropertyPanel(QWidget):
         others = [k for k in stmt.kwargs if k not in reserved]
         if others:
             form.addRow(t("props.extra"),
-                        QLabel("%d 项: %s" % (len(others),
-                                              ", ".join(others[:6]))))
+                        QLabel(t("props.extra_n", n=len(others),
+                                 names=", ".join(others[:6]))))
         self.body.addLayout(form)
         btn = QPushButton(t("props.open_editor"))
         btn.clicked.connect(lambda: self._open_def_editor(op, stmt))

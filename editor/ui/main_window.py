@@ -106,7 +106,7 @@ class MainWindow(QMainWindow):
         self.menu_file.addSeparator()
         self.menu_file.addAction(self.act_settings)
         self.menu_file.addSeparator()
-        self.act_import_plugin = QAction("导入插件 (.galpkg)…", self)
+        self.act_import_plugin = QAction(t("act.import_plugin"), self)
         self.act_import_plugin.triggered.connect(self._import_plugin)
         self.menu_file.addAction(self.act_import_plugin)
         self.menu_file.addSeparator()
@@ -128,7 +128,7 @@ class MainWindow(QMainWindow):
         self.menu_help.addAction(self.act_about)
 
     def _build_toolbar(self):
-        tb = QToolBar("主工具栏", self)
+        tb = QToolBar(t("main.toolbar"), self)
         tb.setMovable(False)
         tb.addAction(self.act_open)
         tb.addSeparator()
@@ -140,7 +140,7 @@ class MainWindow(QMainWindow):
     def _build_docks(self):
         # 左: 项目浏览器
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["项目内容"])
+        self.tree.setHeaderLabels([t("tree.project")])
         self.tree.itemDoubleClicked.connect(self._on_tree_double)
         self._dock_tree = self._make_dock("dock.project", self.tree, Qt.LeftDockWidgetArea)
 
@@ -235,13 +235,13 @@ class MainWindow(QMainWindow):
         dlg = NewProjectDialog(self)
         if dlg.exec() == NewProjectDialog.Accepted:
             path = dlg.result_path()
-            self._log("新项目已创建: %s" % path)
+            self._log(t("status.new_created", path=path))
             self.open_project(path)
 
     def _import_plugin(self) -> None:
         """导入 .galpkg 插件包: main.yml + framework/editor 双 py。"""
         f, _ = QFileDialog.getOpenFileName(
-            self, "导入插件", "", "Galgame 插件包 (*.galpkg)")
+            self, t("act.import_plugin"), "", t("plugin_import.filter"))
         if not f:
             return
         from editor.plugin_importer import (import_plugin_package,
@@ -254,36 +254,39 @@ class MainWindow(QMainWindow):
                 framework_plugins_dir=os.path.join(_ROOT2, "framework",
                                                    "plugins"))
         except Exception as exc:
-            QMessageBox.critical(self, "导入失败", str(exc))
+            QMessageBox.critical(self, t("plugin_import.failed"), str(exc))
             return
         name = result["name"]
-        msgs = ["插件已导入: %s" % name]
+        msgs = [t("plugin_import.done", name=name)]
         if result.get("framework_file"):
-            msgs.append("引擎侧: %s" % result["framework_file"])
+            msgs.append(t("plugin_import.engine_side",
+                          file=result["framework_file"]))
         if result.get("editor_file"):
             loaded = load_plugin_editor_file(result["editor_file"])
-            msgs.append("编辑器接口: %s%s" % (
-                result["editor_file"],
-                " (已注册)" if loaded else " (未注册 setup)"))
+            msgs.append(t("plugin_import.editor_side",
+                          file=result["editor_file"],
+                          state=t("plugin_import.registered") if loaded
+                          else t("plugin_import.no_setup")))
         self._log(" | ".join(msgs))
         if result.get("editor_file"):
             self.plugins_panel.refresh()
-        self._log("注意: framework/plugins 为子模块, 变更后需自行管理 git 状态")
+        self._log(t("plugin_import.submodule_note"))
 
     def _project_settings(self) -> None:
         """项目设置: window 块表单, 保存后写回模型并落盘。"""
         if self.project is None:
-            self._log("请先打开项目")
+            self._log(t("status.no_project"))
             return
         dlg = ProjectSettingsDialog(self.project, self)
         if dlg.exec() == ProjectSettingsDialog.Accepted:
-            self._log("项目设置已保存 (window 块已更新)")
-            self._log("提示: 重新运行预览以应用窗口配置")
+            self._log(t("status.settings_saved"))
+            self._log(t("status.settings_hint"))
             self.project.load()   # 重新加载模型 (内容已变)
 
     def open_project(self, path: str | None = None) -> None:
         if path is None:
-            path = QFileDialog.getExistingDirectory(self, "选择 Galgame 项目目录")
+            path = QFileDialog.getExistingDirectory(
+                self, t("main.pick_project"))
         if not path:
             return
         # 当前画布有未保存修改 -> 确认
@@ -293,7 +296,7 @@ class MainWindow(QMainWindow):
             self.project = Project(path)
             self.project.load()
         except Exception as exc:
-            QMessageBox.critical(self, "打开失败", str(exc))
+            QMessageBox.critical(self, t("main.open_failed"), str(exc))
             return
         self._populate_tree()
         self.assets.set_project(self.project)
@@ -315,16 +318,17 @@ class MainWindow(QMainWindow):
                                                 self.project.main)
             if self._preview_window is not None:
                 self._preview_window.set_script(self._preview_script)
-            self.setWindowTitle("Galgame Maker 编辑器 — %s" % path)
-            self._log("项目已打开: %s (%d 个脚本)" % (path, len(self.project.scripts)))
-            self._log("预览脚本: %s" % self.project.main)
+            self.setWindowTitle("%s — %s" % (t("app.title"), path))
+            self._log(t("status.project_open", path=path,
+                        n=len(self.project.scripts)))
+            self._log(t("status.preview_script", path=self.project.main))
         else:
-            self._log("警告: 目录中未找到主脚本 %s" % self.project.main)
+            self._log(t("main.main_script_missing", name=self.project.main))
 
     def _open_preview(self) -> None:
         """打开独立预览窗口 (真实进程运行游戏 + 调试控制台)。"""
         if not self._preview_script:
-            self._log("请先打开项目")
+            self._log(t("status.no_project"))
             return
         if self._preview_window is None:
             self._preview_window = PreviewWindow(self)
@@ -346,12 +350,12 @@ class MainWindow(QMainWindow):
         root_item = QTreeWidgetItem([os.path.basename(self.project.root)])
         root_item.setToolTip(0, self.project.root)
 
-        scripts_item = QTreeWidgetItem(["脚本 (.gal)"])
+        scripts_item = QTreeWidgetItem([t("tree.scripts")])
         for rel in sorted(self.project.scripts):
             QTreeWidgetItem(scripts_item, [rel])
         root_item.addChild(scripts_item)
 
-        mats_item = QTreeWidgetItem(["素材目录"])
+        mats_item = QTreeWidgetItem([t("tree.materials")])
         for name in sorted(os.listdir(self.project.root)):
             full = os.path.join(self.project.root, name)
             if os.path.isdir(full) and name not in _RUNTIME_DIRS:
@@ -369,7 +373,7 @@ class MainWindow(QMainWindow):
             dlg = ScriptEditorDialog(self.project, text, self)
             if dlg.exec() == ScriptEditorDialog.Accepted:
                 self._reload_project_panels()
-                self._log("脚本已保存并重新解析: %s" % text)
+                self._log(t("main.script_saved", text=text))
 
     def _reload_project_panels(self) -> None:
         """脚本被文本编辑后: 重载模型并刷新全部面板。"""
@@ -388,7 +392,7 @@ class MainWindow(QMainWindow):
     # ==================================================================
     def validate(self) -> None:
         if self.project is None:
-            self._log("请先打开项目")
+            self._log(t("status.no_project"))
             return
         t0 = time.time()
         ok, bad = 0, []
@@ -397,9 +401,9 @@ class MainWindow(QMainWindow):
                 ok += 1
             else:
                 bad.append(rel)
-        msg = "校验完成: %d/%d 通过" % (ok, len(self.project.scripts))
+        msg = t("main.validate_done", ok=ok, total=len(self.project.scripts))
         if bad:
-            msg += " | 往返失败: %s" % ", ".join(bad)
+            msg += " | " + t("main.validate_fail", names=", ".join(bad))
         msg += " (%.2fs)" % (time.time() - t0)
         self._log(msg)
 
@@ -407,10 +411,10 @@ class MainWindow(QMainWindow):
         try:
             main = os.path.join(self.project.root, self.project.main)
             merged = load_script_with_imports(main)
-            self._log("合并加载 OK: %d 顶层语句, %d 标签"
-                      % (len(merged.statements), len(merged.labels)))
+            self._log(t("main.merge_ok", n=len(merged.statements),
+                        labels=len(merged.labels)))
         except Exception as exc:
-            self._log("合并加载失败: %s" % exc)
+            self._log(t("main.merge_fail", exc=exc))
 
     def _log(self, msg: str) -> None:
         self.output.appendPlainText("[%s] %s" % (
@@ -446,11 +450,7 @@ class MainWindow(QMainWindow):
                 fn()
 
     def _about(self):
-        QMessageBox.about(self, "关于 Galgame Maker 编辑器",
-                          "Galgame Maker 编辑器\n\n"
-                          "可视化制作 .gal 视觉小说, 零基础友好。\n"
-                          "引擎: framework 子模块 (Python 3.10 + pygame)\n"
-                          "编辑器版本: 0.4 (P0-P3 + 独立预览调试 / 多语言可视化 / 脚本编辑器)")
+        QMessageBox.about(self, t("dlg.about"), t("dlg.about_body"))
 
 
     def _confirm_unsaved(self) -> bool:

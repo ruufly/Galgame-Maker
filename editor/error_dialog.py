@@ -10,6 +10,8 @@ import traceback
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from editor.i18n import t
+
 _INSTALLED = False
 
 
@@ -44,12 +46,11 @@ def show_error(exc: BaseException, tb_text: str | None = None) -> None:
     try:
         box = QMessageBox()
         box.setIcon(QMessageBox.Critical)
-        box.setWindowTitle("编辑器错误")
-        box.setText("发生错误: %s" % exc)
-        box.setInformativeText(
-            "完整错误信息已复制到剪贴板, 可直接粘贴给开发者。")
+        box.setWindowTitle(t("error.title"))
+        box.setText(t("error.occurred", exc=exc))
+        box.setInformativeText(t("error.copied_hint"))
         box.setDetailedText(tb_text)
-        box.addButton("复制错误并继续", QMessageBox.AcceptRole)
+        box.addButton(t("error.copy_continue"), QMessageBox.AcceptRole)
         box.exec()
     except Exception:
         sys.__excepthook__(type(exc), exc, None)

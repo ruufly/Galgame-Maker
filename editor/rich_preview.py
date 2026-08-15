@@ -81,7 +81,7 @@ class RichPreviewWidget(QWidget):
         cur = []
         x = 0
         for run in self._runs:
-            text = run.text if not run.math else "[公式]"
+            text = run.text if not run.math else t("richpreview.formula")
             f = QFont("Microsoft YaHei", 10)
             if run.size:
                 f.setPixelSize(int(run.size))
@@ -95,8 +95,9 @@ class RichPreviewWidget(QWidget):
             h = fm.height()
             # 公式按源码宽度估算 (占位)
             if run.math:
-                w = fm.horizontalAdvance("[公式: %s]" % run.text[:12]) + 8
-                text = "[公式: %s]" % run.text[:12]
+                label = t("richpreview.formula_src", src=run.text[:12])
+                w = fm.horizontalAdvance(label) + 8
+                text = label
             if cur and x + w > max_w:
                 lines.append(cur)
                 cur = []

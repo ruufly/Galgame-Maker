@@ -209,7 +209,7 @@ editor/plugins → 立即加载注册（**main.yml 元信息为权威**，setup 
 | p3_stage_preview_test | 场景脚本生成 + 真实渲染 |
 | p3_i18n_test | 语言切换/回退 |
 | p3_plugin_settings_test | 设置项提取/生成 (13 断言) |
-| p3_action_hint_test | 参数提示 (API 驱动, 21 断言) |
+| p3_action_hint_test | 参数提示 (API 驱动, 42 断言, 含 P5 内核表单) |
 | p3_audio_timeline_test | 时间线数据/排序 (9 断言) |
 
 ```powershell
@@ -233,6 +233,8 @@ foreach ($t in $tests) { py -3.10 "editor\tests\$t.py"; "EXIT=$LASTEXITCODE" }
 | **P1 骨架** | PySide6 主窗口 + Qt 内嵌引擎预览（帧→QImage→控件，~50fps）；项目树/校验/预览闭环 | ui_smoke 通过 |
 | **P2 创作** | 新建向导 / 素材库 / 项目设置 / 定义管理器 / **流程节点画布**（节点图模型 + 导入导出幂等）；顺带修复自动 id 冲突、块尾 jump 折叠 | 全程可视化完成 demo 级剧情 |
 | **P3 完整化** | 样式实时预览 / 插件能力注册表 + 面板 / 设置项生成 / 引擎帧场景预览 / 立绘排布 / 音频轨时间线 / action 参数提示 / 双语 / 编译打包 / 连线标注 | 18 项测试全绿 |
+| **P4 大版本** | 流程画布 v2 每行节点化（if 分支体节点化/标签树分组）/ 属性面板 / 素材树 / 富文本预览 / 独立预览窗口（debug_server 调试控制台）/ 多语言可视化（lang_utils/lang_dialog/localization_panel）/ 脚本编辑器 / 未保存提醒 | 17 项测试全绿 |
+| **P5 收尾** | **内核 action 指令参数化**（action_edit_spec 扩展 16 种表单：music/sfx/stop/pause/resume/save/load/set/move/rotate/flip/use/font/clear/read_settings，候选随项目动态生成：audio.gal 声音注册名/cast.gal 角色/样式名）；**面板剩余对话框文案双语化**（plugins_panel/audio_timeline/error_dialog/preview/stage_preview/build/project_wizard/project_settings/definitions/styles_editor/flow_editor/main_window/assets/property_panel/app 全部 t() 化，语言键 zh/en 各 601 个，补上 script_editor 缺失键） | 17 项测试全绿 + 框架 781 断言全绿 |
 
 **关键开发纪律**（贯穿始终）：
 1. **纯逻辑与 UI 分离**：序列化、模型、插件扫描、参数候选全部抽成可测纯函数；UI 只做薄封装
@@ -313,12 +315,17 @@ QGraphicsScene.drawForeground）——
   （`#` 开头值强制加引号）
 
 ### 其他
-- 音频/图片缺失仅告警（引擎行为）；面板内部对话框文案部分未 t 化
+- 音频/图片缺失仅告警（引擎行为）
 - 编辑器自身打包（PyInstaller）暂缓（用户决定）
 
 ## 十一、下一步方向
 
-- 更多 action 指令参数化（按 docstring 约定扩展）
+- ~~更多 action 指令参数化~~ ✅ **已做 (P5)**: action_edit_spec 覆盖 music/sfx/stop/pause/
+  resume/save/load/set/move/rotate/flip/use/font/clear/read_settings,
+  候选随项目动态生成 (audio.gal 注册名 / cast.gal 角色 / 样式名);
+  插件指令参数表单仍可继续按 add_command(params=...) 扩充
 - 音乐轨时间线升级为横向时间轴（带时长/淡入淡出可视化）
 - 编辑器自身 PyInstaller 发行
-- 面板内剩余对话框文案双语化
+- ~~面板内剩余对话框文案双语化~~ ✅ **已做 (P5)**: 全部面板 t() 化,
+  语言键 zh/en 各 601 个; 顺带修复 script_editor 缺失键 (此前显示键名)
+  + 向导语言标签 import 期求值问题

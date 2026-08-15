@@ -11,10 +11,12 @@ from PySide6.QtCore import QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-_ROW_DEFS = [("music", "音乐", "#2d6cdf"),
-             ("sfx", "音效", "#e8890c"),
-             ("volume", "音量", "#2e9e5b"),
-             ("control", "控制", "#d64550")]
+from editor.i18n import t
+
+_ROW_DEFS = [("music", "audio.row_music", "#2d6cdf"),
+             ("sfx", "audio.row_sfx", "#e8890c"),
+             ("volume", "audio.row_volume", "#2e9e5b"),
+             ("control", "audio.row_control", "#d64550")]
 
 _PX_PER_SEC = 36          # 时间轴像素比例 (秒 -> px)
 _MIN_DUR = {"music": 3.0, "sfx": 0.6, "volume": 0.5, "control": 0.5}
@@ -54,7 +56,8 @@ class AudioTimeline(QWidget):
         row_key = ("control" if op in ("pause", "resume", "stop")
                    else op if op in ("music", "sfx", "volume") else "control")
         text = {"music": "♪ %s" % a, "sfx": "◆ %s" % a,
-                "volume": "音量 %s%s" % (a, "·%s" % b if a == "voice" else ""),
+                "volume": t("audio.volume_prefix", a=a,
+                            extra="·%s" % b if a == "voice" else ""),
                 }.get(op, "%s %s" % (op, a))
         if op == "music" and c:
             text += " fade %s" % c
@@ -129,11 +132,11 @@ class AudioTimeline(QWidget):
             p.setPen(QColor("#8888a0"))
 
         # 轨标签 + 基准线
-        for i, (key, label, color) in enumerate(_ROW_DEFS):
+        for i, (key, label_key, color) in enumerate(_ROW_DEFS):
             r = self._row_rect(i)
             p.setPen(QColor("#8888a0"))
             p.drawText(QRectF(4, r.y(), 60, r.height()),
-                       Qt.AlignVCenter | Qt.AlignLeft, label)
+                       Qt.AlignVCenter | Qt.AlignLeft, t(label_key))
             p.setPen(QPen(QColor("#262638"), 1))
             p.drawLine(r.x(), r.y() + r.height() / 2, w - 4,
                        r.y() + r.height() / 2)

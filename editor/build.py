@@ -88,13 +88,13 @@ class BuildPanel(QWidget):
         self.project = project
         if project is not None:
             self.ed_name.setText(os.path.basename(project.root))
-            self._msg("项目: %s (%d 脚本)"
-                      % (project.root, len(project.scripts)))
+            self._msg(t("build.project_info",
+                        path=project.root, n=len(project.scripts)))
 
     # ---- 校验 ---------------------------------------------------------
     def validate(self) -> None:
         if self.project is None:
-            self._msg("请先打开项目")
+            self._msg(t("build.no_project"))
             return
         ok, bad = 0, []
         for rel, script in self.project.scripts.items():
@@ -102,34 +102,38 @@ class BuildPanel(QWidget):
                 ok += 1
             else:
                 bad.append(rel)
-        self._msg("校验: %d/%d 通过" % (ok, len(self.project.scripts))
-                  + (" | 失败: %s" % ", ".join(bad) if bad else ""))
+        self._msg(t("build.validate_result", ok=ok,
+                    total=len(self.project.scripts))
+                  + (t("build.validate_fail", names=", ".join(bad))
+                     if bad else ""))
         try:
             merged = load_script_with_imports(
                 os.path.join(self.project.root, self.project.main))
-            self._msg("合并加载 OK: %d 语句, %d 标签"
-                      % (len(merged.statements), len(merged.labels)))
+            self._msg(t("build.merge_ok", n=len(merged.statements),
+                        labels=len(merged.labels)))
         except Exception as exc:
-            self._msg("合并加载失败: %s" % exc)
+            self._msg(t("build.merge_fail", exc=exc))
 
     # ---- 导出 zip -----------------------------------------------------
     def export_zip(self) -> None:
         if self.project is None:
-            self._msg("请先打开项目")
+            self._msg(t("build.no_project"))
             return
         default = os.path.join(os.path.dirname(self.project.root),
                                os.path.basename(self.project.root) + ".zip")
-        dest, _f = QFileDialog.getSaveFileName(self, "导出项目包", default,
-                                               "Zip 压缩包 (*.zip)")
+        dest, _f = QFileDialog.getSaveFileName(self, t("build.export_title"),
+                                               default,
+                                               t("build.zip_filter"))
         if not dest:
             return
         if not dest.lower().endswith(".zip"):
             dest += ".zip"
         try:
             n = export_project_zip(self.project.root, dest)
-            self._msg("已导出 %d 个文件 -> %s" % (n, dest))
+            self._msg(t("build.exported", n=n, path=dest))
         except Exception as exc:
-            QMessageBox.critical(self, "导出失败", str(exc))
+            QMessageBox.critical(self, t("build.export_fail_title"),
+                                 str(exc))
 
     # ---- PyInstaller --------------------------------------------------
     def pack(self) -> None:
@@ -142,7 +146,7 @@ class BuildPanel(QWidget):
             os.path.abspath(__file__))), "..", "gamelauncher.py")
         launcher = os.path.abspath(launcher)
         if not os.path.isfile(launcher):
-            self._msg("未找到 gamelauncher.py")
+            self._msg(t("build.launcher_missing"))
             return
         plugins = os.path.join(os.path.dirname(os.path.dirname(
             os.path.abspath(__file__))), "..", "framework", "plugins")
@@ -160,7 +164,7 @@ class BuildPanel(QWidget):
             "--paths", os.path.dirname(os.path.dirname(launcher)),
             launcher,
         ]
-        self._msg("开始打包: %s" % " ".join(cmd))
+        self._msg(t("build.pack_start", cmd=" ".join(cmd)))
         self._proc = QProcess(self)
         self._proc.setWorkingDirectory(root)
         self._proc.readyReadStandardOutput.connect(
@@ -170,7 +174,7 @@ class BuildPanel(QWidget):
             lambda: self._msg(self._proc.readAllStandardError().data()
                               .decode("utf-8", "ignore").rstrip()))
         self._proc.finished.connect(
-            lambda code, _s: self._msg("PyInstaller 结束 (exit %d)" % code))
+            lambda code, _s: self._msg(t("build.pack_finished", code=code)))
         self._proc.start("py", cmd[1:])   # cmd[0]='py' 已在 program 参数
         self._proc.waitForStarted(3000)
 

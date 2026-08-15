@@ -285,7 +285,7 @@ class DefDialog(QDialog):
 
         self.ed_id = QLineEdit(stmt.args[0] if stmt else "")
         self.ed_id.setEnabled(stmt is None)      # 编辑时 id 不可改
-        form.addRow("ID (unique in script)", self.ed_id)
+        form.addRow(t("defs.id"), self.ed_id)
 
         # Name: 有语言表时走"显示效果 + 多语言编辑" (可读性优先)
         from editor.lang_dialog import make_lang_edit_widget
@@ -295,7 +295,7 @@ class DefDialog(QDialog):
             self._gl = GameLang(project.root, None)
         self.ed_name, self._name_getter = make_lang_edit_widget(
             self._gl, str(k.get("name", "")))
-        form.addRow("Name", self.ed_name)
+        form.addRow(t("defs.name"), self.ed_name)
 
         if op in ("char", "scene"):
             self.cb_type = None
@@ -303,32 +303,35 @@ class DefDialog(QDialog):
                 self.cb_type = QComboBox()
                 self.cb_type.addItems(["normal", "cg"])
                 self.cb_type.setCurrentText(str(k.get("type", "normal")))
-                form.addRow("Type", self.cb_type)
+                form.addRow(t("defs.type_label"), self.cb_type)
             # 默认素材
-            form.addRow(("Default sprite" if op == "char" else "Default bg"),
+            form.addRow(t("defs.default_char") if op == "char"
+                        else t("defs.default_scene"),
                         self._path_row("default", str(k.get("default", ""))))
         elif op == "sound":
             self.cb_sound_type = QComboBox()
             self.cb_sound_type.addItems(["music", "sfx_ui", "sfx_story", "voice"])
             self.cb_sound_type.setCurrentText(str(k.get("type", "sfx_ui")))
-            form.addRow("Sound type", self.cb_sound_type)
-            form.addRow("File", self._path_row("file", str(k.get("file", ""))))
+            form.addRow(t("defs.sound_type"), self.cb_sound_type)
+            form.addRow(t("defs.file"),
+                        self._path_row("file", str(k.get("file", ""))))
             self.sp_vol = QDoubleSpinBox()
             self.sp_vol.setRange(0, 1)
             self.sp_vol.setSingleStep(0.05)
             self.sp_vol.setValue(float(k.get("volume", 1.0)))
-            form.addRow("Volume", self.sp_vol)
+            form.addRow(t("defs.volume"), self.sp_vol)
 
         # 附加字段
         self.ed_extra = {}
         if op == "char":
-            form.addRow("Voice volume", self._vol_row(k.get("voice_volume", "1.0")))
-            form.addRow("Desc (gallery)", self._ed("desc", k, form))
-            form.addRow("CV/birthday/height…", self._ed("cv", k, form))
+            form.addRow(t("defs.voice_volume"),
+                        self._vol_row(k.get("voice_volume", "1.0")))
+            form.addRow(t("defs.desc"), self._ed("desc", k, form))
+            form.addRow(t("defs.cv"), self._ed("cv", k, form))
 
         btns = QHBoxLayout()
-        btn_ok = QPushButton("保存")
-        btn_cancel = QPushButton("取消")
+        btn_ok = QPushButton(t("defs.save"))
+        btn_cancel = QPushButton(t("defs.cancel"))
         btn_ok.clicked.connect(self._validate_ok)
         btn_cancel.clicked.connect(self.reject)
         btns.addStretch(1)
@@ -340,7 +343,9 @@ class DefDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         if op in ("char", "scene"):
-            self.table = self._build_table(k, "立绘" if op == "char" else "背景")
+            self.table = self._build_table(k, t("defs.table_sprites")
+                                           if op == "char"
+                                           else t("defs.table_bgs"))
             layout.addWidget(self.table, 1)
         layout.addLayout(btns)
 
@@ -348,7 +353,7 @@ class DefDialog(QDialog):
     def _path_row(self, key: str, value: str) -> QWidget:
         row = QHBoxLayout()
         ed = QLineEdit(value)
-        btn = QPushButton("浏览…")
+        btn = QPushButton(t("defs.browse"))
         btn.clicked.connect(lambda: self._browse(ed))
         row.addWidget(ed, 1)
         row.addWidget(btn)
@@ -376,17 +381,17 @@ class DefDialog(QDialog):
 
     def _build_table(self, k, title: str) -> QTableWidget:
         t = QTableWidget(0, 2)
-        t.setHorizontalHeaderLabels(["名称", "文件路径"])
+        t.setHorizontalHeaderLabels([t("defs.col_name"), t("defs.col_path")])
         t.horizontalHeader().setStretchLastSection(True)
         rows = [(name, path) for name, path in k.items()
                 if name not in (CHAR_RESERVED if self.op == "char"
                                 else SCENE_RESERVED)]
         for name, path in rows:
             self._add_row(t, name, path)
-        btn_add = QPushButton("添加一行")
+        btn_add = QPushButton(t("defs.add_row"))
         btn_add.clicked.connect(lambda: self._add_row(t, "", ""))
         wrap = QVBoxLayout()
-        lbl = QLabel("%s (除默认外, 其余名称对应文件路径)" % title)
+        lbl = QLabel(t("defs.table_hint", title=title))
         wrap.addWidget(lbl)
         wrap.addWidget(t, 1)
         row_btn = QHBoxLayout()
@@ -407,7 +412,7 @@ class DefDialog(QDialog):
 
     def _browse(self, ed: QLineEdit):
         start = os.path.join(self.project.root, "materials") if self.project else ""
-        f, _ = QFileDialog.getOpenFileName(self, "选择素材", start)
+        f, _ = QFileDialog.getOpenFileName(self, t("defs.pick_asset"), start)
         if f and self.project:
             rel = os.path.relpath(f, self.project.root).replace("\\", "/")
             ed.setText(rel)
@@ -458,9 +463,9 @@ class DefDialog(QDialog):
     # ---- 校验 ---------------------------------------------------------
     def _validate_ok(self):
         if not self.ed_id.text().strip():
-            QMessageBox.warning(self, "提示", "请填写 ID")
+            QMessageBox.warning(self, t("defs.hint"), t("defs.need_id"))
             return
         if self.op == "sound" and not self._extra_paths.get("file").text().strip():
-            QMessageBox.warning(self, "提示", "声音需要指定文件")
+            QMessageBox.warning(self, t("defs.hint"), t("defs.need_file"))
             return
         self.accept()

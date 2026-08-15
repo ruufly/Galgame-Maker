@@ -23,7 +23,8 @@ def main() -> int:
     from editor.error_dialog import install_excepthook
     install_excepthook()
     app = QApplication(sys.argv)
-    app.setApplicationName("Galgame Maker 编辑器")
+    from editor.i18n import t
+    app.setApplicationName(t("app.title"))
     win = MainWindow()
     if len(sys.argv) > 1 and os.path.isdir(sys.argv[1]):
         win.open_project(os.path.abspath(sys.argv[1]))
