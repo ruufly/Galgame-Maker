@@ -380,27 +380,27 @@ class DefDialog(QDialog):
         return w
 
     def _build_table(self, k, title: str) -> QTableWidget:
-        t = QTableWidget(0, 2)
-        t.setHorizontalHeaderLabels([t("defs.col_name"), t("defs.col_path")])
-        t.horizontalHeader().setStretchLastSection(True)
+        table = QTableWidget(0, 2)
+        table.setHorizontalHeaderLabels([t("defs.col_name"), t("defs.col_path")])
+        table.horizontalHeader().setStretchLastSection(True)
         rows = [(name, path) for name, path in k.items()
                 if name not in (CHAR_RESERVED if self.op == "char"
                                 else SCENE_RESERVED)]
         for name, path in rows:
-            self._add_row(t, name, path)
+            self._add_row(table, name, path)
         btn_add = QPushButton(t("defs.add_row"))
-        btn_add.clicked.connect(lambda: self._add_row(t, "", ""))
+        btn_add.clicked.connect(lambda: self._add_row(table, "", ""))
         wrap = QVBoxLayout()
         lbl = QLabel(t("defs.table_hint", title=title))
         wrap.addWidget(lbl)
-        wrap.addWidget(t, 1)
+        wrap.addWidget(table, 1)
         row_btn = QHBoxLayout()
         row_btn.addWidget(btn_add)
         row_btn.addStretch(1)
         wrap.addLayout(row_btn)
         w = QWidget()
         w.setLayout(wrap)
-        self.table_ref = t
+        self.table_ref = table
         return w
 
     @staticmethod

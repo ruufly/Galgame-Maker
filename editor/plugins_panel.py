@@ -119,6 +119,9 @@ class PluginsPanel(QWidget):
         self.refresh()
         self._load_plugins_block()
 
+    def apply_lang(self) -> None:
+        self.refresh()
+
     def refresh(self) -> None:
         self.tree.clear()
 
@@ -165,7 +168,7 @@ class PluginsPanel(QWidget):
         p.setExpanded(False)
 
     # ---- plugins 块配置 ----------------------------------------------
-    def _plugins_script(self):
+    def _plugins_script(self, create: bool = False):
         if self.project is None:
             return None
         script = self.project.main_script()
@@ -174,6 +177,8 @@ class PluginsPanel(QWidget):
         for stmt in script.statements:
             if stmt.op == "plugins":
                 return script, stmt
+        if not create:
+            return script, None
         from framework.engine.parser import Statement
         stmt = Statement(op="plugins", args=[], kwargs={})
         script.statements.append(stmt)
@@ -184,6 +189,10 @@ class PluginsPanel(QWidget):
         if got is None:
             return
         _s, stmt = got
+        if stmt is None:
+            self.ed_only.clear()
+            self.ed_except.clear()
+            return
         self.ed_only.setText(str(stmt.kwargs.get("only", "")))
         self.ed_except.setText(str(stmt.kwargs.get("except", "")))
 
@@ -221,6 +230,12 @@ class PluginsPanel(QWidget):
             self.log.emit(t("plugins.no_project"))
             return
         script, stmt = got
+        if stmt is None:
+            got = self._plugins_script(create=True)
+            if got is None:
+                self.log.emit(t("plugins.no_project"))
+                return
+            script, stmt = got
         only = self.ed_only.text().strip()
         except_ = self.ed_except.text().strip()
         stmt.kwargs.pop("only", None)

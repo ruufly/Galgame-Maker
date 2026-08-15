@@ -138,18 +138,19 @@ class BuildPanel(QWidget):
     # ---- PyInstaller --------------------------------------------------
     def pack(self) -> None:
         if self.project is None:
-            self._msg("请先打开项目")
+            self._msg(t("build.no_project"))
             return
         name = self.ed_name.text().strip() or "MyGame"
         root = self.project.root
-        launcher = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "..", "gamelauncher.py")
+        repo_root = os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)))
+        launcher = os.path.join(repo_root, "gamelauncher.py")
         launcher = os.path.abspath(launcher)
         if not os.path.isfile(launcher):
             self._msg(t("build.launcher_missing"))
             return
-        plugins = os.path.join(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__))), "..", "framework", "plugins")
+        plugins = os.path.join(repo_root, "framework", "plugins")
+        # (removed old path continuation)
         plugins = os.path.abspath(plugins)
         release = os.path.join(root, "release")
         os.makedirs(release, exist_ok=True)
@@ -161,7 +162,7 @@ class BuildPanel(QWidget):
             "--specpath", release,
             "--add-data", plugins + os.pathsep + os.path.join("framework",
                                                               "plugins"),
-            "--paths", os.path.dirname(os.path.dirname(launcher)),
+            "--paths", os.path.dirname(launcher),
             launcher,
         ]
         self._msg(t("build.pack_start", cmd=" ".join(cmd)))

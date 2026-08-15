@@ -29,20 +29,42 @@ def scan_refs(project) -> dict:
         for m in PLACEHOLDER_RE.finditer(text):
             refs.setdefault(m.group(1), []).append(where)
 
+    def _scan_value(value, where: tuple):
+        """递归扫描字符串、列表、字典、Statement 内嵌内容。"""
+        if isinstance(value, str):
+            _scan_text(value, where)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                _scan_value(item, where)
+        elif isinstance(value, dict):
+            for item in value.values():
+                _scan_value(item, where)
+        elif hasattr(value, "args") and hasattr(value, "kwargs"):
+            for a in value.args:
+                _scan_value(a, where)
+            for v in value.kwargs.values():
+                _scan_value(v, where)
+            for child in getattr(value, "block", []) or []:
+                _scan_value(child, where)
+
     if project is None:
         return refs
     for rel, script in project.scripts.items():
         for stmt in script.statements:
             for a in stmt.args:
-                _scan_text(a, (rel, ""))
+                _scan_value(a, (rel, ""))
             for v in stmt.kwargs.values():
-                _scan_text(v, (rel, ""))
+                _scan_value(v, (rel, ""))
+            for child in stmt.block:
+                _scan_value(child, (rel, ""))
         for label, body in script.labels.items():
             for stmt in body:
                 for a in stmt.args:
-                    _scan_text(a, (rel, label))
+                    _scan_value(a, (rel, label))
                 for v in stmt.kwargs.values():
-                    _scan_text(v, (rel, label))
+                    _scan_value(v, (rel, label))
+            for child in stmt.block:
+                _scan_value(child, (rel, label))
     return refs
 
 
@@ -119,6 +141,9 @@ class LocalizationPanel(QWidget):
         from editor.lang_utils import GameLang
         self.lang = GameLang(project.root, project.main_script()) \
             if project is not None else None
+        self.refresh()
+
+    def apply_lang(self) -> None:
         self.refresh()
 
     def refresh(self) -> None:

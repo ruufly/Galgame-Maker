@@ -315,9 +315,10 @@ class FlowGraph:
             nxt = n.next_id
         if in_else:
             else_body = cur_body
-        elif cur_body or not branches:
+        else:
             branches.append([cur_cond, cur_body])
-        stmt = Statement(op="if", kwargs={"branches": branches})
+        stmt = Statement(op="if",
+                         kwargs={"branches": branches, "else": else_body})
         if else_body is not None:
             stmt.kwargs["else"] = else_body
         return stmt, nxt
@@ -389,7 +390,7 @@ def _stmt_to_node(stmt: Statement):
     if op in DIALOGUE_OPS:
         args = list(stmt.args)
         voice = ""
-        if "voice" in args:
+        if "voice" in args[:-1]:
             i = args.index("voice")
             voice = args[i + 1] if i + 1 < len(args) else ""
             args = args[:i]

@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
             result = import_plugin_package(
                 f,
                 editor_plugins_dir=os.path.join(_ROOT2, "plugins"),
-                framework_plugins_dir=os.path.join(_ROOT2, "framework",
+                framework_plugins_dir=os.path.join(os.path.dirname(_ROOT2), "framework",
                                                    "plugins"))
         except Exception as exc:
             QMessageBox.critical(self, t("plugin_import.failed"), str(exc))
@@ -435,6 +435,7 @@ class MainWindow(QMainWindow):
         self.act_preview.setText(t("act.preview"))
         self.act_stop.setText(t("act.stop"))
         self.act_about.setText(t("act.about"))
+        self.act_import_plugin.setText(t("act.import_plugin"))
         for idx, key in self._tab_keys:
             self.tabs.setTabText(idx, t(key))
         for dock, key in self._dock_keys:
@@ -444,7 +445,7 @@ class MainWindow(QMainWindow):
         if self._preview_window is not None:
             self._preview_window.apply_lang()
         for panel in (self.assets, self.defs, self.flow, self.styles,
-                      self.build):
+                      self.build, self.plugins_panel, self.localization):
             fn = getattr(panel, "apply_lang", None)
             if fn is not None:
                 fn()

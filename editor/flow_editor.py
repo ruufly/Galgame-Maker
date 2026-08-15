@@ -363,6 +363,10 @@ def resolve_bg_image(project, node):
                 if s.args[0] == scene:
                     path = s.kwargs.get(pose) or s.kwargs.get("default", "")
                     break
+            if not path:
+                path = scene
+        if not path:
+            path = scene
     else:
         path = pose
     if not path:
@@ -1087,7 +1091,8 @@ class FlowScene(QGraphicsScene):
                 if it is None:
                     opts.append(["", None])
                     continue
-                raw = it.data(Qt.UserRole) or it.text()
+                raw = (it.data(Qt.UserRole) or it.text()) \
+                    if (gl is not None and gl.langs) else it.text()
                 opts.append([raw, node.options[r][1]
                              if r < len(node.options) else None])
             node.options = opts
@@ -1438,7 +1443,9 @@ class FlowScene(QGraphicsScene):
         cb = QComboBox()
         cb.addItems(cands)
         cur = node.raw.args[0] if node.raw.args else "music"
+        extra = node.raw.args[1:-1] if len(node.raw.args) > 2 else []
         if cur in cands:
+                      # (extra moved before if block)
             cb.setCurrentText(cur)
         lay.addWidget(cb)
         lay.addWidget(QLabel(t("flow.volume_value") + ":"))
@@ -1451,7 +1458,15 @@ class FlowScene(QGraphicsScene):
         btns.addStretch(1); btns.addWidget(ok); btns.addWidget(cc)
         lay.addLayout(btns)
         if dlg.exec() == QDialog.Accepted:
-            node.raw.args = [cb.currentText(), ed.text().strip()]
+            out = [cb.currentText()]
+            if cb.currentText() == "voice" and extra:
+                out.append(extra[0])
+            out.append(ed.text().strip())
+            node.raw.args = out
+            # (obsolete edit block removed)
+                  # out.append(extra[0])
+                          # out.append(ed.text().strip())
+                          # node.raw.args = out
             self.set_graph(self.graph)
 
     def _edit_action_params(self, node, fields, doc_mode: bool):
